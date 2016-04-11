@@ -53,7 +53,6 @@ use MOM_io, only : open_file
 use MOM_io, only : APPEND_FILE, ASCII_FILE, MULTIPLE, SINGLE_FILE
 use MOM_time_manager, only : time_type, get_time, get_date, set_date, operator(-)
 use MOM_variables, only : ocean_internal_state, accel_diag_ptrs, cont_diag_ptrs
-use MOM_verticalGrid, only : verticalGrid_type
 
 implicit none ; private
 
@@ -92,20 +91,19 @@ end type PointAccel_CS
 
 contains
 
-subroutine write_u_accel(I, j, um, hin, ADp, CDp, dt, G, GV, CS, &
+subroutine write_u_accel(I, j, um, hin, ADp, CDp, dt, G, CS, &
                          maxvel, minvel, str, a, hv)
   integer,                                intent(in) :: I, j
-  type(ocean_grid_type),                  intent(in) :: G
-  type(verticalGrid_type),                intent(in) :: GV
-  real, dimension(SZIB_(G),SZJ_(G),SZK_(G)), intent(in) :: um
-  real, dimension(SZI_(G),SZJ_(G),SZK_(G)),  intent(in) :: hin
+  real, dimension(NIMEMB_,NJMEM_,NKMEM_), intent(in) :: um
+  real, dimension(NIMEM_,NJMEM_,NKMEM_),  intent(in) :: hin
   type(accel_diag_ptrs),                  intent(in) :: ADp
   type(cont_diag_ptrs),                   intent(in) :: CDp
   real,                                   intent(in) :: dt
+  type(ocean_grid_type),                  intent(in) :: G
   type(PointAccel_CS),                    pointer    :: CS
   real,                                   intent(in) :: maxvel, minvel
   real, optional,                         intent(in) :: str
-  real, dimension(SZIB_(G),SZK_(G)), optional, intent(in) :: a, hv
+  real, dimension(NIMEMB_,NKMEM_), optional, intent(in) :: a, hv
 ! This subroutine writes to an output file all of the accelerations
 ! that have been applied to a column of zonal velocities over the
 ! previous timestep.  This subroutine is called from vertvisc.
@@ -120,7 +118,6 @@ subroutine write_u_accel(I, j, um, hin, ADp, CDp, dt, G, GV, CS, &
 !                  equations.
 !  (in)      dt - The model's dynamics time step.
 !  (in)      G - The ocean's grid structure.
-!  (in)      GV - The ocean's vertical grid structure.
 !  (in)      CS - The control structure returned by a previous call to
 !                 PointAccel_init.
 !  (in)      str - The surface wind stress integrated over a time
@@ -141,7 +138,7 @@ subroutine write_u_accel(I, j, um, hin, ADp, CDp, dt, G, GV, CS, &
   logical :: prev_avail
   integer :: file
 
-  Angstrom = GV%Angstrom + GV%H_subroundoff
+  Angstrom = G%GV%Angstrom + G%GV%H_subroundoff
 
 !  if (.not.associated(CS)) return
   nz = G%ke
@@ -190,7 +187,7 @@ subroutine write_u_accel(I, j, um, hin, ADp, CDp, dt, G, GV, CS, &
         yr, yearday, (REAL(sec)/3600.0), pe_here(), I, j, &
         G%geoLonCu(I,j), G%geoLatCu(I,j), ks, ke, dt
 
-    if (ks <= GV%nk_rho_varies) ks = 1
+    if (ks <= G%GV%nk_rho_varies) ks = 1
     do k=ks,ke
       if ((hin(i,j,k) + hin(i+1,j,k)) > 3.0*Angstrom) do_k(k) = .true.
     enddo
@@ -430,20 +427,19 @@ subroutine write_u_accel(I, j, um, hin, ADp, CDp, dt, G, GV, CS, &
 end subroutine write_u_accel
 
 
-subroutine write_v_accel(i, J, vm, hin, ADp, CDp, dt, G, GV, CS, &
+subroutine write_v_accel(i, J, vm, hin, ADp, CDp, dt, G, CS, &
                          maxvel, minvel, str, a, hv)
   integer,                                intent(in) :: i, J
-  type(ocean_grid_type),                  intent(in) :: G
-  type(verticalGrid_type),                intent(in) :: GV
-  real, dimension(SZI_(G),SZJB_(G),SZK_(G)), intent(in) :: vm
-  real, dimension(SZI_(G),SZJ_(G),SZK_(G)),  intent(in) :: hin
+  real, dimension(NIMEM_,NJMEMB_,NKMEM_), intent(in) :: vm
+  real, dimension(NIMEM_,NJMEM_,NKMEM_),  intent(in) :: hin
   type(accel_diag_ptrs),                  intent(in) :: ADp
   type(cont_diag_ptrs),                   intent(in) :: CDp
   real,                                   intent(in) :: dt
+  type(ocean_grid_type),                  intent(in) :: G
   type(PointAccel_CS),                    pointer    :: CS
   real,                                   intent(in) :: maxvel, minvel
   real, optional,                         intent(in) :: str
-  real, dimension(SZI_(G),SZK_(G)), optional, intent(in) :: a, hv
+  real, dimension(NIMEM_,NKMEM_), optional, intent(in) :: a, hv
 
 ! This subroutine writes to an output file all of the accelerations
 ! that have been applied to a column of meridional velocities over
@@ -459,7 +455,6 @@ subroutine write_v_accel(i, J, vm, hin, ADp, CDp, dt, G, GV, CS, &
 !                  equations.
 !  (in)      dt - The model's dynamics time step.
 !  (in)      G - The ocean's grid structure.
-!  (in)      GV - The ocean's vertical grid structure.
 !  (in)      CS - The control structure returned by a previous call to
 !                 PointAccel_init.
 !  (in)      str - The surface wind stress integrated over a time
@@ -480,7 +475,7 @@ subroutine write_v_accel(i, J, vm, hin, ADp, CDp, dt, G, GV, CS, &
   logical :: prev_avail
   integer :: file
 
-  Angstrom = GV%Angstrom + GV%H_subroundoff
+  Angstrom = G%GV%Angstrom + G%GV%H_subroundoff
 
 !  if (.not.associated(CS)) return
   nz = G%ke
@@ -528,7 +523,7 @@ subroutine write_v_accel(i, J, vm, hin, ADp, CDp, dt, G, GV, CS, &
         yr, yearday, (REAL(sec)/3600.0), pe_here(), i, J, &
         G%geoLonCv(i,J), G%geoLatCv(i,J), ks, ke, dt
 
-    if (ks <= GV%nk_rho_varies) ks = 1
+    if (ks <= G%GV%nk_rho_varies) ks = 1
     do k=ks,ke
       if ((hin(i,j,k) + hin(i,j+1,k)) > 3.0*Angstrom) do_k(k) = .true.
     enddo

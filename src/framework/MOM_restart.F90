@@ -73,7 +73,6 @@ use MOM_io, only : MULTIPLE, NETCDF_FILE, READONLY_FILE, SINGLE_FILE
 use MOM_io, only : CENTER, CORNER, NORTH_FACE, EAST_FACE
 use MOM_time_manager, only : time_type, get_time, get_date, set_date, set_time
 use MOM_time_manager, only : days_in_month
-use MOM_verticalGrid, only : verticalGrid_type
 
 implicit none ; private
 
@@ -708,7 +707,7 @@ function query_initialized_4d_name(f_ptr, name, CS) result(query_initialized)
 
 end function query_initialized_4d_name
 
-subroutine save_restart(directory, time, G, CS, time_stamped, filename, GV)
+subroutine save_restart(directory, time, G, CS, time_stamped, filename)
 !  save_restart saves all registered variables to restart files.
   character(len=*),        intent(in)    :: directory
   type(time_type),         intent(in)    :: time
@@ -716,7 +715,6 @@ subroutine save_restart(directory, time, G, CS, time_stamped, filename, GV)
   type(MOM_restart_CS),    pointer       :: CS
   logical,          optional, intent(in) :: time_stamped
   character(len=*), optional, intent(in) :: filename
-  type(verticalGrid_type), optional, intent(in) :: GV
 ! Arguments: directory - The directory where the restart file goes.
 !  (in)      time - The time of this restart file.
 !  (in)      G - The ocean's grid structure.
@@ -726,7 +724,6 @@ subroutine save_restart(directory, time, G, CS, time_stamped, filename, GV)
 !                           a unique time stamp.  The default is false.
 !  (in, opt) filename - A filename that overrides the name in CS%restartfile.
 !
-!  (in, opt) GV - The ocean's vertical grid structure.
   type(vardesc) :: vars(CS%max_fields)  ! Descriptions of the fields that
                                         ! are to be read from the restart file.
   type(fieldtype) :: fields(CS%max_fields) !
@@ -839,10 +836,10 @@ subroutine save_restart(directory, time, G, CS, time_stamped, filename, GV)
 
     if (CS%parallel_restartfiles) then
       call create_file(unit, trim(restartpath), vars, (next_var-start_var), &
-                       G, fields, MULTIPLE, GV=GV)
+                       G, fields, MULTIPLE)
     else
       call create_file(unit, trim(restartpath), vars, (next_var-start_var), &
-                       G, fields, SINGLE_FILE, GV=GV)
+                       G, fields, SINGLE_FILE)
     endif
 
     do m=start_var,next_var-1
