@@ -48,6 +48,9 @@ use DOME_initialization, only : DOME_initialize_sponges
 use ISOMIP_initialization, only : ISOMIP_initialize_thickness
 use ISOMIP_initialization, only : ISOMIP_initialize_sponges
 use ISOMIP_initialization, only : ISOMIP_initialize_temperature_salinity
+use IDEAL_IS_initialization, only : IDEAL_IS_initialize_thickness
+use IDEAL_IS_initialization, only : IDEAL_IS_initialize_sponges
+use IDEAL_IS_initialization, only : IDEAL_IS_initialize_temperature_salinity
 use baroclinic_zone_initialization, only : baroclinic_zone_init_temperature_salinity
 use benchmark_initialization, only : benchmark_initialize_thickness
 use benchmark_initialization, only : benchmark_init_temperature_salinity
@@ -216,6 +219,7 @@ subroutine MOM_initialize_state(u, v, h, tv, Time, G, GV, PF, dirs, &
                " \t\t DOME sill-overflow test case. \n"//&
                " \t ISOMIP - use a configuration for the \n"//&
                " \t\t ISOMIP test case. \n"//&
+               " \t IDEAL_IS - ideal ice shelf setup \n"//&
                " \t benchmark - use the benchmark test case thicknesses. \n"//&
                " \t search - search a density profile for the interface \n"//&
                " \t\t densities. This is not yet implemented. \n"//&
@@ -240,6 +244,7 @@ subroutine MOM_initialize_state(u, v, h, tv, Time, G, GV, PF, dirs, &
          case ("uniform"); call initialize_thickness_uniform(h, G, GV, PF)
          case ("DOME"); call DOME_initialize_thickness(h, G, GV, PF)
          case ("ISOMIP"); call ISOMIP_initialize_thickness(h, G, GV, PF, tv)
+         case ("IDEAL_IS"); call IDEAL_IS_initialize_thickness(h, G, GV, PF, tv)
          case ("benchmark"); call benchmark_initialize_thickness(h, G, GV, PF, &
                                  tv%eqn_of_state, tv%P_Ref)
          case ("search"); call initialize_thickness_search
@@ -273,6 +278,7 @@ subroutine MOM_initialize_state(u, v, h, tv, Time, G, GV, PF, dirs, &
                " \t linear - linear in logical layer space. \n"//&
                " \t DOME2D - 2D DOME initialization. \n"//&
                " \t ISOMIP - ISOMIP initialization. \n"//&
+               " \t IDEAL_IS - Ideal ice shelf. \n"//&
                " \t adjustment2d - TBD AJA. \n"//&
                " \t sloshing - TBD AJA. \n"//&
                " \t seamount - TBD AJA. \n"//&
@@ -291,6 +297,8 @@ subroutine MOM_initialize_state(u, v, h, tv, Time, G, GV, PF, dirs, &
           case ("DOME2D"); call DOME2d_initialize_temperature_salinity ( tv%T, &
                                 tv%S, h, G, PF, eos)
           case ("ISOMIP"); call ISOMIP_initialize_temperature_salinity ( tv%T, &
+                                tv%S, h, G, GV, PF, eos)
+          case ("IDEAL_IS"); call IDEAL_IS_initialize_temperature_salinity ( tv%T, &
                                 tv%S, h, G, GV, PF, eos)
           case ("adjustment2d"); call adjustment_initialize_temperature_salinity ( tv%T, &
                                       tv%S, h, G, PF, eos)
@@ -403,6 +411,7 @@ subroutine MOM_initialize_state(u, v, h, tv, Time, G, GV, PF, dirs, &
                  " \t file - read sponge properties from the file \n"//&
                  " \t\t specified by (SPONGE_FILE).\n"//&
                  " \t ISOMIP - apply ale sponge in the ISOMIP case \n"//&
+                 " \t IDEAL_IS - apply sponge in the IDEAL_IS case \n"//&
                  " \t DOME - use a slope and channel configuration for the \n"//&
                  " \t\t DOME sill-overflow test case. \n"//&
                  " \t BFB - Sponge at the southern boundary of the domain\n"//&
@@ -413,6 +422,8 @@ subroutine MOM_initialize_state(u, v, h, tv, Time, G, GV, PF, dirs, &
       case ("DOME2D"); call DOME2d_initialize_sponges(G, GV, tv, PF, useALE, &
                                                       sponge_CSp, ALE_sponge_CSp)
       case ("ISOMIP"); call ISOMIP_initialize_sponges(G, GV, tv, PF, useALE, &
+                                                     sponge_CSp, ALE_sponge_CSp)
+      case ("IDEAL_IS"); call IDEAL_IS_initialize_sponges(G, GV, tv, PF, useALE, &
                                                      sponge_CSp, ALE_sponge_CSp)
       case ("USER"); call user_initialize_sponges(G, use_temperature, tv, &
                                                PF, sponge_CSp, h)

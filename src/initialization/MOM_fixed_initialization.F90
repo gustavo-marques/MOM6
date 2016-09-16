@@ -28,6 +28,7 @@ use MOM_shared_initialization, only : compute_global_grid_integrals, write_ocean
 use user_initialization, only : user_initialize_topography, USER_set_OBC_positions
 use DOME_initialization, only : DOME_initialize_topography, DOME_set_OBC_positions
 use ISOMIP_initialization, only : ISOMIP_initialize_topography
+use IDEAL_IS_initialization, only : IDEAL_IS_initialize_topography
 use benchmark_initialization, only : benchmark_initialize_topography
 use DOME2d_initialization, only : DOME2d_initialize_topography
 use sloshing_initialization, only : sloshing_initialize_topography
@@ -222,6 +223,7 @@ subroutine MOM_initialize_topography(D, max_depth, G, PF)
     case ("halfpipe");  call initialize_topography_named(D, G, PF, config, max_depth)
     case ("DOME");      call DOME_initialize_topography(D, G, PF, max_depth)
     case ("ISOMIP");    call ISOMIP_initialize_topography(D, G, PF, max_depth)
+    case ("IDEAL_IS");  call IDEAL_IS_initialize_topography(D, G, PF, max_depth)
     case ("benchmark"); call benchmark_initialize_topography(D, G, PF, max_depth)
     case ("DOME2D");    call DOME2d_initialize_topography(D, G, PF, max_depth)
     case ("sloshing");  call sloshing_initialize_topography(D, G, PF, max_depth)
