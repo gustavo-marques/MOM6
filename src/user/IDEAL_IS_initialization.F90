@@ -101,8 +101,7 @@ subroutine IDEAL_IS_initialize_topography(D, G, param_file, max_depth)
       
       if (D(i,j) > max_depth) D(i,j) = max_depth
       if (D(i,j) < min_depth) D(i,j) = 0.5*min_depth
-    enddo ; enddo
-  endif
+  enddo ; enddo
 
 end subroutine IDEAL_IS_initialize_topography
 ! -----------------------------------------------------------------------------
@@ -141,10 +140,10 @@ subroutine IDEAL_IS_initialize_thickness ( h, G, GV, param_file, tv )
   select case ( coordinateMode(verticalCoordinate) )
     
   case ( REGRIDDING_LAYER, REGRIDDING_RHO ) ! Initial thicknesses for isopycnal coordinates
-    call get_param(param_file, mod, "IDEAL_IS_T_SUR",t_sur,'Temperature at the surface (interface)', default=-1.9)
-    call get_param(param_file, mod, "IDEAL_IS_S_SUR", s_sur, 'Salinity at the surface (interface)',  default=33.8)
-    call get_param(param_file, mod, "IDEAL_IS_T_BOT", t_bot, 'Temperature at the bottom (interface)', default=-1.9)
-    call get_param(param_file, mod, "IDEAL_IS_S_BOT", s_bot,'Salinity at the bottom (interface)', default=34.55)
+    call get_param(param_file, mod, "IDEAL_IS_T_SUR",t_sur,'Temperature at the surface (interface)', default=6.0)
+    call get_param(param_file, mod, "IDEAL_IS_S_SUR", s_sur, 'Salinity at the surface (interface)',  default=0.0)
+    call get_param(param_file, mod, "IDEAL_IS_T_BOT", t_bot, 'Temperature at the bottom (interface)', default=0.0)
+    call get_param(param_file, mod, "IDEAL_IS_S_BOT", s_bot,'Salinity at the bottom (interface)', default=0.0)
 
     ! Compute min/max density using T_SUR/S_SUR and T_BOT/S_BOT
     call calculate_density(t_sur,s_sur,0.0,rho_sur,tv%eqn_of_state)
