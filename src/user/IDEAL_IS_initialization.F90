@@ -93,7 +93,7 @@ subroutine IDEAL_IS_initialize_topography(D, G, param_file, max_depth)
                  "The minimum depth of the ocean.", units="m", default=0.0)
 
 ! The following variables can be transformed into runtime parameters.
-  Hs = 500.0; Ys = 500.0e3; Ws = 100.0e3; H = 3.0e3;
+  Hs = 500.0; Ys = 800.0e3; Ws = 100.0e3; H = 3.0e3;
 
   do j=js,je ; do i=is,ie
 
