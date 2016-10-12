@@ -394,6 +394,7 @@ subroutine IDEAL_IS_initialize_sponges(G, GV, tv, PF, use_ALE, CSp, ACSp)
                                     ! positive upward, in m.
   real :: min_depth, dummy1, z, delta_h
   real :: damp, rho_dummy, min_thickness, rho_tmp, xi0
+  real :: letlat, lensponge
   character(len=40) :: verticalCoordinate, filename, state_file
   character(len=40) :: temp_var, salt_var, eta_var, inputdir
 
@@ -423,6 +424,13 @@ subroutine IDEAL_IS_initialize_sponges(G, GV, tv, PF, use_ALE, CSp, ACSp)
   call get_param(PF, mod, "IDEAL_IS_T_SUR", t_sur, 'Surface temperature in sponge layer.',  default=6.0)
   
   call get_param(PF, mod, "IDEAL_IS_T_BOT", t_bot, 'Bottom temperature in sponge layer.',  default=t_ref)
+  call get_param(PF, mod, "LENLAT", lenlat, &
+                  "The latitudinal or y-direction length of the domain", &
+                 fail_if_missing=.true., do_not_log=.true.)
+
+  call get_param(param_file, mod, "LENSPONGE", lensponge, &
+                 "The length of the sponge layer (km).", &
+                 default=100.0)
 
   T(:,:,:) = 0.0 ; S(:,:,:) = 0.0 ; Idamp(:,:) = 0.0; RHO(:,:,:) = 0.0
   S_range = s_sur - s_bot
@@ -443,10 +451,10 @@ subroutine IDEAL_IS_initialize_sponges(G, GV, tv, PF, use_ALE, CSp, ACSp)
   !  and mask2dT is 1.  
 
    do i=is,ie; do j=js,je
-      if (G%geoLatT(i,j) >= 1900.0 .AND. G%geoLonT(i,j) <= 2000.0) then
+      if (G%geoLatT(i,j) >= (lenlat - lensponge) .AND. G%geoLonT(i,j) <= lenlat) then
 
   ! 1 / day
-        dummy1=(G%geoLonT(i,j)-1900.0)/(2000.0-1900.0)
+        dummy1=(G%geoLonT(i,j)-(lenlat - lensponge))/(lensponge)
         damp = 1.0/TNUDG * max(0.0,dummy1)
 
       else ; damp=0.0
