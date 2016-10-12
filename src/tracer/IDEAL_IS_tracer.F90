@@ -142,7 +142,7 @@ function register_IDEAL_IS_tracer(HI, GV, param_file, CS, tr_Reg, &
                  fail_if_missing=.true., do_not_log=.true.)
 
   call get_param(param_file, mod, "LENSPONGE", CS%lensponge, &
-                 "The length of the sponge layer.", &
+                 "The length of the sponge layer (km).", &
                  default=100.0)
 
   call get_param(param_file, mod, "SHELF_THERMO", CS%shelf_thermo, &
@@ -338,7 +338,7 @@ subroutine IDEAL_IS_tracer_column_physics(h_old, h_new,  ea,  eb, fluxes, dt, G,
 
     m=1
     do j=js,je ; do i=is,ie
-      if (G%geoLonT(i,j) >= (CS%lenlat - CS%lensponge) .AND. G%geoLonT(i,j) <= CS%lenlat) then
+      if (G%geoLatT(i,j) >= (CS%lenlat - CS%lensponge) .AND. G%geoLatT(i,j) <= CS%lenlat) then
         CS%tr(i,j,:,m) = 1.0 ! all layers
       endif
     enddo ; enddo
@@ -349,7 +349,7 @@ subroutine IDEAL_IS_tracer_column_physics(h_old, h_new,  ea,  eb, fluxes, dt, G,
   ! GM: 340 and 400 --> make params
   m=2
     do j=js,je ; do i=is,ie 
-      if (G%geoLonT(i,j) >= 340. .AND. G%geoLonT(i,j) <= 400.) then
+      if (G%geoLatT(i,j) >= 340. .AND. G%geoLatT(i,j) <= 400.) then
         CS%tr(i,j,1:2,m) = 1.0 ! fisrt two layers (just ML)
       endif
     enddo ; enddo
