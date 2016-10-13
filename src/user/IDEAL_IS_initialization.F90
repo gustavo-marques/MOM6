@@ -394,7 +394,7 @@ subroutine IDEAL_IS_initialize_sponges(G, GV, tv, PF, use_ALE, CSp, ACSp)
                                     ! positive upward, in m.
   real :: min_depth, dummy1, z, delta_h
   real :: damp, rho_dummy, min_thickness, rho_tmp, xi0
-  real :: letlat, lensponge
+  real :: lenlat, lensponge
   character(len=40) :: verticalCoordinate, filename, state_file
   character(len=40) :: temp_var, salt_var, eta_var, inputdir
 
@@ -428,7 +428,7 @@ subroutine IDEAL_IS_initialize_sponges(G, GV, tv, PF, use_ALE, CSp, ACSp)
                   "The latitudinal or y-direction length of the domain", &
                  fail_if_missing=.true., do_not_log=.true.)
 
-  call get_param(param_file, mod, "LENSPONGE", lensponge, &
+  call get_param(PF, mod, "LENSPONGE", lensponge, &
                  "The length of the sponge layer (km).", &
                  default=100.0)
 
