@@ -21,6 +21,7 @@ module IDEAL_IS_initialization
 
 use MOM_ALE_sponge, only : ALE_sponge_CS, set_up_ALE_sponge_field, initialize_ALE_sponge
 use MOM_sponge, only : sponge_CS, set_up_sponge_field, initialize_sponge
+use MOM_sponge, only : set_up_sponge_ML_density
 use MOM_dyn_horgrid, only : dyn_horgrid_type
 use MOM_error_handler, only : MOM_mesg, MOM_error, FATAL, is_root_pe, WARNING
 use MOM_file_parser, only : get_param, log_version, param_file_type
@@ -378,9 +379,11 @@ subroutine IDEAL_IS_initialize_sponges(G, GV, tv, PF, use_ALE, CSp, ACSp)
   real :: T(SZI_(G),SZJ_(G),SZK_(G))  ! A temporary array for temp 
   real :: S(SZI_(G),SZJ_(G),SZK_(G))  ! A temporary array for salt
   real :: RHO(SZI_(G),SZJ_(G),SZK_(G))  ! A temporary array for RHO
+  real :: tmp(SZI_(G),SZJ_(G))        ! A temporary array for tracers.
   real :: h(SZI_(G),SZJ_(G),SZK_(G))  ! A temporary array for thickness
   real :: Idamp(SZI_(G),SZJ_(G))    ! The inverse damping rate, in s-1.
   real :: TNUDG                     ! Nudging time scale, days
+  real :: pres(SZI_(G))             ! An array of the reference pressure, in Pa
   real      :: S_sur, T_sur;        ! Surface salinity and temerature in sponge
   real      :: S_bot, T_bot;        ! Bottom salinity and temerature in sponge 
   real      :: t_ref, s_ref         ! reference T and S
@@ -451,10 +454,10 @@ subroutine IDEAL_IS_initialize_sponges(G, GV, tv, PF, use_ALE, CSp, ACSp)
   !  and mask2dT is 1.  
 
    do i=is,ie; do j=js,je
-      if (G%geoLatT(i,j) >= (lenlat - lensponge) .AND. G%geoLonT(i,j) <= lenlat) then
+      if (G%geoLatT(i,j) >= (lenlat - lensponge) .AND. G%geoLatT(i,j) <= lenlat) then
 
   ! 1 / day
-        dummy1=(G%geoLonT(i,j)-(lenlat - lensponge))/(lensponge)
+        dummy1=(G%geoLatT(i,j)-(lenlat - lensponge))/(lensponge)
         damp = 1.0/TNUDG * max(0.0,dummy1)
 
       else ; damp=0.0
@@ -606,6 +609,21 @@ subroutine IDEAL_IS_initialize_sponges(G, GV, tv, PF, use_ALE, CSp, ACSp)
        ! Set the inverse damping rates so that the model will know where to 
        ! apply the sponges, along with the interface heights. 
        call initialize_sponge(Idamp, eta, G, PF, CSp)
+       
+       if ( GV%nkml>0 ) then
+       !   This call to set_up_sponge_ML_density registers the target values of the
+       ! mixed layer density, which is used in determining which layers can be
+       ! inflated without causing static instabilities.
+         do i=is-1,ie ; pres(i) = tv%P_Ref ; enddo
+
+          do j=js,je
+            call calculate_density(T(:,j,1), S(:,j,1), pres, tmp(:,j), &
+                             is, ie-is+1, tv%eqn_of_state)
+          enddo
+
+          call set_up_sponge_ML_density(tmp, G, CSp)
+       endif
+ 
        ! Apply sponge in tracer fields
        call set_up_sponge_field(T, tv%T, G, nz, CSp)
        call set_up_sponge_field(S, tv%S, G, nz, CSp)
