@@ -72,6 +72,10 @@ type, public :: IDEAL_IS_tracer_CS ; private
     tr_dfy   !< Tracer meridional diffusive fluxes in g m-3 m3 s-1.
   real :: land_val(NTR) = -1.0 !< The value of tr used where land is masked out.
   real :: lenlat           ! the latitudinal or y-direction length of the domain.
+  real :: lenlon           ! the longitudinal or x-direction length of the domain.
+  real :: major            ! Length of the major axis (x dir) in the polynya region 
+  real :: minor            ! Length of the minor axis (y dir) in the polynya region
+  real :: ISL              ! The length of the ice shelf (y dir, km)
   real :: lensponge        ! the length of the sponge layer.
   logical :: mask_tracers  !< If true, tracers are masked out in massless layers.
   logical :: use_sponge
@@ -140,6 +144,22 @@ function register_IDEAL_IS_tracer(HI, GV, param_file, CS, tr_Reg, &
   call get_param(param_file, mod, "LENLAT", CS%lenlat, &
                  "The latitudinal or y-direction length of the domain", &
                  fail_if_missing=.true., do_not_log=.true.)
+  
+  call get_param(param_file, mod, "LENLON", CS%lenlon, &
+                 "The longitudinal or x-direction length of the domain", &
+                 fail_if_missing=.true., do_not_log=.true.)
+
+  call get_param(param_file, mod, "MAJOR", CS%major, &
+                 "The length of the major axis (x dir) in the polynya region (km).", &
+                 default=75.0)
+
+  call get_param(param_file, mod, "MINOR", CS%minor, &
+                 "The length of the minor axis (y dir) in the polynya region (km).", &
+                 default=75.0)
+
+  call get_param(param_file, mod, "ICE_SHELF_LENGHT", CS%ISL, &
+                 "The length of the ice shelf (y dir, km).", &
+                 default=250.0)
 
   call get_param(param_file, mod, "LENSPONGE", CS%lensponge, &
                  "The length of the sponge layer (km).", &
@@ -349,8 +369,12 @@ subroutine IDEAL_IS_tracer_column_physics(h_old, h_new,  ea,  eb, fluxes, dt, G,
   ! GM: 340 and 400 --> make params
   m=2
     do j=js,je ; do i=is,ie 
-      if (G%geoLatT(i,j) >= 340. .AND. G%geoLatT(i,j) <= 400.) then
-        CS%tr(i,j,1:2,m) = 1.0 ! fisrt two layers (just ML)
+      if (G%geoLonT(i,j) - 0.5*CS%lenlon >= -CS%major .AND. &
+          G%geoLonT(i,j) - 0.5*CS%lenlon <= CS%major) then
+          if (G%geoLatT(i,j) - CS%ISL >= 0. .AND. &
+              G%geoLatT(i,j) - CS%ISL <= (CS%minor * ABS((1-(G%geoLonT(i,j)-0.5*CS%lenlon)**2/CS%major**2)**(1./2.)))) then
+          CS%tr(i,j,1:GV%nkml,m) = 1.0 ! inject dye in the ML
+          endif
       endif
     enddo ; enddo
 
@@ -363,9 +387,9 @@ subroutine IDEAL_IS_tracer_column_physics(h_old, h_new,  ea,  eb, fluxes, dt, G,
     do j=js,je ; do i=is,ie
       if (melt(i,j) > 0.0) then ! melting
          !write(*,*)'i,j,melt,melt/mmax',i,j,melt(i,j),melt(i,j)/mmax
-         CS%tr(i,j,1:2,m) = melt(i,j)/mmax ! inject dye in the ML
+         CS%tr(i,j,1:GV%nkml,m) = melt(i,j)/mmax ! inject dye in the ML
       else ! freezing
-         CS%tr(i,j,1:2,m) = 0.0 
+         CS%tr(i,j,1:GV%nkml,m) = 0.0 
       endif
     enddo ; enddo
   endif ! melt dye
