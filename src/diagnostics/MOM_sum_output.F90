@@ -198,8 +198,7 @@ subroutine MOM_sum_output_init(G, param_file, directory, ntrnc, &
   call get_param(param_file, mod, "WRITE_STOCKS", CS%write_stocks, &
                  "If true, write the integrated tracer amounts to stdout \n"//&
                  "when the energy files are written.", default=.true.)
-! GM, setting the CS%use_repro_sum = false 
-  CS%use_repro_sum = .false.
+  CS%use_repro_sum = .true.
 !  call get_param(param_file, mod, "USE_REPRODUCING_SUM", CS%use_repro_sum, &
 !                 "If true, use the integer sums that reproduce across PE count.", &
 !                 default = .true.)

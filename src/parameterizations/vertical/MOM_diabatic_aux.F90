@@ -495,7 +495,9 @@ subroutine insert_brine(h, tv, G, GV, fluxes, nkmb, CS, dt, id_brine_lay)
 
     do k=1,nz
       do i=is,ie
-        T(i,k)=tv%T(i,j,k); S(i,k)=tv%S(i,j,k); h_2d(i,k)=h(i,j,k)
+        T(i,k)=tv%T(i,j,k); S(i,k)=tv%S(i,j,k)
+        ! avoid very small thickness
+        h_2d(i,k)=MAX(h(i,j,k), GV%Angstrom)
       enddo
 
       call calculate_density(T(:,k), S(:,k), p_ref_cv, Rcv(:,k), is, &
@@ -509,13 +511,13 @@ subroutine insert_brine(h, tv, G, GV, fluxes, nkmb, CS, dt, id_brine_lay)
     do k=nkmb+1,nz-1 ; do i=is,ie
       if ((G%mask2dT(i,j) > 0.0) .and. dzbr(i) < brine_dz .and. salt(i) > 0.) then
         mc = GV%H_to_kg_m2 * h_2d(i,k)
-        s_new = S(i,k) + salt(i)/mc
-        t0 = T(i,k)
-        call calculate_density(t0,s_new,tv%P_Ref,R_new,tv%eqn_of_state)
-        if (R_new < 0.5*(Rcv(i,k)+Rcv(i,k+1)) .and. s_new<s_max) then
-          dzbr(i)=dzbr(i)+h_2d(i,k)
-          inject_layer(i,j) = min(inject_layer(i,j),real(k))
-        endif
+          s_new = S(i,k) + salt(i)/mc
+          t0 = T(i,k)
+          call calculate_density(t0,s_new,tv%P_Ref,R_new,tv%eqn_of_state)
+          if (R_new < 0.5*(Rcv(i,k)+Rcv(i,k+1)) .and. s_new<s_max) then
+            dzbr(i)=dzbr(i)+h_2d(i,k)
+            inject_layer(i,j) = min(inject_layer(i,j),real(k))
+          endif
       endif
     enddo ; enddo
 
