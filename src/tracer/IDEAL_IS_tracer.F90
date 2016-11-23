@@ -73,9 +73,8 @@ type, public :: IDEAL_IS_tracer_CS ; private
   real :: land_val(NTR) = -1.0 !< The value of tr used where land is masked out.
   real :: lenlat           ! the latitudinal or y-direction length of the domain.
   real :: lenlon           ! the longitudinal or x-direction length of the domain.
-  real :: major            ! Length of the major axis (x dir) in the polynya region 
-  real :: minor            ! Length of the minor axis (y dir) in the polynya region
   real :: ISL              ! The length of the ice shelf (y dir, km)
+  real :: CSL              ! The length of the continental shelf (y dir, km)
   real :: lensponge        ! the length of the sponge layer.
   logical :: mask_tracers  !< If true, tracers are masked out in massless layers.
   logical :: use_sponge
@@ -149,25 +148,21 @@ function register_IDEAL_IS_tracer(HI, GV, param_file, CS, tr_Reg, &
                  "The longitudinal or x-direction length of the domain", &
                  fail_if_missing=.true., do_not_log=.true.)
 
-  call get_param(param_file, mod, "MAJOR", CS%major, &
-                 "The length of the major axis (x dir) in the polynya region (km).", &
-                 default=75.0)
-
-  call get_param(param_file, mod, "MINOR", CS%minor, &
-                 "The length of the minor axis (y dir) in the polynya region (km).", &
-                 default=75.0)
-
   call get_param(param_file, mod, "ICE_SHELF_LENGHT", CS%ISL, &
                  "The length of the ice shelf (y dir, km).", &
                  default=250.0)
+
+  call get_param(param_file, mod, "CONT_SHELF_LENGHT", CS%CSL, &
+                 "The length of the continental shelf (y dir, km).", &
+                 default=200.0)
 
   call get_param(param_file, mod, "LENSPONGE", CS%lensponge, &
                  "The length of the sponge layer (km).", &
                  default=100.0)
 
-  call get_param(param_file, mod, "SHELF_THERMO", CS%shelf_thermo, &
-             "If true, add a passive tracer in the melt water under ice shelves.",&
-              default=.false., do_not_log=.true.)
+  call get_param(param_file, mod, "SHELF_THERMO", CS%shelf_thermo, & 
+          "If true, add a passive tracer in the melt water under ice shelves.",&
+          default=.false., do_not_log=.true.)
 
   allocate(CS%tr(isd:ied,jsd:jed,nz,NTR)) ; CS%tr(:,:,:,:) = 0.0
   if (CS%mask_tracers) then
@@ -346,8 +341,6 @@ subroutine IDEAL_IS_tracer_column_physics(h_old, h_new,  ea,  eb, fluxes, dt, G,
 
   if (.not.associated(CS)) return
 
-  melt(:,:) = fluxes%iceshelf_melt
-
   if ( CS%use_sponge ) then
     !   If sponges are used, this example damps tracers in sponges in the
     ! northern half of the domain to 1 and tracers in the southern half
@@ -368,31 +361,32 @@ subroutine IDEAL_IS_tracer_column_physics(h_old, h_new,  ea,  eb, fluxes, dt, G,
   ! m=2 polynya dye
   ! GM: 340 and 400 --> make params
   m=2
-    do j=js,je ; do i=is,ie 
-      if (G%geoLonT(i,j) - 0.5*CS%lenlon >= -CS%major .AND. &
-          G%geoLonT(i,j) - 0.5*CS%lenlon <= CS%major) then
-          if (G%geoLatT(i,j) - CS%ISL >= 0. .AND. &
-              G%geoLatT(i,j) - CS%ISL <= (CS%minor * ABS((1-(G%geoLonT(i,j)-0.5*CS%lenlon)**2/CS%major**2)**(1./2.)))) then
+  do j=js,je ; do i=is,ie 
+     if (G%geoLatT(i,j) > CS%ISL .AND. &
+        G%geoLatT(i,j) <= (CS%ISL + CS%CSL*0.8)) then
           CS%tr(i,j,1:GV%nkml,m) = 1.0 ! inject dye in the ML
-          endif
-      endif
-    enddo ; enddo
-
-  if ( CS%shelf_thermo) then
-    ! max. melt
-    mmax = MAXVAL(melt(is:ie,js:je))
-    call max_across_PEs(mmax)
-    ! dye melt water (m=3), dye = 1 if melt=max(melt) 
-    m = 3
-    do j=js,je ; do i=is,ie
-      if (melt(i,j) > 0.0) then ! melting
-         !write(*,*)'i,j,melt,melt/mmax',i,j,melt(i,j),melt(i,j)/mmax
-         CS%tr(i,j,1:GV%nkml,m) = melt(i,j)/mmax ! inject dye in the ML
-      else ! freezing
-         CS%tr(i,j,1:GV%nkml,m) = 0.0 
-      endif
-    enddo ; enddo
-  endif ! melt dye
+     endif
+  enddo ; enddo
+ 
+  ! dye melt water (m=3)
+  m = 3
+  if (CS%shelf_thermo) then
+         melt(:,:) = fluxes%iceshelf_melt
+         ! max. melt
+         mmax = MAXVAL(melt(is:ie,js:je))
+         call max_across_PEs(mmax)
+         ! dye = 1 if melt=max(melt) 
+         do j=js,je ; do i=is,ie
+           if (melt(i,j) > 0.0) then ! melting
+             !write(*,*)'i,j,melt,melt/mmax',i,j,melt(i,j),melt(i,j)/mmax
+             CS%tr(i,j,1:GV%nkml,m) = melt(i,j)/mmax ! inject dye in the ML
+           else ! freezing
+             CS%tr(i,j,1:GV%nkml,m) = 0.0 
+           endif
+         enddo ; enddo
+  else ! ice shelf does not exit or melting is off
+         CS%tr(:,:,:,m) = 0.0
+  endif ! CS%shelf_thermo
 
   do m=1,NTR
     call tracer_vertdiff(h_old, ea, eb, dt, CS%tr(:,:,:,m), G, GV)
