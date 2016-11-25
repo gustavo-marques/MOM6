@@ -446,7 +446,9 @@ subroutine call_tracer_column_fns(h_old, h_new, ea, eb, fluxes, dt, G, GV, tv, o
 
     if (CS%use_IDEAL_IS_tracer) &
       call IDEAL_IS_tracer_column_physics(h_old, h_new, ea, eb, fluxes, dt, &
-                                    G, GV, CS%IDEAL_IS_tracer_CSp)
+                                        G, GV, CS%IDEAL_IS_tracer_CSp, &
+                                        evap_CFL_limit=evap_CFL_limit, &
+                                        minimum_forcing_depth=minimum_forcing_depth)
     if (CS%use_ideal_age) &
       call ideal_age_tracer_column_physics(h_old, h_new, ea, eb, fluxes, dt, &
                                            G, GV, CS%ideal_age_tracer_CSp, &
@@ -502,6 +504,11 @@ subroutine call_tracer_column_fns(h_old, h_new, ea, eb, fluxes, dt, G, GV, tv, o
     if (CS%use_ISOMIP_tracer) &
       call ISOMIP_tracer_column_physics(h_old, h_new, ea, eb, fluxes, dt, &
                                       G, GV, CS%ISOMIP_tracer_CSp)
+
+     if (CS%use_IDEAL_IS_tracer) &
+      call IDEAL_IS_tracer_column_physics(h_old, h_new, ea, eb, fluxes, dt, &
+                                      G, GV, CS%IDEAL_IS_tracer_CSp)
+
     if (CS%use_ideal_age) &
       call ideal_age_tracer_column_physics(h_old, h_new, ea, eb, fluxes, dt, &
                                            G, GV, CS%ideal_age_tracer_CSp)

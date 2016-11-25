@@ -304,13 +304,17 @@ end subroutine initialize_IDEAL_IS_tracer
 !> This subroutine applies diapycnal diffusion and any other column
 ! tracer physics or chemistry to the tracers from this file.
 ! This is a simple example of a set of advected passive tracers.
-subroutine IDEAL_IS_tracer_column_physics(h_old, h_new,  ea,  eb, fluxes, dt, G, GV, CS)
+subroutine IDEAL_IS_tracer_column_physics(h_old, h_new,  ea,  eb, fluxes, dt, G, GV, CS, &
+                              aggregate_FW_forcing, evap_CFL_limit, minimum_forcing_depth)
   type(ocean_grid_type),                 intent(in) :: G
   type(verticalGrid_type),               intent(in) :: GV
   real, dimension(SZI_(G),SZJ_(G),SZK_(G)), intent(in) :: h_old, h_new, ea, eb
   type(forcing),                         intent(in) :: fluxes
   real,                                  intent(in) :: dt
   type(IDEAL_IS_tracer_CS),                  pointer    :: CS
+  logical,                          optional,intent(in)  :: aggregate_FW_forcing
+  real,                             optional,intent(in)  :: evap_CFL_limit
+  real,                             optional,intent(in)  :: minimum_forcing_depth
 
 ! Arguments: h_old -  Layer thickness before entrainment, in m or kg m-2.
 !  (in)      h_new -  Layer thickness after entrainment, in m or kg m-2.
@@ -334,6 +338,7 @@ subroutine IDEAL_IS_tracer_column_physics(h_old, h_new,  ea,  eb, fluxes, dt, G,
   real :: mmax
   real :: b1(SZI_(G))          ! b1 and c1 are variables used by the
   real :: c1(SZI_(G),SZK_(G))  ! tridiagonal solver.
+  real, dimension(SZI_(G),SZJ_(G),SZK_(G)) :: h_work ! Used so that h can be modified
   real :: melt(SZI_(G),SZJ_(G))  ! melt water (positive for melting 
                                  ! negative for freezing)
   integer :: i, j, k, is, ie, js, je, nz, m
@@ -388,9 +393,21 @@ subroutine IDEAL_IS_tracer_column_physics(h_old, h_new,  ea,  eb, fluxes, dt, G,
          CS%tr(:,:,:,m) = 0.0
   endif ! CS%shelf_thermo
 
-  do m=1,NTR
-    call tracer_vertdiff(h_old, ea, eb, dt, CS%tr(:,:,:,m), G, GV)
-  enddo
+  if (present(evap_CFL_limit) .and. present(minimum_forcing_depth)) then
+    do m=1,NTR
+      do k=1,nz ;do j=js,je ; do i=is,ie
+             h_work(i,j,k) = h_old(i,j,k)
+      enddo ; enddo ; enddo;    
+      call applyTracerBoundaryFluxesInOut(G, GV, CS%tr(:,:,:,m) , dt, fluxes, h_work, &
+                                       evap_CFL_limit, minimum_forcing_depth)
+
+      call tracer_vertdiff(h_work, ea, eb, dt, CS%tr(:,:,:,m), G, GV)
+    enddo
+  else
+    do m=1,NTR
+      call tracer_vertdiff(h_old, ea, eb, dt, CS%tr(:,:,:,m), G, GV)
+    enddo
+  endif
 
   if (CS%mask_tracers) then
     do m = 1,NTR ; if (CS%id_tracer(m) > 0) then
