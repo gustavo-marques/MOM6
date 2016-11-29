@@ -1024,6 +1024,7 @@ subroutine add_shelf_flux(G, CS, state, fluxes)
       if (associated(fluxes%sw)) fluxes%sw(i,j) = 0.0
       if (associated(fluxes%lw)) fluxes%lw(i,j) = 0.0
       if (associated(fluxes%latent)) fluxes%latent(i,j) = 0.0
+      if (associated(fluxes%sens)) fluxes%sens(i,j) = 0.0
       if (associated(fluxes%evap)) fluxes%evap(i,j) = 0.0
       if (associated(fluxes%lprec)) then
         if (CS%lprec(i,j) > 0.0 ) then
