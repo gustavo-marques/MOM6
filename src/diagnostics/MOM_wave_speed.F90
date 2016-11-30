@@ -383,10 +383,10 @@ subroutine wave_speed(h, tv, G, GV, cg1, CS, full_halos, use_ebt_mode, &
               ddet = (Igu(k)+Igl(k)-lam)*ddetKm1 - (Igu(k)*Igl(k-1))*ddetKm2 - detKm1
                         
               ! Rescale det & ddet if det is getting too large.
-              if (abs(det) > rescale) then
+              do while (abs(det) > rescale) 
                 det = I_rescale*det ; detKm1 = I_rescale*detKm1
                 ddet = I_rescale*ddet ; ddetKm1 = I_rescale*ddetKm1
-              endif
+              enddo
             enddo
             ! Use Newton's method iteration to find a new estimate of lam.
             det_it(itt) = det ; ddet_it(itt) = ddet

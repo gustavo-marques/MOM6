@@ -1003,24 +1003,15 @@ subroutine add_shelf_flux(G, CS, state, fluxes)
   do j=G%jsc,G%jec ; do i=G%isc,G%iec
     frac_area = fluxes%frac_shelf_h(i,j)
     if (frac_area > 0.0) then
-      ! ### THIS SHOULD BE AN AREA WEIGHTED AVERAGE OF THE ustar_shelf POINTS.
-      taux2 = 0.0 ; tauy2 = 0.0
-      asu1 = fluxes%frac_shelf_u(i-1,j) * (G%areaT(i-1,j) + G%areaT(i,j)) ! G%dxdy_u(i-1,j)
-      asu2 = fluxes%frac_shelf_u(i,j) * (G%areaT(i,j) + G%areaT(i+1,j)) ! G%dxdy_u(i,j)
-      asv1 = fluxes%frac_shelf_v(i,j-1) * (G%areaT(i,j-1) + G%areaT(i,j)) ! G%dxdy_v(i,j-1)
-      asv2 = fluxes%frac_shelf_v(i,j) * (G%areaT(i,j) + G%areaT(i,j+1)) ! G%dxdy_v(i,j)
-      if ((asu1 + asu2 > 0.0) .and. associated(state%taux_shelf)) &
-        taux2 = (asu1 * state%taux_shelf(i-1,j)**2 + &
-                 asu2 * state%taux_shelf(i,j)**2  ) / (asu1 + asu2)
-      if ((asv1 + asv2 > 0.0) .and. associated(state%tauy_shelf)) &
-        tauy2 = (asv1 * state%tauy_shelf(i,j-1)**2 + &
-                 asv2 * state%tauy_shelf(i,j)**2  ) / (asv1 + asv2)
-      
-      ! GM: melting is computed using ustar_shelf (and not ustar), which has already
-      ! been passed, so believe we do not need to update fluxes%ustar.
-      !fluxes%ustar(i,j) = MAX(CS%ustar_bg, sqrt(Irho0 * sqrt(taux2 + tauy2)))
 
+      fluxes%ustar(i,j) = fluxes%ustar_shelf(i,j) 
 
+      if (associated(fluxes%taux)) fluxes%taux(i,j) = 0.0
+      if (associated(fluxes%tauy)) fluxes%tauy(i,j) = 0.0
+      if (associated(fluxes%vprec)) fluxes%vprec(i,j) = 0.0
+      if (associated(fluxes%fprec)) fluxes%fprec(i,j) = 0.0
+      if (associated(fluxes%lrunoff)) fluxes%lrunoff(i,j) = 0.0
+      if (associated(fluxes%frunoff)) fluxes%frunoff(i,j) = 0.0
       if (associated(fluxes%sw)) fluxes%sw(i,j) = 0.0
       if (associated(fluxes%lw)) fluxes%lw(i,j) = 0.0
       if (associated(fluxes%latent)) fluxes%latent(i,j) = 0.0
