@@ -356,21 +356,29 @@ subroutine IDEAL_IS_tracer_column_physics(h_old, h_new,  ea,  eb, fluxes, dt, G,
 
     m=1
     do j=js,je ; do i=is,ie
+      ! add tracer
       if (G%geoLatT(i,j) >= (CS%lenlat - CS%lensponge) .AND. G%geoLatT(i,j) <= CS%lenlat) then
         CS%tr(i,j,:,m) = 1.0 ! all layers
       endif
+      ! remove tracer
+      if (G%geoLatT(i,j) <= CS%ISL) CS%tr(i,j,:,m) = 0.0
     enddo ; enddo
 
   endif ! sponge
 
-  ! m=2 polynya dye
-  ! GM: 340 and 400 --> make params
+  ! m=2 polynya tracer
   m=2
   do j=js,je ; do i=is,ie 
+     ! add tracer
      if (G%geoLatT(i,j) > CS%ISL .AND. &
         G%geoLatT(i,j) <= (CS%ISL + CS%CSL*0.8)) then
           CS%tr(i,j,1:GV%nkml,m) = 1.0 ! inject dye in the ML
      endif
+     ! remove tracer
+     if (G%geoLatT(i,j) >= (CS%lenlat - CS%lensponge) .AND. G%geoLatT(i,j) <= CS%lenlat) then
+        CS%tr(i,j,:,m) = 0.0 ! all layers
+     endif
+
   enddo ; enddo
  
   ! dye melt water (m=3)
@@ -382,12 +390,19 @@ subroutine IDEAL_IS_tracer_column_physics(h_old, h_new,  ea,  eb, fluxes, dt, G,
          call max_across_PEs(mmax)
          ! dye = 1 if melt=max(melt) 
          do j=js,je ; do i=is,ie
+           ! add tracer
            if (melt(i,j) > 0.0) then ! melting
              !write(*,*)'i,j,melt,melt/mmax',i,j,melt(i,j),melt(i,j)/mmax
              CS%tr(i,j,1:GV%nkml,m) = melt(i,j)/mmax ! inject dye in the ML
            else ! freezing
              CS%tr(i,j,1:GV%nkml,m) = 0.0 
            endif
+           !  remove tracer
+           if (G%geoLatT(i,j) >= (CS%lenlat - CS%lensponge) .AND.&
+              G%geoLatT(i,j) <= CS%lenlat) then
+                  CS%tr(i,j,:,m) = 0.0 ! all layers
+          endif
+
          enddo ; enddo
   else ! ice shelf does not exit or melting is off
          CS%tr(:,:,:,m) = 0.0
