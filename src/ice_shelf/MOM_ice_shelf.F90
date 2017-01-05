@@ -258,7 +258,7 @@ type, public :: ice_shelf_CS ; private
   real :: Gamma_T_3EQ  !  Nondimensional heat-transfer coefficient, used in the 3Eq. formulation 
                        !  This number should be specified by the user.
   real :: col_thick_melt_threshold ! if the mixed layer is below this threshold, melt rate 
-                                  ! is not calculated for the cell
+  logical :: mass_from_file ! Read the ice shelf mass from a file every dt
 
 !!!! PHYSICAL AND NUMERICAL PARAMETERS FOR ICE DYNAMICS !!!!!!
 
@@ -519,9 +519,10 @@ subroutine shelf_calc_flux(state, fluxes, Time, time_step, CS)
   ALLOCATE ( haline_driving(G%ied,G%jed) ); haline_driving(:,:) = 0.0
   ALLOCATE ( Sbdry(G%ied,G%jed) ); Sbdry(:,:) = state%sss(:,:)
 
-  if (CS%shelf_mass_is_dynamic .and. CS%override_shelf_movement) & 
-                                  call update_shelf_mass(CS, Time)
-  
+  if (CS%shelf_mass_is_dynamic .and. CS%override_shelf_movement) then
+     if (CS%mass_from_file)    call update_shelf_mass(CS, Time)
+  endif
+
   do j=js,je 
     ! Find the pressure at the ice-ocean interface, averaged only over the
     ! part of the cell covered by ice shelf.
@@ -774,9 +775,9 @@ subroutine shelf_calc_flux(state, fluxes, Time, time_step, CS)
   ! CS%lprec = precipitating liquid water into the ocean ( kg/(m^2 s) )
   ! We want melt in m/year 
   if (CS%const_gamma) then ! use ISOMIP+ eq. with rho_fw
-    fluxes%iceshelf_melt = CS%lprec  * (86400.0*365.0/rho_fw)
+    fluxes%iceshelf_melt = CS%lprec  * (86400.0*365.0/rho_fw) * CS%flux_factor
   else ! use original eq.
-    fluxes%iceshelf_melt = CS%lprec  * (86400.0*365.0/CS%density_ice)
+    fluxes%iceshelf_melt = CS%lprec  * (86400.0*365.0/CS%density_ice) * CS%flux_factor
   endif
 
   do j=js,je
@@ -841,7 +842,18 @@ subroutine shelf_calc_flux(state, fluxes, Time, time_step, CS)
     call cpu_clock_end(id_clock_pass)
   endif
 
-  call add_shelf_flux(G, CS, state, fluxes)
+  ! Melting has been computed, now is time to update thickness and mass
+  if (CS%shelf_mass_is_dynamic .and. CS%override_shelf_movement) then
+     if (.not. (CS%mass_from_file)) then
+
+      call change_thickness_using_melt(CS,G,time_step)
+   
+    endif
+  
+  endif
+
+
+   call add_shelf_flux(G, CS, state, fluxes)
 
   ! now the thermodynamic data is passed on... time to update the ice dynamic quantities
 
@@ -853,16 +865,6 @@ subroutine shelf_calc_flux(state, fluxes, Time, time_step, CS)
     ! note time_step is [s] and lprec is [kg / m^2 / s]
 
     call ice_shelf_advect (CS, time_step, CS%lprec, Time)
-
-
-    do j=G%jsd,G%jed
-      do i=G%isd,G%ied
-        if ((CS%hmask(i,j) .eq. 1) .or. (CS%hmask(i,j) .eq. 2)) then
-          CS%mass_shelf(i,j) = CS%h_shelf(i,j)*CS%density_ice
-        endif
-      enddo
-    enddo
- 
 
     CS%velocity_update_sub_counter = CS%velocity_update_sub_counter+1
 
@@ -911,6 +913,52 @@ subroutine shelf_calc_flux(state, fluxes, Time, time_step, CS)
   call cpu_clock_end(id_clock_shelf)
 
 end subroutine shelf_calc_flux
+
+subroutine change_thickness_using_melt(CS,G,time_step)
+  type(ocean_grid_type),              intent(inout)    :: G
+  type(ice_shelf_CS),                 intent(inout)    :: CS
+  real,                               intent(in)  :: time_step
+
+  ! locals
+  integer :: i, j
+
+  do j=G%jsc,G%jec
+    do i=G%isc,G%iec
+      if ((CS%hmask(i,j) .eq. 1) .or. (CS%hmask(i,j) .eq. 2)) then
+        if (CS%lprec(i,j) / CS%density_ice * time_step .lt. CS%h_shelf (i,j)) then
+           CS%h_shelf (i,j) = CS%h_shelf (i,j) - CS%lprec(i,j) / CS%density_ice * time_step
+         else
+           ! the ice is about to melt away
+           ! in this case set thickness, area, and mask to zero
+           ! NOTE: not mass conservative
+           ! should maybe scale salt & heat flux for this cell
+
+           CS%h_shelf(i,j) = 0.0
+           CS%hmask(i,j) = 0.0
+           CS%area_shelf_h(i,j) = 0.0
+         endif
+       endif
+     enddo
+    enddo
+
+    call pass_var(CS%area_shelf_h, G%domain)
+    call pass_var(CS%h_shelf, G%domain)
+    call pass_var(CS%hmask, G%domain)
+
+    if (CS%DEBUG) then
+      call hchksum (CS%h_shelf, "h after front", G%HI, haloshift=3)
+      call hchksum (CS%h_shelf, "shelf area after front", G%HI, haloshift=3)
+    endif
+
+    do j=G%jsd,G%jed
+       do i=G%isd,G%ied
+         if ((CS%hmask(i,j) .eq. 1) .or. (CS%hmask(i,j) .eq. 2)) then
+          CS%mass_shelf(i,j) = CS%h_shelf(i,j)*CS%density_ice
+         endif
+       enddo
+    enddo
+
+end subroutine change_thickness_using_melt
 
 subroutine add_shelf_flux(G, CS, state, fluxes)
   type(ocean_grid_type),              intent(inout)    :: G
@@ -1003,19 +1051,27 @@ subroutine add_shelf_flux(G, CS, state, fluxes)
   do j=G%jsc,G%jec ; do i=G%isc,G%iec
     frac_area = fluxes%frac_shelf_h(i,j)
     if (frac_area > 0.0) then
+      ! ### THIS SHOULD BE AN AREA WEIGHTED AVERAGE OF THE ustar_shelf POINTS.
+      taux2 = 0.0 ; tauy2 = 0.0
+      asu1 = fluxes%frac_shelf_u(i-1,j) * (G%areaT(i-1,j) + G%areaT(i,j)) ! G%dxdy_u(i-1,j)
+      asu2 = fluxes%frac_shelf_u(i,j) * (G%areaT(i,j) + G%areaT(i+1,j)) ! G%dxdy_u(i,j)
+      asv1 = fluxes%frac_shelf_v(i,j-1) * (G%areaT(i,j-1) + G%areaT(i,j)) ! G%dxdy_v(i,j-1)
+      asv2 = fluxes%frac_shelf_v(i,j) * (G%areaT(i,j) + G%areaT(i,j+1)) ! G%dxdy_v(i,j)
+      if ((asu1 + asu2 > 0.0) .and. associated(state%taux_shelf)) &
+        taux2 = (asu1 * state%taux_shelf(i-1,j)**2 + &
+                 asu2 * state%taux_shelf(i,j)**2  ) / (asu1 + asu2)
+      if ((asv1 + asv2 > 0.0) .and. associated(state%tauy_shelf)) &
+        tauy2 = (asv1 * state%tauy_shelf(i,j-1)**2 + &
+                 asv2 * state%tauy_shelf(i,j)**2  ) / (asv1 + asv2)
+      
+      ! GM: melting is computed using ustar_shelf (and not ustar), which has already
+      ! been passed, so believe we do not need to update fluxes%ustar.
+      !fluxes%ustar(i,j) = MAX(CS%ustar_bg, sqrt(Irho0 * sqrt(taux2 + tauy2)))
 
-      fluxes%ustar(i,j) = fluxes%ustar_shelf(i,j) 
 
-      if (associated(fluxes%taux)) fluxes%taux(i,j) = 0.0
-      if (associated(fluxes%tauy)) fluxes%tauy(i,j) = 0.0
-      if (associated(fluxes%vprec)) fluxes%vprec(i,j) = 0.0
-      if (associated(fluxes%fprec)) fluxes%fprec(i,j) = 0.0
-      if (associated(fluxes%lrunoff)) fluxes%lrunoff(i,j) = 0.0
-      if (associated(fluxes%frunoff)) fluxes%frunoff(i,j) = 0.0
       if (associated(fluxes%sw)) fluxes%sw(i,j) = 0.0
       if (associated(fluxes%lw)) fluxes%lw(i,j) = 0.0
       if (associated(fluxes%latent)) fluxes%latent(i,j) = 0.0
-      if (associated(fluxes%sens)) fluxes%sens(i,j) = 0.0
       if (associated(fluxes%evap)) fluxes%evap(i,j) = 0.0
       if (associated(fluxes%lprec)) then
         if (CS%lprec(i,j) > 0.0 ) then
@@ -1319,6 +1375,13 @@ subroutine initialize_ice_shelf(param_file, ocn_grid, Time, CS, diag, fluxes, Ti
   if (CS%const_gamma) call get_param(param_file, mod, "SHELF_3EQ_GAMMA_T", CS%Gamma_T_3EQ, &
                  "Nondimensional heat-transfer coefficient.",default=2.2E-2, &
                   units="nondim.", fail_if_missing=.true.)
+
+  
+  call get_param(param_file, mod, "ICE_SHELF_MASS_FROM_FILE", &
+                CS%mass_from_file, "Read the mass of the &
+                ice shelf (every time step) from a file", default=.false.)
+
+   
   if (CS%threeeq) &
     call get_param(param_file, mod, "SHELF_S_ROOT", CS%find_salt_root, &
                  "If SHELF_S_ROOT = True, salinity at the ice/ocean interface (Sbdry) \n "//&
@@ -1651,14 +1714,14 @@ subroutine initialize_ice_shelf(param_file, ocn_grid, Time, CS, diag, fluxes, Ti
   if ((dirs%input_filename(1:1) == 'n') .and. &
       (LEN_TRIM(dirs%input_filename) == 1)) new_sim = .true.
 
-  if (CS%override_shelf_movement) then
-  ! This call is always made because parameters and types may be set
-  ! inside, in addition to initializing the mass arrays.
+  if (CS%override_shelf_movement .and. CS%mass_from_file) then
+    ! This call is always made because parameters and types may be set
+    ! inside, in addition to initializing the mass arrays.
     call initialize_shelf_mass(G, param_file, CS)
-!  else if (CS%shelf_mass_is_dynamic) then
-!    call initialize_ice_shelf_boundary ( CS%u_face_mask_boundary, CS%v_face_mask_boundary, &
-!                                         CS%u_flux_boundary_values, CS%v_flux_boundary_values, &
-!                                         CS%u_boundary_values, CS%v_boundary_values, CS%h_boundary_values, &
+    !  else if (CS%shelf_mass_is_dynamic) then
+    !    call initialize_ice_shelf_boundary ( CS%u_face_mask_boundary, CS%v_face_mask_boundary, &
+    !                                         CS%u_flux_boundary_values, CS%v_flux_boundary_values, &
+    !                                         CS%u_boundary_values, CS%v_boundary_values, CS%h_boundary_values, &
 !                                         CS%hmask, G, param_file)
   end if
 
@@ -1672,7 +1735,7 @@ subroutine initialize_ice_shelf(param_file, ocn_grid, Time, CS, diag, fluxes, Ti
 
   end if
 
-  if (new_sim .and. .not. CS%override_shelf_movement) then
+  if (new_sim .and. (.not. (CS%override_shelf_movement .and. CS%mass_from_file))) then
 
     ! This model is initialized internally or from a file.
     call initialize_ice_thickness (CS%h_shelf, CS%area_shelf_h, CS%hmask, G, param_file)
@@ -2211,36 +2274,9 @@ subroutine ice_shelf_advect(CS, time_step, melt_rate, Time)
   !if (CS%id_h_after_adv > 0) call post_data(CS%id_h_after_adv, CS%h_shelf, CS%diag)
   !call disable_averaging(CS%diag)
 
-  do j=jsc,jec
-    do i=isc,iec
-      if ((CS%hmask(i,j) .eq. 1) .or. (CS%hmask(i,j) .eq. 2)) then
-        if (melt_rate (i,j) / rho * time_step .lt. CS%h_shelf (i,j)) then
-          CS%h_shelf (i,j) = CS%h_shelf (i,j) - melt_rate (i,j) / rho * time_step
-        else
-          ! the ice is about to melt away
-          ! in this case set thickness, area, and mask to zero
-          ! NOTE: not mass conservative
-          ! should maybe scale salt & heat flux for this cell
+  call change_thickness_using_melt(CS,G,time_step)
 
-          CS%h_shelf(i,j) = 0.0
-          CS%hmask(i,j) = 0.0
-          CS%area_shelf_h(i,j) = 0.0
-        endif        
-      endif
-    enddo
-  enddo
-  
   call update_velocity_masks (CS)
-
-  call pass_var(CS%area_shelf_h, G%domain)
-  call pass_var(CS%h_shelf, G%domain)
-  call pass_var(CS%hmask, G%domain)
-
-  if (CS%DEBUG) then
-    call hchksum (CS%h_shelf, "h after front", G%HI, haloshift=3)
-    call hchksum (CS%h_shelf, "shelf area after front", G%HI, haloshift=3)
-  endif
-
 
 end subroutine ice_shelf_advect
 
@@ -5924,21 +5960,11 @@ subroutine solo_time_step (CS, time_step, n, Time, min_time_step_in)
 
    call ice_shelf_advect (CS, time_step_int, CS%lprec, Time)
 
-
    if (mpp_pe() .eq. 7) then
       call savearray2 ("hmask",CS%hmask,CS%write_output_to_file)
 !!! OVS!!!
 !      call savearray2 ("tshelf",CS%t_shelf,CS%write_output_to_file)
    endif
-
-
-   do j=G%jsd,G%jed
-     do i=G%isd,G%ied
-       if ((CS%hmask(i,j) .eq. 1) .or. (CS%hmask(i,j) .eq. 2)) then
-         CS%mass_shelf(i,j) = CS%h_shelf(i,j)*CS%density_ice
-       endif
-     enddo
-   enddo
 
    ! if the last mini-timestep is a day or less, we cannot expect velocities to change by much. 
    ! do not update them
