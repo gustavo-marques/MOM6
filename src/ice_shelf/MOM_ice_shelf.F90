@@ -795,7 +795,7 @@ subroutine shelf_calc_flux(state, fluxes, Time, time_step, CS)
               fluxes%iceshelf_melt(i,j) = 0.0
          endif
          ! Compute haline driving, which is one of the diags. used in ISOMIP
-         haline_driving(i,j) = (CS%lprec(i,j) * Sbdry(i,j)) / &
+         haline_driving(i,j) = CS%flux_factor * (CS%lprec(i,j) * Sbdry(i,j)) / &
                                (CS%Rho0 * CS%exch_vel_s(i,j))
 
          !!!!!!!!!!!!!!!!!!!!!!!!!!!!Safety checks !!!!!!!!!!!!!!!!!!!!!!!!!
@@ -827,7 +827,7 @@ subroutine shelf_calc_flux(state, fluxes, Time, time_step, CS)
 
   ! mass flux (kg/s), part of ISOMIP diags.
   ALLOCATE ( mass_flux(G%ied,G%jed) ); mass_flux(:,:) = 0.0
-  mass_flux = (CS%lprec) * CS%area_shelf_h 
+  mass_flux = (CS%lprec) * CS%area_shelf_h * CS%flux_factor
  
   if (CS%DEBUG) then
    call hchksum (fluxes%iceshelf_melt, "melt rate", G%HI, haloshift=0)
