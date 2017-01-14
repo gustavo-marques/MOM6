@@ -18,7 +18,7 @@ module IDEAL_IS_tracer
 use MOM_diag_mediator, only : post_data, register_diag_field, safe_alloc_ptr
 use MOM_diag_mediator, only : diag_ctrl
 use MOM_diag_to_Z, only : register_Z_tracer, diag_to_Z_CS
-use MOM_error_handler, only : MOM_error, FATAL, WARNING
+use MOM_error_handler, only : MOM_error, FATAL, WARNING, is_root_pe
 use MOM_file_parser, only : get_param, log_param, log_version, param_file_type
 use MOM_forcing_type, only : forcing
 use MOM_hor_index, only : hor_index_type
@@ -37,6 +37,7 @@ use MOM_verticalGrid, only : verticalGrid_type
 use MOM_coms, only : max_across_PEs, min_across_PEs
 use coupler_util, only : set_coupler_values, ind_csurf
 use atmos_ocean_fluxes_mod, only : aof_set_coupler_flux
+!use mpp_mod, only : mpp_max, mpp_min
 
 implicit none ; private
 
@@ -371,7 +372,7 @@ subroutine IDEAL_IS_tracer_column_physics(h_old, h_new,  ea,  eb, fluxes, dt, G,
   ! m=2 polynya tracer
   m=2
   salt_flux = fluxes%salt_flux_in
-  salt_flux_min = 0.0
+  salt_flux_min = 1.0E10
   ! first find max value in the region of interest
   do j=js,je ; do i=is,ie
      if (G%geoLatT(i,j) > CS%ISL .AND. &
@@ -380,6 +381,7 @@ subroutine IDEAL_IS_tracer_column_physics(h_old, h_new,  ea,  eb, fluxes, dt, G,
      endif
   enddo ; enddo
 
+!  call mpp_min(salt_flux_min)
   call min_across_PEs(salt_flux_min)
  
   ! second, add tracer proportionally to salt_flux_max
@@ -387,13 +389,11 @@ subroutine IDEAL_IS_tracer_column_physics(h_old, h_new,  ea,  eb, fluxes, dt, G,
      ! add tracer
      if (G%geoLatT(i,j) > CS%ISL .AND. &
         G%geoLatT(i,j) <= (CS%ISL + CS%CSL*0.8)) then
-          if (salt_flux(i,j) < -1.0e-12) then
+          if (salt_flux(i,j) < 0.0) then
              CS%tr(i,j,1:GV%nkml,m) = salt_flux(i,j)/salt_flux_min
           endif
-          !if (salt_flux_max > 0.0) then
-          !   CS%tr(i,j,1:GV%nkml,m) = salt_flux(i,j)/salt_flux_max ! inject dye in the ML
-          !endif   
      endif
+    
      ! remove tracer in the sponge layer
      if (G%geoLatT(i,j) >= (CS%lenlat - CS%lensponge) .AND. G%geoLatT(i,j) <= CS%lenlat) then
         CS%tr(i,j,:,m) = 0.0 ! all layers
@@ -407,6 +407,7 @@ subroutine IDEAL_IS_tracer_column_physics(h_old, h_new,  ea,  eb, fluxes, dt, G,
          melt(:,:) = fluxes%iceshelf_melt
          ! max. melt
          mmax = MAXVAL(melt(is:ie,js:je))
+!         call mpp_max(mmax)
          call max_across_PEs(mmax)
          ! dye = 1 if melt=max(melt) 
          do j=js,je ; do i=is,ie
