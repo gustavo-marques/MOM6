@@ -49,7 +49,9 @@ use DOME_initialization, only : DOME_initialize_sponges
 use ISOMIP_initialization, only : ISOMIP_initialize_thickness
 use ISOMIP_initialization, only : ISOMIP_initialize_sponges
 use ISOMIP_initialization, only : ISOMIP_initialize_temperature_salinity
+use OUT_IS_initialization, only : OUT_IS_initialize_thickness
 use OUT_IS_initialization, only : OUT_IS_initialize_sponges
+use OUT_IS_initialization, only : OUT_IS_initialize_temperature_salinity
 use baroclinic_zone_initialization, only : baroclinic_zone_init_temperature_salinity
 use benchmark_initialization, only : benchmark_initialize_thickness
 use benchmark_initialization, only : benchmark_init_temperature_salinity
@@ -248,6 +250,7 @@ subroutine MOM_initialize_state(u, v, h, tv, Time, G, GV, PF, dirs, &
          case ("uniform"); call initialize_thickness_uniform(h, G, GV, PF)
          case ("DOME"); call DOME_initialize_thickness(h, G, GV, PF)
          case ("ISOMIP"); call ISOMIP_initialize_thickness(h, G, GV, PF, tv)
+         case ("OUT_IS"); call OUT_IS_initialize_thickness(h, G, GV, PF, tv)
          case ("benchmark"); call benchmark_initialize_thickness(h, G, GV, PF, &
                                  tv%eqn_of_state, tv%P_Ref)
          case ("search"); call initialize_thickness_search
@@ -301,6 +304,8 @@ subroutine MOM_initialize_state(u, v, h, tv, Time, G, GV, PF, dirs, &
           case ("DOME2D"); call DOME2d_initialize_temperature_salinity ( tv%T, &
                                 tv%S, h, G, PF, eos)
           case ("ISOMIP"); call ISOMIP_initialize_temperature_salinity ( tv%T, &
+                                tv%S, h, G, GV, PF, eos)
+          case ("OUT_IS"); call OUT_IS_initialize_temperature_salinity ( tv%T, &
                                 tv%S, h, G, GV, PF, eos)
           case ("adjustment2d"); call adjustment_initialize_temperature_salinity ( tv%T, &
                                       tv%S, h, G, PF, eos)
