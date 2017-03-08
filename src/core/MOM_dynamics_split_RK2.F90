@@ -20,7 +20,7 @@ use MOM_domains,           only : MOM_domains_init
 use MOM_domains,           only : To_South, To_West, To_All, CGRID_NE, SCALAR_PAIR
 use MOM_domains,           only : create_group_pass, do_group_pass, group_pass_type
 use MOM_domains,           only : start_group_pass, complete_group_pass
-use MOM_checksums,         only : MOM_checksums_init, hchksum, uchksum, vchksum
+use MOM_debugging,         only : hchksum, uchksum, vchksum
 use MOM_error_handler,     only : MOM_error, MOM_mesg, FATAL, WARNING, is_root_pe
 use MOM_error_handler,     only : MOM_set_verbosity, callTree_showQuery
 use MOM_error_handler,     only : callTree_enter, callTree_leave, callTree_waypoint
@@ -38,7 +38,7 @@ use MOM_barotropic,            only : register_barotropic_restarts, set_dtbt, ba
 use MOM_continuity,            only : continuity, continuity_init, continuity_CS
 use MOM_CoriolisAdv,           only : CorAdCalc, CoriolisAdv_init, CoriolisAdv_CS
 use MOM_diabatic_driver,       only : diabatic, diabatic_driver_init, diabatic_CS
-use MOM_error_checking,        only : check_redundant
+use MOM_debugging,             only : check_redundant
 use MOM_grid,                  only : ocean_grid_type
 use MOM_hor_index,             only : hor_index_type
 use MOM_hor_visc,              only : horizontal_viscosity, hor_visc_init, hor_visc_CS
@@ -318,10 +318,10 @@ subroutine step_MOM_dyn_split_RK2(u, v, h, tv, visc, &
   endif
 
   if (associated(CS%OBC)) then
-    do k=1,nz ; do j=js,je ; do I=is-2,ie+1
+    do k=1,nz ; do j=js-1,je+1 ; do I=is-2,ie+1
       u_old_rad_OBC(I,j,k) = u(I,j,k)
     enddo ; enddo ; enddo
-    do k=1,nz ; do J=js-2,je+1 ; do i=is,ie
+    do k=1,nz ; do J=js-2,je+1 ; do i=is-1,ie+1
       v_old_rad_OBC(i,J,k) = v(i,J,k)
     enddo ; enddo ; enddo
     do k=1,nz ; do j=js-1,je+1 ; do i=is-1,ie+1
@@ -429,7 +429,7 @@ subroutine step_MOM_dyn_split_RK2(u, v, h, tv, visc, &
   if (showCallTree) call callTree_wayPoint("done with PressureForce (step_MOM_dyn_split_RK2)")
 
   if (associated(CS%OBC)) then; if (CS%OBC%update_OBC) then
-    call update_OBC_data(CS%OBC, G, h, Time_local)
+    call update_OBC_data(CS%OBC, G, GV, tv, h, Time_local)
   endif; endif
 
   if (G%nonblocking_updates) then
@@ -482,10 +482,10 @@ subroutine step_MOM_dyn_split_RK2(u, v, h, tv, visc, &
 !$OMP                                  u_bc_accel,vp,v,v_bc_accel)
   do k=1,nz
     do j=js,je ; do I=Isq,Ieq
-      up(i,j,k) = G%mask2dCu(i,j) * (u(i,j,k) + dt * u_bc_accel(I,j,k))
+      up(I,j,k) = G%mask2dCu(I,j) * (u(I,j,k) + dt * u_bc_accel(I,j,k))
     enddo ; enddo
     do J=Jsq,Jeq ; do i=is,ie
-      vp(i,j,k) = G%mask2dCv(i,j) * (v(i,j,k) + dt * v_bc_accel(i,J,k))
+      vp(i,J,k) = G%mask2dCv(i,J) * (v(i,J,k) + dt * v_bc_accel(i,J,k))
     enddo ; enddo
   enddo
 
@@ -573,7 +573,7 @@ subroutine step_MOM_dyn_split_RK2(u, v, h, tv, visc, &
                       (v_bc_accel(i,J,k) + CS%v_accel_bt(i,J,k)))
     enddo ; enddo
     do j=js,je ; do I=Isq,Ieq
-      up(i,j,k) = G%mask2dCu(i,j) * (u_init(i,j,k) + dt_pred  * &
+      up(I,j,k) = G%mask2dCu(I,j) * (u_init(I,j,k) + dt_pred  * &
                       (u_bc_accel(I,j,k) + CS%u_accel_bt(I,j,k)))
     enddo ; enddo
   enddo
@@ -639,7 +639,13 @@ subroutine step_MOM_dyn_split_RK2(u, v, h, tv, visc, &
 
   if (associated(CS%OBC)) then
     call radiation_open_bdry_conds(CS%OBC, u_av, u_old_rad_OBC, v_av, &
-             v_old_rad_OBC, hp, h_old_rad_OBC, G)
+         v_old_rad_OBC, hp, h_old_rad_OBC, G, dt)
+    call cpu_clock_begin(id_clock_pass)
+    call do_group_pass(CS%pass_hp_uv, G%Domain)
+    if (G%nonblocking_updates) then
+      call start_group_pass(CS%pass_av_uvh, G%Domain)
+    endif
+    call cpu_clock_end(id_clock_pass)
   endif
 
   ! h_av = (h + hp)/2
@@ -683,7 +689,7 @@ subroutine step_MOM_dyn_split_RK2(u, v, h, tv, visc, &
   endif
 
   if (associated(CS%OBC)) then; if (CS%OBC%update_OBC) then
-    call update_OBC_data(CS%OBC, G, h, Time_local)
+    call update_OBC_data(CS%OBC, G, GV, tv, h, Time_local)
   endif; endif
 
   if (G%nonblocking_updates) then
@@ -778,11 +784,11 @@ subroutine step_MOM_dyn_split_RK2(u, v, h, tv, visc, &
 !$OMP                                  CS,dt,u_bc_accel,v,v_init,v_bc_accel)
   do k=1,nz
     do j=js,je ; do I=Isq,Ieq
-      u(i,j,k) = G%mask2dCu(i,j) * (u_init(i,j,k) + dt * &
+      u(I,j,k) = G%mask2dCu(I,j) * (u_init(I,j,k) + dt * &
                       (u_bc_accel(I,j,k) + CS%u_accel_bt(I,j,k)))
     enddo ; enddo
     do J=Jsq,Jeq ; do i=is,ie
-      v(i,j,k) = G%mask2dCv(i,j) * (v_init(i,j,k) + dt * &
+      v(i,J,k) = G%mask2dCv(i,J) * (v_init(i,J,k) + dt * &
                       (v_bc_accel(i,J,k) + CS%v_accel_bt(i,J,k)))
     enddo ; enddo
   enddo
@@ -855,7 +861,7 @@ subroutine step_MOM_dyn_split_RK2(u, v, h, tv, visc, &
 
   if (associated(CS%OBC)) then
     call radiation_open_bdry_conds(CS%OBC, u, u_old_rad_OBC, v, &
-             v_old_rad_OBC, h, h_old_rad_OBC, G)
+             v_old_rad_OBC, h, h_old_rad_OBC, G, dt)
   endif
 
 ! h_av = (h_in + h_out)/2 . Going in to this line, h_av = h_in.
@@ -1145,7 +1151,7 @@ subroutine initialize_dyn_split_RK2(u, v, h, uh, vh, eta, Time, G, GV, param_fil
   if (.not. query_initialized(CS%diffu,"diffu",restart_CS) .or. &
       .not. query_initialized(CS%diffv,"diffv",restart_CS)) &
     call horizontal_viscosity(u, v, h, CS%diffu, CS%diffv, MEKE, VarMix, &
-                              G, GV, CS%hor_visc_CSp)
+                              G, GV, CS%hor_visc_CSp, OBC=CS%OBC)
   if (.not. query_initialized(CS%u_av,"u2", restart_CS) .or. &
       .not. query_initialized(CS%u_av,"v2", restart_CS)) then
     CS%u_av(:,:,:) = u(:,:,:)
