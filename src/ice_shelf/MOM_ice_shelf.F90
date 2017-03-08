@@ -129,7 +129,7 @@ use user_shelf_init, only : user_ice_shelf_CS
 use constants_mod,      only: GRAV
 use mpp_mod, only : mpp_sum, mpp_max, mpp_min, mpp_pe, mpp_npes, mpp_sync
 use MOM_coms, only : reproducing_sum
-use MOM_debugging, only : hchksum, qchksum, chksum, uchksum, vchksum
+use MOM_checksums, only : hchksum, qchksum, chksum, uchksum, vchksum
 
 implicit none ; private
 
@@ -524,7 +524,6 @@ subroutine shelf_calc_flux(state, fluxes, Time, time_step, CS)
   endif
 
   do j=js,je
-
     ! Find the pressure at the ice-ocean interface, averaged only over the
     ! part of the cell covered by ice shelf.
     do i=is,ie ; p_int(i) = CS%g_Earth * CS%mass_shelf(i,j) ; enddo
@@ -867,15 +866,6 @@ subroutine shelf_calc_flux(state, fluxes, Time, time_step, CS)
 
     call ice_shelf_advect (CS, time_step, CS%lprec, Time)
 
-    do j=G%jsd,G%jed
-      do i=G%isd,G%ied
-        if ((CS%hmask(i,j) .eq. 1) .or. (CS%hmask(i,j) .eq. 2)) then
-          CS%mass_shelf(i,j) = CS%h_shelf(i,j)*CS%density_ice
-        endif
-      enddo
-    enddo
-
-
     CS%velocity_update_sub_counter = CS%velocity_update_sub_counter+1
 
     if (CS%GL_couple .and. .not. CS%solo_ice_sheet) then
@@ -1037,12 +1027,14 @@ subroutine add_shelf_flux(G, CS, state, fluxes)
   endif
 
   if (CS%debug) then
-    if (associated(state%taux_shelf) .and. associated(state%tauy_shelf)) then
+    if (associated(state%taux_shelf)) then
       call uchksum(state%taux_shelf, "taux_shelf", G%HI, haloshift=0)
+    endif
+    if (associated(state%tauy_shelf)) then
       call vchksum(state%tauy_shelf, "tauy_shelf", G%HI, haloshift=0)
-      call uchksum(fluxes%rigidity_ice_u, "rigidity_ice_u", G%HI, haloshift=0)
+      call vchksum(fluxes%rigidity_ice_u, "rigidity_ice_u", G%HI, haloshift=0)
       call vchksum(fluxes%rigidity_ice_v, "rigidity_ice_v", G%HI, haloshift=0)
-      call uchksum(fluxes%frac_shelf_u, "frac_shelf_u", G%HI, haloshift=0)
+      call vchksum(fluxes%frac_shelf_u, "frac_shelf_u", G%HI, haloshift=0)
       call vchksum(fluxes%frac_shelf_v, "frac_shelf_v", G%HI, haloshift=0)
     endif
   endif
@@ -2283,14 +2275,6 @@ subroutine ice_shelf_advect(CS, time_step, melt_rate, Time)
   !call disable_averaging(CS%diag)
 
   call change_thickness_using_melt(CS,G,time_step)
-
-          CS%h_shelf(i,j) = 0.0
-          CS%hmask(i,j) = 0.0
-          CS%area_shelf_h(i,j) = 0.0
-        endif
-      endif
-    enddo
-  enddo
 
   call update_velocity_masks (CS)
 
@@ -5983,7 +5967,6 @@ subroutine solo_time_step (CS, time_step, n, Time, min_time_step_in)
    endif
 
    ! if the last mini-timestep is a day or less, we cannot expect velocities to change by much.
-
    ! do not update them
    if (time_step_int .gt. 1000) then
      call update_velocity_masks (CS)
