@@ -112,6 +112,10 @@ type, public :: diabatic_aux_CS ; private
                              !! freezing temperature when making frazil.  The
                              !! default is false, which will be faster but is
                              !! inappropriate with ice-shelf cavities.
+  logical :: ignore_fluxes_over_land    !< If true, the model does not check
+                             !! if fluxes are applied over land points. This
+                             !! flag must be used when the ocean is coupled with
+                             !! sea ice and ice shelves and use_ePBL = true.
   logical :: use_river_heat_content !< If true, assumes that ice-ocean boundary
                              !! has provided a river heat content. Otherwise, runoff
                              !! is added with a temperature of the local SST.
@@ -1103,12 +1107,17 @@ subroutine applyBoundaryFluxesInOut(CS, G, GV, dt, fluxes, optics, h, tv, &
 
       ! Check if trying to apply fluxes over land points
       elseif((abs(netHeat(i))+abs(netSalt(i))+abs(netMassIn(i))+abs(netMassOut(i)))>0.) then
-        call forcing_SinglePointPrint(fluxes,G,i,j,'applyBoundaryFluxesInOut (land)')
-        write(0,*) 'applyBoundaryFluxesInOut(): lon,lat=',G%geoLonT(i,j),G%geoLatT(i,j)
-        write(0,*) 'applyBoundaryFluxesInOut(): netHeat,netSalt,netMassIn,netMassOut=',&
+        
+        if (.not. CS%ignore_fluxes_over_land) then
+           call forcing_SinglePointPrint(fluxes,G,i,j,'applyBoundaryFluxesInOut (land)')
+           write(0,*) 'applyBoundaryFluxesInOut(): lon,lat=',G%geoLonT(i,j),G%geoLatT(i,j)
+           write(0,*) 'applyBoundaryFluxesInOut(): netHeat,netSalt,netMassIn,netMassOut=',&
                    netHeat(i),netSalt(i),netMassIn(i),netMassOut(i)
-        call MOM_error(FATAL, "MOM_diabatic_driver.F90, applyBoundaryFluxesInOut(): "//&
-                              "Mass loss over land?")
+
+           call MOM_error(FATAL, "MOM_diabatic_driver.F90, applyBoundaryFluxesInOut(): "//&
+                                 "Mass loss over land?")
+        endif   
+
       endif
 
       ! If anything remains after the k-loop, then we have grounded out, which is a problem.
@@ -1200,7 +1209,8 @@ subroutine applyBoundaryFluxesInOut(CS, G, GV, dt, fluxes, optics, h, tv, &
   if (CS%id_penSWflux_diag > 0) call post_data(CS%id_penSWflux_diag, CS%penSWflux_diag, CS%diag)
   if (CS%id_nonpenSW_diag  > 0) call post_data(CS%id_nonpenSW_diag , CS%nonpenSW_diag , CS%diag)
 
-  if (numberOfGroundings>0) then
+! The following check will be ignored if ignore_fluxes_over_land = true
+  if (numberOfGroundings>0 .and. .not. CS%ignore_fluxes_over_land) then
     do i = 1, min(numberOfGroundings, maxGroundings)
       call forcing_SinglePointPrint(fluxes,G,iGround(i),jGround(i),'applyBoundaryFluxesInOut (grounding)')
       write(mesg(1:45),'(3es15.3)') G%geoLonT( iGround(i), jGround(i) ), &
@@ -1287,6 +1297,12 @@ subroutine diabatic_aux_init(Time, G, GV, param_file, diag, CS, useALEalgorithm,
                  units="nondim", default=0.8)
 
   if (use_ePBL) then
+    call get_param(param_file, mod, "IGNORE_FLUXES_OVER_LAND", CS%ignore_fluxes_over_land,&
+         "If true, the model does not check if fluxes are being applied\n"//&
+         "over land points. This is needed when the ocean is coupled \n"//&
+         "with ice shelves and sea ice, since the sea ice mask needs to \n"//&
+         "be different than the ocean mask to avoid sea ice formation \n"//&
+         "under ice shelves. This flag only works when use_ePBL = True.", default=.false.)
     call get_param(param_file, mod, "DO_RIVERMIX", CS%do_rivermix, &
                  "If true, apply additional mixing whereever there is \n"//&
                  "runoff, so that it is mixed down to RIVERMIX_DEPTH \n"//&
