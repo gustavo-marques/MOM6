@@ -51,7 +51,7 @@ character(len=40) :: mod = "IDEAL_IS_initialization" ! This module's name.
 ! -----------------------------------------------------------------------------
 public IDEAL_IS_initialize_topography
 public IDEAL_IS_initialize_thickness
-public IDEAL_IS_initialize_temperature_salinity 
+public IDEAL_IS_initialize_temperature_salinity
 public IDEAL_IS_initialize_sponges
 
 ! -----------------------------------------------------------------------------
@@ -70,7 +70,7 @@ subroutine IDEAL_IS_initialize_topography(D, G, param_file, max_depth)
 ! This subroutine sets up the ISOMIP topography
   real :: min_depth ! The minimum and maximum depths in m.
 
-! The following variables are used to set up the bathymetry 
+! The following variables are used to set up the bathymetry
 
   real :: Hs              ! ocean depth on the contin. shelf
   real :: Ys              ! slope center position
@@ -85,7 +85,7 @@ subroutine IDEAL_IS_initialize_topography(D, G, param_file, max_depth)
   integer :: i, j, is, ie, js, je, isd, ied, jsd, jed
   is = G%isc ; ie = G%iec ; js = G%jsc ; je = G%jec
   isd = G%isd ; ied = G%ied ; jsd = G%jsd ; jed = G%jed
- 
+
 
   call MOM_mesg("  IDEAL_IS_initialization.F90, IDEAL_IS_initialize_topography: setting topography", 5)
 
@@ -99,7 +99,7 @@ subroutine IDEAL_IS_initialize_topography(D, G, param_file, max_depth)
   do j=js,je ; do i=is,ie
 
       D(i,j) = Hs + 0.5 * (H-Hs) * (1.0 + tanh((G%geoLatT(i,j)*1.0e3 - Ys)/Ws))
-      
+
       if (D(i,j) > max_depth) D(i,j) = max_depth
       if (D(i,j) < min_depth) D(i,j) = 0.5*min_depth
   enddo ; enddo
@@ -137,9 +137,9 @@ subroutine IDEAL_IS_initialize_thickness ( h, G, GV, param_file, tv )
   call get_param(param_file,mod,"MIN_THICKNESS",min_thickness,'Minimum layer thickness',units='m',default=1.e-3)
   call get_param(param_file,mod,"REGRIDDING_COORDINATE_MODE", verticalCoordinate, &
             default=DEFAULT_COORDINATE_MODE)
- 
+
   select case ( coordinateMode(verticalCoordinate) )
-    
+
   case ( REGRIDDING_LAYER, REGRIDDING_RHO ) ! Initial thicknesses for isopycnal coordinates
     call get_param(param_file, mod, "IDEAL_IS_T_SUR",t_sur,'Temperature at the surface (interface)', default=6.0)
     call get_param(param_file, mod, "IDEAL_IS_S_SUR", s_sur, 'Salinity at the surface (interface)',  default=0.0)
@@ -153,18 +153,18 @@ subroutine IDEAL_IS_initialize_thickness ( h, G, GV, param_file, tv )
     !write (*,*)'Bottom density is:', rho_bot
     rho_range = rho_bot - rho_sur
     !write (*,*)'Density range is:', rho_range
- 
+
     ! Construct notional interface positions
     e0(1) = 0.
     do K=2,nz
       e0(k) = -G%max_depth * ( 0.5 * ( GV%Rlay(k-1) + GV%Rlay(k) ) - rho_sur ) / rho_range
       e0(k) = min( 0., e0(k) ) ! Bound by surface
       e0(k) = max( -G%max_depth, e0(k) ) ! Bound by possible deepest point in model
-      !write(*,*)'G%max_depth,GV%Rlay(k-1),GV%Rlay(k),e0(k)',G%max_depth,GV%Rlay(k-1),GV%Rlay(k),e0(k)  
-  
+      !write(*,*)'G%max_depth,GV%Rlay(k-1),GV%Rlay(k),e0(k)',G%max_depth,GV%Rlay(k-1),GV%Rlay(k),e0(k)
+
     enddo
     e0(nz+1) = -G%max_depth
-    
+
     ! Calculate thicknesses
     do j=js,je ; do i=is,ie
       eta1D(nz+1) = -1.0*G%bathyT(i,j)
@@ -197,7 +197,7 @@ subroutine IDEAL_IS_initialize_thickness ( h, G, GV, param_file, tv )
     do j=js,je ; do i=is,ie
       delta_h = G%bathyT(i,j) / dfloat(nz)
       h(i,j,:) = delta_h
-    end do ; end do 
+    end do ; end do
 
   case default
       call MOM_error(FATAL,"isomip_initialize: "// &
@@ -230,7 +230,7 @@ subroutine IDEAL_IS_initialize_temperature_salinity ( T, S, h, G, GV, param_file
   real :: drho_dT(SZK_(G))   ! Derivative of density with temperature in kg m-3 K-1.                              !
   real :: drho_dS(SZK_(G))   ! Derivative of density with salinity in kg m-3 PSU-1.                             !
   real :: rho_guess(SZK_(G)) ! Potential density at T0 & S0 in kg m-3.
-  real :: pres(SZK_(G))      ! An array of the reference pressure in Pa. (zero here) 
+  real :: pres(SZK_(G))      ! An array of the reference pressure in Pa. (zero here)
   real :: drho_dT1, drho_dS1, T_Ref, S_Ref
   is = G%isc ; ie = G%iec ; js = G%jsc ; je = G%jec ; nz = G%ke
   pres(:) = 0.0
@@ -283,7 +283,7 @@ subroutine IDEAL_IS_initialize_temperature_salinity ( T, S, h, G, GV, param_file
      call get_param(param_file, mod, "S_REF", S_Ref, &
                  "A reference salinity used in initialization.", units="PSU", &
                  default=35.0)
-    
+
      !write(*,*)'read drho_dS, drho_dT', drho_dS1, drho_dT1
 
      S_range = s_bot - s_sur
@@ -295,7 +295,7 @@ subroutine IDEAL_IS_initialize_temperature_salinity ( T, S, h, G, GV, param_file
    do j=js,je ; do i=is,ie
      xi0 = 0.0;
      do k = 1,nz
-        !T0(k) = T_Ref; S0(k) = S_Ref        
+        !T0(k) = T_Ref; S0(k) = S_Ref
         xi1 = xi0 + 0.5 * h(i,j,k);
         S0(k) = S_sur +  S_range * xi1;
         T0(k) = T_sur +  T_range * xi1;
@@ -326,7 +326,7 @@ subroutine IDEAL_IS_initialize_temperature_salinity ( T, S, h, G, GV, param_file
        do k=nz,1,-1
           T0(k) = T0(1) + (GV%Rlay(k) - rho_guess(1)) / drho_dT1
        enddo
-   
+
        do itt=1,6
           call calculate_density(T0,S0,pres,rho_guess,1,nz,eqn_of_state)
           call calculate_density_derivs(T0,S0,pres,drho_dT,drho_dS,1,nz,eqn_of_state)
@@ -336,10 +336,10 @@ subroutine IDEAL_IS_initialize_temperature_salinity ( T, S, h, G, GV, param_file
        enddo
      endif
 
-     do k=1,nz  
+     do k=1,nz
        T(i,j,k) = T0(k) ; S(i,j,k) = S0(k)
      enddo
-   
+
    enddo ; enddo
 
    case default
@@ -347,7 +347,7 @@ subroutine IDEAL_IS_initialize_temperature_salinity ( T, S, h, G, GV, param_file
       "Unrecognized i.c. setup - set REGRIDDING_COORDINATE_MODE")
 
   end select
-  
+
   ! for debugging
   !i=G%iec; j=G%jec
   !do k = 1,nz
@@ -374,9 +374,9 @@ subroutine IDEAL_IS_initialize_sponges(G, GV, tv, PF, use_ALE, CSp, ACSp)
   logical, intent(in) :: use_ALE            !< If true, indicates model is in ALE mode
   type(sponge_CS),   pointer    :: CSp      !< Layer-mode sponge structure
   type(ALE_sponge_CS),   pointer    :: ACSp !< ALE-mode sponge structure
-  
+
 ! Local variables
-  real :: T(SZI_(G),SZJ_(G),SZK_(G))  ! A temporary array for temp 
+  real :: T(SZI_(G),SZJ_(G),SZK_(G))  ! A temporary array for temp
   real :: S(SZI_(G),SZJ_(G),SZK_(G))  ! A temporary array for salt
   real :: RHO(SZI_(G),SZJ_(G),SZK_(G))  ! A temporary array for RHO
   real :: tmp(SZI_(G),SZJ_(G))        ! A temporary array for tracers.
@@ -384,22 +384,18 @@ subroutine IDEAL_IS_initialize_sponges(G, GV, tv, PF, use_ALE, CSp, ACSp)
   real :: Idamp(SZI_(G),SZJ_(G))    ! The inverse damping rate, in s-1.
   real :: TNUDG                     ! Nudging time scale, days
   real :: pres(SZI_(G))             ! An array of the reference pressure, in Pa
-  real      :: S_sur, T_sur;        ! Surface salinity and temerature in sponge
-  real      :: S_bot, T_bot;        ! Bottom salinity and temerature in sponge 
-  real      :: t_ref, s_ref         ! reference T and S
-  real      :: rho_sur, rho_bot, rho_range, t_range, s_range
 
   real :: e0(SZK_(G)+1)               ! The resting interface heights, in m, usually !
                                     ! negative because it is positive upward.      !
   real :: eta1D(SZK_(G)+1)          ! Interface height relative to the sea surface !
   real :: eta(SZI_(G),SZJ_(G),SZK_(G)+1) ! A temporary array for eta.
-  
+
                                     ! positive upward, in m.
   real :: min_depth, dummy1, z, delta_h
   real :: damp, rho_dummy, min_thickness, rho_tmp, xi0
   real :: lenlat, lensponge
-  character(len=40) :: verticalCoordinate, filename, state_file
-  character(len=40) :: temp_var, salt_var, eta_var, inputdir
+  character(len=40) :: filename, state_file
+  character(len=40) :: temp_var, salt_var, eta_var, inputdir, h_var
 
   character(len=40)  :: mod = "IDEAL_IS_initialize_sponges" ! This subroutine's name.
   integer :: i, j, k, is, ie, js, je, isd, ied, jsd, jed, nz
@@ -409,37 +405,18 @@ subroutine IDEAL_IS_initialize_sponges(G, GV, tv, PF, use_ALE, CSp, ACSp)
 
   call get_param(PF,mod,"MIN_THICKNESS",min_thickness,'Minimum layer thickness',units='m',default=1.e-3)
 
-  call get_param(PF,mod,"REGRIDDING_COORDINATE_MODE", verticalCoordinate, &
-            default=DEFAULT_COORDINATE_MODE)
-
   call get_param(PF, mod, "IDEAL_IS_TNUDG", TNUDG, 'Nudging time scale for sponge layers (days)',  default=0.0)
 
-  call get_param(PF, mod, "T_REF", t_ref, 'Reference temperature',  default=10.0,&
-                 do_not_log=.true.)
-
-  call get_param(PF, mod, "S_REF", s_ref, 'Reference salinity',  default=35.0,&
-                 do_not_log=.true.)
-
-  call get_param(PF, mod, "IDEAL_IS_S_SUR", s_sur, 'Surface salinity in sponge layer.',  default=s_ref)
-  
-  call get_param(PF, mod, "IDEAL_IS_S_BOT", s_bot, 'Bottom salinity in sponge layer.',  default=s_ref)
- 
-  call get_param(PF, mod, "IDEAL_IS_T_SUR", t_sur, 'Surface temperature in sponge layer.',  default=6.0)
-  
-  call get_param(PF, mod, "IDEAL_IS_T_BOT", t_bot, 'Bottom temperature in sponge layer.',  default=t_ref)
   call get_param(PF, mod, "LENLAT", lenlat, &
                   "The latitudinal or y-direction length of the domain", &
                  fail_if_missing=.true., do_not_log=.true.)
 
   call get_param(PF, mod, "LENSPONGE", lensponge, &
                  "The length of the sponge layer (km).", &
-                 default=100.0)
+                 default=10.0)
 
   T(:,:,:) = 0.0 ; S(:,:,:) = 0.0 ; Idamp(:,:) = 0.0; RHO(:,:,:) = 0.0
-  S_range = s_sur - s_bot
-  T_range = t_sur - t_bot
 
-!   Set up sponges for ISOMIP configuration
   call get_param(PF, mod, "MINIMUM_DEPTH", min_depth, &
                  "The minimum depth of the ocean.", units="m", default=0.0)
 
@@ -447,14 +424,18 @@ subroutine IDEAL_IS_initialize_sponges(G, GV, tv, PF, use_ALE, CSp, ACSp)
           "IDEAL_IS_initialize_sponges called with an associated control structure.")
    if (associated(ACSp)) call MOM_error(FATAL, &
           "IDEAL_IS_initialize_sponges called with an associated ALE-sponge control structure.")
-   
+
   !  Here the inverse damping time, in s-1, is set. Set Idamp to 0     !
   !  wherever there is no sponge, and the subroutines that are called  !
   !  will automatically set up the sponges only where Idamp is positive!
-  !  and mask2dT is 1.  
+  !  and mask2dT is 1.
 
    do i=is,ie; do j=js,je
-      if (G%geoLatT(i,j) >= (lenlat - lensponge) .AND. G%geoLatT(i,j) <= lenlat) then
+      if (G%geoLatT(i,j) <= lensponge) then
+        dummy1 = -(G%geoLatT(i,j))/lensponge + 1.0
+        damp = 1.0/TNUDG * max(0.0,dummy1)
+
+      elseif (G%geoLatT(i,j) >= (lenlat - lensponge) .AND. G%geoLatT(i,j) <= lenlat) then
 
   ! 1 / day
         dummy1=(G%geoLatT(i,j)-(lenlat - lensponge))/(lensponge)
@@ -467,98 +448,44 @@ subroutine IDEAL_IS_initialize_sponges(G, GV, tv, PF, use_ALE, CSp, ACSp)
       if (G%bathyT(i,j) > min_depth) then
           Idamp(i,j) = damp/86400.0
       else ; Idamp(i,j) = 0.0 ; endif
-
-
    enddo ; enddo
 
-  ! Compute min/max density using T_SUR/S_SUR and T_BOT/S_BOT
-  call calculate_density(t_sur,s_sur,0.0,rho_sur,tv%eqn_of_state)
-  !write (*,*)'Surface density in sponge:', rho_sur
-  call calculate_density(t_bot,s_bot,0.0,rho_bot,tv%eqn_of_state)
-  !write (*,*)'Bottom density in sponge:', rho_bot
-  rho_range = rho_bot - rho_sur
-  !write (*,*)'Density range in sponge:', rho_range
+   ! 1) Read eta, salt and temp from IC file
+   call get_param(PF, mod, "INPUTDIR", inputdir, default=".")
+   inputdir = slasher(inputdir)
+   ! GM: get two different files, one with temp and one with salt values
+   ! this is work around to avoid having wrong values near the surface
+   ! because of the FIT_SALINITY option. To get salt values right in the
+   ! sponge, FIT_SALINITY=False. The oposite is true for temp. One can
+   ! combined the *correct* temp and salt values in one file instead.
+   call get_param(PF, mod, "IDEAL_IS_SPONGE_FILE", state_file, &
+              "The name of the file with temps., salts. and interfaces to \n"// &
+              " damp toward.", fail_if_missing=.true.)
+   call get_param(PF, mod, "SPONGE_PTEMP_VAR", temp_var, &
+              "The name of the potential temperature variable in \n"//&
+              "SPONGE_STATE_FILE.", default="Temp")
+   call get_param(PF, mod, "SPONGE_SALT_VAR", salt_var, &
+              "The name of the salinity variable in \n"//&
+              "SPONGE_STATE_FILE.", default="Salt")
+   call get_param(PF, mod, "SPONGE_ETA_VAR", eta_var, &
+              "The name of the interface height variable in \n"//&
+              "SPONGE_STATE_FILE.", default="eta")
+    call get_param(PF, mod, "SPONGE_H_VAR", h_var, &
+              "The name of the layer thickness variable in \n"//&
+              "SPONGE_STATE_FILE.", default="h")
 
-  if (use_ALE) then
- 
-    select case ( coordinateMode(verticalCoordinate) )
+   !read temp and eta
+   filename = trim(inputdir)//trim(state_file)
+   if (.not.file_exists(filename, G%Domain)) &
+       call MOM_error(FATAL, " IDEAL_IS_initialize_sponges: Unable to open "//trim(filename))
+   call read_data(filename,temp_var,T(:,:,:), domain=G%Domain%mpp_domain)
+   call read_data(filename,salt_var,S(:,:,:), domain=G%Domain%mpp_domain)
 
-     case ( REGRIDDING_RHO ) 
-       ! Construct notional interface positions
-       e0(1) = 0.
-       do K=2,nz
-         e0(k) = -G%max_depth * ( 0.5 * ( GV%Rlay(k-1) + GV%Rlay(k) ) - rho_sur ) / rho_range
-         e0(k) = min( 0., e0(k) ) ! Bound by surface
-         e0(k) = max( -G%max_depth, e0(k) ) ! Bound by possible deepest point in model
-         !write(*,*)'G%max_depth,GV%Rlay(k-1),GV%Rlay(k),e0(k)',G%max_depth,GV%Rlay(k-1),GV%Rlay(k),e0(k)  
+   if (use_ALE) then
 
-       enddo
-       e0(nz+1) = -G%max_depth
+    call read_data(filename,h_var,h(:,:,:), domain=G%Domain%mpp_domain)
 
-       ! Calculate thicknesses
-       do j=js,je ; do i=is,ie
-         eta1D(nz+1) = -1.0*G%bathyT(i,j)
-         do k=nz,1,-1
-           eta1D(k) = e0(k)
-           if (eta1D(k) < (eta1D(k+1) + GV%Angstrom_z)) then
-             eta1D(k) = eta1D(k+1) + GV%Angstrom_z
-             h(i,j,k) = GV%Angstrom_z
-           else
-             h(i,j,k) = eta1D(k) - eta1D(k+1)
-           endif
-         enddo
-       enddo ; enddo
-
-     case ( REGRIDDING_ZSTAR )                       ! Initial thicknesses for z coordinates
-       do j=js,je ; do i=is,ie
-         eta1D(nz+1) = -1.0*G%bathyT(i,j)
-         do k=nz,1,-1
-           eta1D(k) =  -G%max_depth * real(k-1) / real(nz)
-           if (eta1D(k) < (eta1D(k+1) + min_thickness)) then
-             eta1D(k) = eta1D(k+1) + min_thickness
-             h(i,j,k) = min_thickness
-           else
-             h(i,j,k) = eta1D(k) - eta1D(k+1)
-           endif
-         enddo
-      enddo ; enddo
-
-      case ( REGRIDDING_SIGMA )             ! Initial thicknesses for sigma coordinates
-       do j=js,je ; do i=is,ie
-         delta_h = G%bathyT(i,j) / dfloat(nz)
-         h(i,j,:) = delta_h
-       end do ; end do
-
-      case default
-         call MOM_error(FATAL,"IDEAL_IS_initialize_sponges: "// &
-         "Unrecognized i.c. setup - set REGRIDDING_COORDINATE_MODE")
-
-    end select
-    !  This call sets up the damping rates and interface heights.
-    !  This sets the inverse damping timescale fields in the sponges.  
     call initialize_ALE_sponge(Idamp,h, nz, G, PF, ACSp)
-
-    S_range = S_range / G%max_depth ! Convert S_range into dS/dz
-    T_range = T_range / G%max_depth ! Convert T_range into dT/dz
-    do j=js,je ; do i=is,ie
-      xi0 = -G%bathyT(i,j);
-      do k = nz,1,-1
-        xi0 = xi0 + 0.5 * h(i,j,k) ! Depth in middle of layer
-        S(i,j,k) = S_sur + S_range * xi0
-        T(i,j,k) = T_sur + T_range * xi0
-        xi0 = xi0 + 0.5 * h(i,j,k) ! Depth at top of layer
-      enddo
-    enddo ; enddo
-    ! for debugging
-    !i=G%iec; j=G%jec
-    !do k = 1,nz
-    !  call calculate_density(T(i,j,k),S(i,j,k),0.0,rho_tmp,tv%eqn_of_state)
-    !  write(*,*) 'Sponge - k,h,T,S,rho,Rlay',k,h(i,j,k),T(i,j,k),S(i,j,k),rho_tmp,GV%Rlay(k)
-    !enddo
-
-    !   Now register all of the fields which are damped in the sponge.   !
-    ! By default, momentum is advected vertically within the sponge, but !
-    ! momentum is typically not damped within the sponge.                !
 
     !  The remaining calls to set_up_sponge_field can be in any order. !
     if ( associated(tv%T) ) then
@@ -569,47 +496,14 @@ subroutine IDEAL_IS_initialize_sponges(G, GV, tv, PF, use_ALE, CSp, ACSp)
     endif
 
   else ! layer mode
-       ! 1) Read eta, salt and temp from IC file
-       call get_param(PF, mod, "INPUTDIR", inputdir, default=".")
-       inputdir = slasher(inputdir)
-       ! GM: get two different files, one with temp and one with salt values
-       ! this is work around to avoid having wrong values near the surface
-       ! because of the FIT_SALINITY option. To get salt values right in the
-       ! sponge, FIT_SALINITY=False. The oposite is true for temp. One can 
-       ! combined the *correct* temp and salt values in one file instead.
-       call get_param(PF, mod, "IDEAL_IS_SPONGE_FILE", state_file, &
-                 "The name of the file with temps., salts. and interfaces to \n"// &
-                 " damp toward.", fail_if_missing=.true.)
-       call get_param(PF, mod, "SPONGE_PTEMP_VAR", temp_var, &
-                 "The name of the potential temperature variable in \n"//&
-                 "SPONGE_STATE_FILE.", default="Temp")
-       call get_param(PF, mod, "SPONGE_SALT_VAR", salt_var, &
-                 "The name of the salinity variable in \n"//&
-                 "SPONGE_STATE_FILE.", default="Salt")
-       call get_param(PF, mod, "SPONGE_ETA_VAR", eta_var, &
-                 "The name of the interface height variable in \n"//&
-                 "SPONGE_STATE_FILE.", default="eta")
-       
-       !read temp and eta
-       filename = trim(inputdir)//trim(state_file)
-       if (.not.file_exists(filename, G%Domain)) &
-          call MOM_error(FATAL, " IDEAL_IS_initialize_sponges: Unable to open "//trim(filename))
+
+       !read eta
        call read_data(filename,eta_var,eta(:,:,:), domain=G%Domain%mpp_domain)
-       call read_data(filename,temp_var,T(:,:,:), domain=G%Domain%mpp_domain)
-       call read_data(filename,salt_var,S(:,:,:), domain=G%Domain%mpp_domain)
 
-       ! for debugging
-       !i=G%iec; j=G%jec
-       !do k = 1,nz
-       !    call calculate_density(T(i,j,k),S(i,j,k),0.0,rho_tmp,tv%eqn_of_state)
-       !    write(*,*) 'Sponge - k,eta,T,S,rho,Rlay',k,eta(i,j,k),T(i,j,k),&
-       !                S(i,j,k),rho_tmp,GV%Rlay(k)
-       !enddo
-
-       ! Set the inverse damping rates so that the model will know where to 
-       ! apply the sponges, along with the interface heights. 
+       ! Set the inverse damping rates so that the model will know where to
+       ! apply the sponges, along with the interface heights.
        call initialize_sponge(Idamp, eta, G, PF, CSp)
-       
+
        if ( GV%nkml>0 ) then
        !   This call to set_up_sponge_ML_density registers the target values of the
        ! mixed layer density, which is used in determining which layers can be
@@ -623,7 +517,7 @@ subroutine IDEAL_IS_initialize_sponges(G, GV, tv, PF, use_ALE, CSp, ACSp)
 
           call set_up_sponge_ML_density(tmp, G, CSp)
        endif
- 
+
        ! Apply sponge in tracer fields
        call set_up_sponge_field(T, tv%T, G, nz, CSp)
        call set_up_sponge_field(S, tv%S, G, nz, CSp)
