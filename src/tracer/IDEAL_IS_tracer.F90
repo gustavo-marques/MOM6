@@ -1,14 +1,14 @@
-!> This module contains the routines used to set up and use a set of (one for now) 
+!> This module contains the routines used to set up and use a set of (one for now)
 !! dynamically passive tracers. For now, three passive tracers can be injected in
 !! the domain
 !! Set up and use passive tracers requires the following:
 !! (1) register_IDEAL_IS_tracer
-!! (2) apply diffusion, physics/chemistry and advect the tracer 
+!! (2) apply diffusion, physics/chemistry and advect the tracer
 
 !********+*********+*********+*********+*********+*********+*********+**
 !*                                                                     *
 !*  By Robert Hallberg, 2002                                           *
-!*  Adapted to the IDEAL_IS test case by Gustavo Marques, Oct 2016     *            
+!*  Adapted to the IDEAL_IS test case by Gustavo Marques, Oct 2016     *
 !*********+*********+*********+*********+*********+*********+***********
 
 module IDEAL_IS_tracer
@@ -48,7 +48,7 @@ public register_IDEAL_IS_tracer, initialize_IDEAL_IS_tracer
 public IDEAL_IS_tracer_column_physics, IDEAL_IS_tracer_surface_state, IDEAL_IS_tracer_end
 
 !< ntr is the number of tracers in this module.
-integer, parameter :: ntr = 3
+integer, parameter :: NTR = 2
 
 type p3d
   real, dimension(:,:,:), pointer :: p => NULL()
@@ -144,7 +144,7 @@ function register_IDEAL_IS_tracer(HI, GV, param_file, CS, tr_Reg, &
   call get_param(param_file, mod, "LENLAT", CS%lenlat, &
                  "The latitudinal or y-direction length of the domain", &
                  fail_if_missing=.true., do_not_log=.true.)
-  
+
   call get_param(param_file, mod, "LENLON", CS%lenlon, &
                  "The longitudinal or x-direction length of the domain", &
                  fail_if_missing=.true., do_not_log=.true.)
@@ -161,7 +161,7 @@ function register_IDEAL_IS_tracer(HI, GV, param_file, CS, tr_Reg, &
                  "The length of the sponge layer (km).", &
                  default=100.0)
 
-  call get_param(param_file, mod, "SHELF_THERMO", CS%shelf_thermo, & 
+  call get_param(param_file, mod, "SHELF_THERMO", CS%shelf_thermo, &
           "If true, add a passive tracer in the melt water under ice shelves.",&
           default=.false., do_not_log=.true.)
 
@@ -198,7 +198,7 @@ function register_IDEAL_IS_tracer(HI, GV, param_file, CS, tr_Reg, &
 end function register_IDEAL_IS_tracer
 
 !> Initializes the NTR tracer fields in tr(:,:,:,:)
-! and it sets up the tracer output. 
+! and it sets up the tracer output.
 subroutine initialize_IDEAL_IS_tracer(restart, day, G, GV, h, diag, OBC, CS, &
                                     sponge_CSp, diag_to_Z_CSp)
 
@@ -257,7 +257,7 @@ subroutine initialize_IDEAL_IS_tracer(restart, day, G, GV, h, diag, OBC, CS, &
     else
       do m=1,NTR
         do k=1,nz ; do j=js,je ; do i=is,ie
-          CS%tr(i,j,k,m) = 0.0 
+          CS%tr(i,j,k,m) = 0.0
         enddo ; enddo ; enddo
       enddo
     endif
@@ -336,20 +336,22 @@ subroutine IDEAL_IS_tracer_column_physics(h_old, h_new,  ea,  eb, fluxes, dt, G,
 ! The arguments to this subroutine are redundant in that
 !     h_new[k] = h_old[k] + ea[k] - eb[k-1] + eb[k] - ea[k+1]
 
-  real :: mmax, salt_flux_min
+  real :: mmax, salt_flux_min, area
   real :: b1(SZI_(G))          ! b1 and c1 are variables used by the
   real :: c1(SZI_(G),SZK_(G))  ! tridiagonal solver.
   real, dimension(SZI_(G),SZJ_(G),SZK_(G)) :: h_work ! Used so that h can be modified
-  real :: melt(SZI_(G),SZJ_(G))  ! melt water (positive for melting 
+  real :: melt(SZI_(G),SZJ_(G))  ! melt water (positive for melting
                                  ! negative for freezing)
-  real :: salt_flux(SZI_(G),SZJ_(G))  ! salt flux, positive into ocean 
+  real :: salt_flux(SZI_(G),SZJ_(G))  ! salt flux, positive into ocean
+  real :: mass(SZI_(G),SZJ_(G))  ! mass of water in the mixed layer (approximate)
+  real :: in_flux(SZI_(G),SZJ_(G),2)  ! total amount of tracer to be injected
 
   integer :: i, j, k, is, ie, js, je, nz, m
   is = G%isc ; ie = G%iec ; js = G%jsc ; je = G%jec ; nz = G%ke
 
   if (.not.associated(CS)) return
 
-  if ( CS%use_sponge ) then
+!  if ( CS%use_sponge ) then
     !   If sponges are used, this example damps tracers in sponges in the
     ! northern half of the domain to 1 and tracers in the southern half
     ! to 0.  For any tracers that are not damped in the sponge, the call
@@ -357,66 +359,79 @@ subroutine IDEAL_IS_tracer_column_physics(h_old, h_new,  ea,  eb, fluxes, dt, G,
 
     !m=1 sponge tracer
 
-    m=1
-    do j=js,je ; do i=is,ie
+!    m=1
+!    do j=js,je ; do i=is,ie
       ! add tracer
-      if (G%geoLatT(i,j) >= (CS%lenlat - CS%lensponge) .AND. G%geoLatT(i,j) <= CS%lenlat) then
-        CS%tr(i,j,:,m) = 1.0 ! all layers
-      endif
+!      if (G%geoLatT(i,j) >= (CS%lenlat - CS%lensponge) .AND. G%geoLatT(i,j) <= CS%lenlat) then
+!        CS%tr(i,j,:,m) = 1.0 ! all layers
+!      endif
       ! remove tracer
-      if (G%geoLatT(i,j) <= CS%ISL) CS%tr(i,j,:,m) = 0.0
-    enddo ; enddo
+!      if (G%geoLatT(i,j) <= CS%ISL) CS%tr(i,j,:,m) = 0.0
+!    enddo ; enddo
 
-  endif ! sponge
+!  endif ! sponge
 
+  in_flux(:,:,:) = 0.0
   ! m=2 polynya tracer
-  m=2
-  salt_flux = fluxes%salt_flux_in
-  salt_flux_min = 1.0E10
+  m=1
+  salt_flux = fluxes%salt_flux_in*dt*G%areaT ! units kg
+  salt_flux_min = -1.0E10
   ! first find max value in the region of interest
   do j=js,je ; do i=is,ie
+    ! find thickness of mixed layer and estimate
+    ! mass of water (kg) in the cell using 1028.0
+    ! as the *approximate* density
+    do k=1,nz
+        if (h_old(i,j,k) > 0.01) then
+            mass(i,j) = h_old(i,j,k) * G%areaT(i,j) * 1028.0
+            EXIT
+        endif
+     enddo
+
      if (G%geoLatT(i,j) > CS%ISL .AND. &
-        G%geoLatT(i,j) <= (CS%ISL + CS%CSL*0.8)) then
-        salt_flux_min = MIN(salt_flux_min, salt_flux(i,j))
+        G%geoLatT(i,j) <= (CS%ISL + CS%CSL*1.0)) then
+           if (salt_flux(i,j) <= 0.0) &
+                in_flux(i,j,m) = (-salt_flux(i,j)/mass(i,j))/1.0E-6
+                ! 1 dye unit = 1.0E-6 Kg of salt/Kg of seawater
      endif
   enddo ; enddo
 
-!  call mpp_min(salt_flux_min)
-  call min_across_PEs(salt_flux_min)
- 
-  ! second, add tracer proportionally to salt_flux_max
-  do j=js,je ; do i=is,ie 
-     ! add tracer
-     if (G%geoLatT(i,j) > CS%ISL .AND. &
-        G%geoLatT(i,j) <= (CS%ISL + CS%CSL*0.8)) then
-          if (salt_flux(i,j) < 0.0) then
-             CS%tr(i,j,1:GV%nkml,m) = salt_flux(i,j)/salt_flux_min
-          endif
-     endif
-    
+  do j=js,je ; do i=is,ie
      ! remove tracer in the sponge layer
      if (G%geoLatT(i,j) >= (CS%lenlat - CS%lensponge) .AND. G%geoLatT(i,j) <= CS%lenlat) then
         CS%tr(i,j,:,m) = 0.0 ! all layers
      endif
 
   enddo ; enddo
- 
-  ! dye melt water (m=3)
-  m = 3
+
+  ! dye melt water (m=2)
+  m = 2
+
   if (CS%shelf_thermo) then
-         melt(:,:) = fluxes%iceshelf_melt
-         ! max. melt
-         mmax = MAXVAL(melt(is:ie,js:je))
-!         call mpp_max(mmax)
-         call max_across_PEs(mmax)
-         ! dye = 1 if melt=max(melt) 
+         ! total melt water (kg)
+         melt(:,:) = fluxes%iceshelf_melt*dt*G%areaT*918.0/(86400.0*365.0)
+         ! max. melt water concentration (kg/kg)
+         mmax = 1.0e-4
+         ! dye = 1 if melt=max(melt)
          do j=js,je ; do i=is,ie
+
+           ! find thickness of mixed layer and estimate
+           ! mass of water (kg) in the cell using 1028.0
+           ! as the *approximate* density
+           do k=1,nz
+              if (h_old(i,j,k) > 0.01) then
+                 mass(i,j) = h_old(i,j,k) * G%areaT(i,j) * 1028.0
+                 EXIT
+              endif
+           enddo
+
            ! add tracer
            if (melt(i,j) > 0.0) then ! melting
-             !write(*,*)'i,j,melt,melt/mmax',i,j,melt(i,j),melt(i,j)/mmax
-             CS%tr(i,j,1:GV%nkml,m) = melt(i,j)/mmax ! inject dye in the ML
+             in_flux(i,j,m) = (melt(i,j)/mass(i,j)) / mmax
+!             write(*,*)'i,j,in_flux,melt,mass,h_old',i,j,in_flux(i,j,m),melt(i,j),mass(i,j), &
+!                       mass(i,j)/(G%areaT(i,j) * 1028.0)
            else ! freezing
-             CS%tr(i,j,1:GV%nkml,m) = 0.0 
+             in_flux(i,j,m)  = 0.0
            endif
            !  remove tracer
            if (G%geoLatT(i,j) >= (CS%lenlat - CS%lensponge) .AND.&
@@ -427,15 +442,16 @@ subroutine IDEAL_IS_tracer_column_physics(h_old, h_new,  ea,  eb, fluxes, dt, G,
          enddo ; enddo
   else ! ice shelf does not exit or melting is off
          CS%tr(:,:,:,m) = 0.0
+         in_flux(i,j,m) = 0.0
   endif ! CS%shelf_thermo
 
   if (present(evap_CFL_limit) .and. present(minimum_forcing_depth)) then
     do m=1,NTR
       do k=1,nz ;do j=js,je ; do i=is,ie
              h_work(i,j,k) = h_old(i,j,k)
-      enddo ; enddo ; enddo;    
+      enddo ; enddo ; enddo;
       call applyTracerBoundaryFluxesInOut(G, GV, CS%tr(:,:,:,m) , dt, fluxes, h_work, &
-                                       evap_CFL_limit, minimum_forcing_depth)
+                                       evap_CFL_limit, minimum_forcing_depth, in_flux(:,:,m))
 
       call tracer_vertdiff(h_work, ea, eb, dt, CS%tr(:,:,:,m), G, GV)
     enddo
@@ -486,7 +502,7 @@ subroutine IDEAL_IS_tracer_surface_state(state, h, G, CS)
   type(IDEAL_IS_tracer_CS),                     pointer       :: CS !< The control structure returned by a previous call to IDEAL_IS_register_tracer.
   integer :: i, j, m, is, ie, js, je, nz
   is = G%isc ; ie = G%iec ; js = G%jsc ; je = G%jec ; nz = G%ke
-  
+
   if (.not.associated(CS)) return
 
   if (CS%coupled_tracers) then
