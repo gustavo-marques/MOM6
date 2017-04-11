@@ -20,6 +20,7 @@ module IDEAL_IS_initialization
 !***********************************************************************
 
 use MOM_ALE_sponge, only : ALE_sponge_CS, set_up_ALE_sponge_field, initialize_ALE_sponge
+use MOM_ALE_sponge, only : set_up_ALE_sponge_vel_field
 use MOM_sponge, only : sponge_CS, set_up_sponge_field, initialize_sponge
 use MOM_sponge, only : set_up_sponge_ML_density
 use MOM_dyn_horgrid, only : dyn_horgrid_type
@@ -360,7 +361,7 @@ end subroutine IDEAL_IS_initialize_temperature_salinity
 !> Sets up the the inverse restoration time (Idamp), and
 ! the values towards which the interface heights and an arbitrary
 ! number of tracers should be restored within each sponge.
-subroutine IDEAL_IS_initialize_sponges(G, GV, tv, PF, use_ALE, CSp, ACSp)
+subroutine IDEAL_IS_initialize_sponges(G, GV, tv, u, v, PF, use_ALE, CSp, ACSp)
   type(ocean_grid_type), intent(in) :: G    !< The ocean's grid structure.
   type(verticalGrid_type), intent(in) :: GV !< The ocean's vertical grid structure.
   type(thermo_var_ptrs), intent(in) :: tv   !< A structure containing pointers
@@ -368,6 +369,8 @@ subroutine IDEAL_IS_initialize_sponges(G, GV, tv, PF, use_ALE, CSp, ACSp)
                                             !! fields, potential temperature and
                                             !! salinity or mixed layer density.
                                             !! Absent fields have NULL ptrs.
+  real, dimension(SZIB_(G),SZJ_(G),SZK_(G)), intent(in)   :: u
+  real, dimension(SZI_(G),SZJB_(G),SZK_(G)), intent(in)   :: v
   type(param_file_type), intent(in) :: PF   !< A structure indicating the
                                             !! open file to parse for model
                                             !! parameter values.
@@ -378,10 +381,12 @@ subroutine IDEAL_IS_initialize_sponges(G, GV, tv, PF, use_ALE, CSp, ACSp)
 ! Local variables
   real :: T(SZI_(G),SZJ_(G),SZK_(G))  ! A temporary array for temp
   real :: S(SZI_(G),SZJ_(G),SZK_(G))  ! A temporary array for salt
+  real :: U1(SZIB_(G), SZJ_(G), SZK_(G))  ! A temporary array for u
+  real :: V1(SZI_(G), SZJB_(G), SZK_(G))  ! A temporary array for v
   real :: RHO(SZI_(G),SZJ_(G),SZK_(G))  ! A temporary array for RHO
   real :: tmp(SZI_(G),SZJ_(G))        ! A temporary array for tracers.
-  real :: h(SZI_(G),SZJ_(G),SZK_(G))  ! A temporary array for thickness
-  real :: Idamp(SZI_(G),SZJ_(G))    ! The inverse damping rate, in s-1.
+  real :: h(SZI_(G),SZJ_(G),SZK_(G))  ! A temporary array for thickness at h points
+  real :: Idamp(SZI_(G),SZJ_(G))    ! The inverse damping rate at h points, in s-1.
   real :: TNUDG                     ! Nudging time scale, days
   real :: pres(SZI_(G))             ! An array of the reference pressure, in Pa
 
@@ -391,6 +396,7 @@ subroutine IDEAL_IS_initialize_sponges(G, GV, tv, PF, use_ALE, CSp, ACSp)
   real :: eta(SZI_(G),SZJ_(G),SZK_(G)+1) ! A temporary array for eta.
 
                                     ! positive upward, in m.
+  logical :: sponge_vel             ! Nudge velocities (u and v) towards zero
   real :: min_depth, dummy1, z, delta_h
   real :: damp, rho_dummy, min_thickness, rho_tmp, xi0
   real :: lenlat, lensponge
@@ -398,10 +404,11 @@ subroutine IDEAL_IS_initialize_sponges(G, GV, tv, PF, use_ALE, CSp, ACSp)
   character(len=40) :: temp_var, salt_var, eta_var, inputdir, h_var
 
   character(len=40)  :: mod = "IDEAL_IS_initialize_sponges" ! This subroutine's name.
-  integer :: i, j, k, is, ie, js, je, isd, ied, jsd, jed, nz
+  integer :: i, j, k, is, ie, js, je, isd, ied, jsd, jed, nz, iscB, iecB, jscB, jecB
 
   is = G%isc ; ie = G%iec ; js = G%jsc ; je = G%jec ; nz = G%ke
   isd = G%isd ; ied = G%ied ; jsd = G%jsd ; jed = G%jed
+  iscB = G%iscB ; iecB = G%iecB; jscB = G%jscB ; jecB = G%jecB
 
   call get_param(PF,mod,"MIN_THICKNESS",min_thickness,'Minimum layer thickness',units='m',default=1.e-3)
 
@@ -414,6 +421,10 @@ subroutine IDEAL_IS_initialize_sponges(G, GV, tv, PF, use_ALE, CSp, ACSp)
   call get_param(PF, mod, "LENSPONGE", lensponge, &
                  "The length of the sponge layer (km).", &
                  default=10.0)
+
+  call get_param(PF, mod, "SPONGE_VEL", sponge_vel, &
+                 "Nudge velocities (u and v) towards zero in the sponge layer.", &
+                 default=.false., do_not_log=.true.)
 
   T(:,:,:) = 0.0 ; S(:,:,:) = 0.0 ; Idamp(:,:) = 0.0; RHO(:,:,:) = 0.0
 
@@ -449,6 +460,7 @@ subroutine IDEAL_IS_initialize_sponges(G, GV, tv, PF, use_ALE, CSp, ACSp)
           Idamp(i,j) = damp/86400.0
       else ; Idamp(i,j) = 0.0 ; endif
    enddo ; enddo
+
 
    ! 1) Read eta, salt and temp from IC file
    call get_param(PF, mod, "INPUTDIR", inputdir, default=".")
@@ -493,6 +505,12 @@ subroutine IDEAL_IS_initialize_sponges(G, GV, tv, PF, use_ALE, CSp, ACSp)
     endif
     if ( associated(tv%S) ) then
       call set_up_ALE_sponge_field(S,G,tv%S,ACSp)
+    endif
+
+    if (sponge_vel) then
+       U1(:,:,:) = 0.0; V1(:,:,:) = 0.0
+       call set_up_ALE_sponge_vel_field(U1,V1,G,u,v,ACSp)
+
     endif
 
   else ! layer mode
