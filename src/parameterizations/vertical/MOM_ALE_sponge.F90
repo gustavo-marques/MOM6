@@ -6,6 +6,7 @@
 !! (3) apply_ALE_sponge
 !! (4) init_ALE_sponge_diags (not being used for now)
 !! (5) ALE_sponge_end (not being used for now)
+
 module MOM_ALE_sponge
 
 ! This file is part of MOM6. See LICENSE.md for the license.
@@ -46,19 +47,19 @@ type, public :: ALE_sponge_CS ; private
   integer :: isd, ied, jsd, jed      !< The index ranges of the data domain.
 
   integer :: num_col, num_col_u, num_col_v  !< The number of sponge points within the
-                             ! computational domain.
+                             !! computational domain.
   integer :: fldno = 0       !< The number of fields which have already been
-                             ! registered by calls to set_up_sponge_field
+                             !! registered by calls to set_up_sponge_field
   logical :: sponge_uv      !< Control whether u and v are included in sponge
   integer, pointer :: col_i(:) => NULL()  !< Arrays containing the i- and j- indicies
-  integer, pointer :: col_j(:) => NULL()  ! of each of the columns being damped.
+  integer, pointer :: col_j(:) => NULL()  !! of each of the columns being damped.
   integer, pointer :: col_i_u(:) => NULL()  !< Same as above for u points
   integer, pointer :: col_j_u(:) => NULL()
   integer, pointer :: col_i_v(:) => NULL()  !< Same as above for v points
   integer, pointer :: col_j_v(:) => NULL()
 
   real, pointer :: Iresttime_col(:) => NULL()  !< The inverse restoring time of
-                                                ! each column.
+                                               !! each column.
   real, pointer :: Iresttime_col_u(:) => NULL()  !< Same as above for u points
   real, pointer :: Iresttime_col_v(:) => NULL()  !< Same as above for v points
 
@@ -75,7 +76,7 @@ type, public :: ALE_sponge_CS ; private
   real, pointer :: Ref_hv(:,:) => NULL() !< Same as above for v points
 
   type(diag_ctrl), pointer :: diag !< A structure that is used to regulate the
-                                   ! timing of diagnostic output.
+                                   !! timing of diagnostic output.
 
   type(remapping_cs) :: remap_cs   !< Remapping parameters and work arrays
 
@@ -88,14 +89,13 @@ contains
 ! positive values of Iresttime and which mask2dT indicates are ocean
 ! points are included in the sponges.  It also stores the target interface
 ! heights.
-
 subroutine initialize_ALE_sponge(Iresttime, data_h, nz_data, G, param_file, CS)
 
   integer,                              intent(in) :: nz_data !< The total number of arbritary layers (in).
   type(ocean_grid_type),                intent(in) :: G !< The ocean's grid structure (in).
   real, dimension(SZI_(G),SZJ_(G)),     intent(in) :: Iresttime !< The inverse of the restoring time, in s-1 (in).
   real, dimension(SZI_(G),SZJ_(G),nz_data), intent(in) :: data_h !< The thickness to be used in the sponge. It has arbritary layers (in).
-  type(param_file_type),                intent(in) :: param_file !< A structure indicating the open file to parse for model parameter values (in). GM: I don't know what this does!
+  type(param_file_type),                intent(in) :: param_file !< A structure indicating the open file to parse for model parameter values (in).
   type(ALE_sponge_CS),                  pointer    :: CS !< A pointer that is set to point to the control structure for this module (in/out).
 
 
@@ -449,9 +449,15 @@ subroutine ALE_sponge_end(CS)
   if (.not.associated(CS)) return
 
   if (associated(CS%col_i)) deallocate(CS%col_i)
+  if (associated(CS%col_i_u)) deallocate(CS%col_i_u)
+  if (associated(CS%col_i_v)) deallocate(CS%col_i_v)
   if (associated(CS%col_j)) deallocate(CS%col_j)
+  if (associated(CS%col_j_u)) deallocate(CS%col_j_u)
+  if (associated(CS%col_j_v)) deallocate(CS%col_j_v)
 
   if (associated(CS%Iresttime_col)) deallocate(CS%Iresttime_col)
+  if (associated(CS%Iresttime_col_u)) deallocate(CS%Iresttime_col_u)
+  if (associated(CS%Iresttime_col_v)) deallocate(CS%Iresttime_col_v)
 
   do m=1,CS%fldno
     if (associated(CS%Ref_val(CS%fldno)%p)) deallocate(CS%Ref_val(CS%fldno)%p)

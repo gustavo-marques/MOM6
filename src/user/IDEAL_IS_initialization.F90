@@ -396,7 +396,7 @@ subroutine IDEAL_IS_initialize_sponges(G, GV, tv, u, v, PF, use_ALE, CSp, ACSp)
   real :: eta(SZI_(G),SZJ_(G),SZK_(G)+1) ! A temporary array for eta.
 
                                     ! positive upward, in m.
-  logical :: sponge_vel             ! Nudge velocities (u and v) towards zero
+  logical :: sponge_uv              ! Nudge velocities (u and v) towards zero
   real :: min_depth, dummy1, z, delta_h
   real :: damp, rho_dummy, min_thickness, rho_tmp, xi0
   real :: lenlat, lensponge
@@ -422,7 +422,7 @@ subroutine IDEAL_IS_initialize_sponges(G, GV, tv, u, v, PF, use_ALE, CSp, ACSp)
                  "The length of the sponge layer (km).", &
                  default=10.0)
 
-  call get_param(PF, mod, "SPONGE_VEL", sponge_vel, &
+  call get_param(PF, mod, "SPONGE_UV", sponge_uv, &
                  "Nudge velocities (u and v) towards zero in the sponge layer.", &
                  default=.false., do_not_log=.true.)
 
@@ -507,7 +507,7 @@ subroutine IDEAL_IS_initialize_sponges(G, GV, tv, u, v, PF, use_ALE, CSp, ACSp)
       call set_up_ALE_sponge_field(S,G,tv%S,ACSp)
     endif
 
-    if (sponge_vel) then
+    if (sponge_uv) then
        U1(:,:,:) = 0.0; V1(:,:,:) = 0.0
        call set_up_ALE_sponge_vel_field(U1,V1,G,u,v,ACSp)
 
