@@ -158,7 +158,8 @@ type, public :: ice_shelf_CS ; private
 !  type(dyn_horgrid_type), pointer :: dG  !< Dynamic grid for the ice-shelf model
   type(ocean_grid_type), pointer :: ocn_grid => NULL() !< A pointer to the ocean model grid
   ! The rest is private
-  real ::   flux_factor = 1.0
+  real ::   flux_factor = 1.0  !< controls whether melting is on (1) or off (0)
+  real ::   lprec_factor = 1.0 !< controls the amount of freshwater released due to melting
   character(len=128) :: restart_output_dir = ' '
   real, pointer, dimension(:,:) :: &
     mass_shelf => NULL(), &   ! The mass per unit area of the ice shelf or sheet, in kg m-2.
@@ -1075,7 +1076,7 @@ subroutine add_shelf_flux(G, CS, state, fluxes)
       if (associated(fluxes%evap)) fluxes%evap(i,j) = 0.0
       if (associated(fluxes%lprec)) then
         if (CS%lprec(i,j) > 0.0 ) then
-          fluxes%lprec(i,j) =  frac_area*CS%lprec(i,j)*CS%flux_factor
+          fluxes%lprec(i,j) =  frac_area*CS%lprec(i,j)*CS%flux_factor*CS%lprec_factor
         else
           fluxes%evap(i,j) = frac_area*CS%lprec(i,j)*CS%flux_factor
         endif
@@ -1428,6 +1429,9 @@ subroutine initialize_ice_shelf(param_file, ocn_grid, Time, CS, diag, fluxes, Ti
                  "Non-dimensional factor applied to shelf thermodynamic \n"//&
                  "fluxes.", units="none", default=1.0)
 
+  call get_param(param_file, mod, "ICE_SHELF_LPREC_FLUX_FACTOR", CS%lprec_factor, &
+                 "Non-dimensional factor the controls the amount of freshwater \n"//&
+                 "released due to melting.", units="none", default=1.0)
   call get_param(param_file, mod, "KV_ICE", CS%kv_ice, &
                  "The viscosity of the ice.", units="m2 s-1", default=1.0e10)
   call get_param(param_file, mod, "KV_MOLECULAR", CS%kv_molec, &
