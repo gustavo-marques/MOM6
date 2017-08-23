@@ -412,25 +412,32 @@ subroutine IDEAL_IS_tracer_column_physics(h_old, h_new,  ea,  eb, fluxes, dt, G,
          melt(:,:) = fluxes%iceshelf_melt*dt*G%areaT*918.0/(86400.0*365.0)
          ! max. melt water concentration (kg/kg)
          mmax = 1.0e-4
+         ! zero in_flux
+         !in_flux(:,:,m) = 0.0
          ! dye = 1 if melt=max(melt)
          do j=js,je ; do i=is,ie
 
            ! find thickness of mixed layer and estimate
            ! mass of water (kg) in the cell using 1028.0
            ! as the *approximate* density
-           do k=1,nz
-              if (h_old(i,j,k) > 0.01) then
-                 mass(i,j) = h_old(i,j,k) * G%areaT(i,j) * 1028.0
-                 EXIT
-              endif
-           enddo
+         !!  do k=1,nz
+         !!     if (h_old(i,j,k) > 0.01) then
+         !!        mass(i,j) = h_old(i,j,k) * G%areaT(i,j) * 1028.0
+         !!        EXIT
+         !!     endif
+         !!  enddo
 
            ! add tracer
-           if (melt(i,j) > 0.0) then ! melting
-             in_flux(i,j,m) = (melt(i,j)/mass(i,j)) / mmax
+           if (fluxes%iceshelf_melt(i,j) > 0.0) then ! melting
+               ! fluxes%netMassIn kg/(m^2 s) ?
+               in_flux(i,j,m) = fluxes%iceshelf_melt(i,j) * 918.0 / (86400.0*365.0)  * 1.0 * dt * 1.0e-3 ! in H units
+               !! if (is_root_pe()) then
+               !!    write(6,*)'i,j,in_flux,netMassIn,melt,dt',i,j,in_flux(i,j,m),fluxes%netMassIn(i,j),fluxes%iceshelf_melt(i,j),dt
+               !! endif
+!!             in_flux(i,j,m) = (melt(i,j)/mass(i,j)) / mmax
 !             write(*,*)'i,j,in_flux,melt,mass,h_old',i,j,in_flux(i,j,m),melt(i,j),mass(i,j), &
 !                       mass(i,j)/(G%areaT(i,j) * 1028.0)
-           else ! freezing
+           else ! freezing or zero
              in_flux(i,j,m)  = 0.0
            endif
            !  remove tracer
@@ -442,7 +449,7 @@ subroutine IDEAL_IS_tracer_column_physics(h_old, h_new,  ea,  eb, fluxes, dt, G,
          enddo ; enddo
   else ! ice shelf does not exit or melting is off
          CS%tr(:,:,:,m) = 0.0
-         in_flux(i,j,m) = 0.0
+         in_flux(:,:,m) = 0.0
   endif ! CS%shelf_thermo
 
   if (present(evap_CFL_limit) .and. present(minimum_forcing_depth)) then
