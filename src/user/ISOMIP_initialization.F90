@@ -263,6 +263,9 @@ subroutine ISOMIP_initialize_thickness ( h, G, GV, param_file, tv, just_read_par
 
   end select
 
+  ! scale thickness
+  h(:,:,:) = h(:,:,:)*GV%m_to_H
+
 end subroutine ISOMIP_initialize_thickness
 
 !> Initial values for temperature and salinity
