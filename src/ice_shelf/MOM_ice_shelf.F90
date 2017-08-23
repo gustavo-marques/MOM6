@@ -775,11 +775,12 @@ subroutine shelf_calc_flux(state, fluxes, Time, time_step, CS)
 
   ! CS%lprec = precipitating liquid water into the ocean ( kg/(m^2 s) )
   ! We want melt in m/year
-  if (CS%const_gamma) then ! use ISOMIP+ eq. with rho_fw
-    fluxes%iceshelf_melt = CS%lprec  * (86400.0*365.0/rho_fw) * CS%flux_factor
-  else ! use original eq.
-    fluxes%iceshelf_melt = CS%lprec  * (86400.0*365.0/CS%density_ice) * CS%flux_factor
-  endif
+  fluxes%iceshelf_melt = CS%lprec  * (86400.0*365.0/CS%density_ice) * CS%flux_factor
+  !if (CS%const_gamma) then ! use ISOMIP+ eq. with rho_fw
+  !  fluxes%iceshelf_melt = CS%lprec  * (86400.0*365.0/rho_fw) * CS%flux_factor
+  !else ! use original eq.
+  !  fluxes%iceshelf_melt = CS%lprec  * (86400.0*365.0/CS%density_ice) * CS%flux_factor
+  !endif
 
   do j=js,je
     do i=is,ie
@@ -1087,12 +1088,12 @@ subroutine add_shelf_flux(G, CS, state, fluxes)
       ! form of surface layer evaporation (kg m-2 s-1). Update lprec in the
       ! control structure for diagnostic purposes.
 
-      if (associated(state%frazil)) then
-        fraz = state%frazil(i,j) / CS%time_step / CS%Lat_fusion
-        if (associated(fluxes%evap)) fluxes%evap(i,j) = fluxes%evap(i,j) - fraz
-        CS%lprec(i,j)=CS%lprec(i,j) - fraz
-        state%frazil(i,j) = 0.0
-      endif
+      !if (associated(state%frazil)) then
+      !  fraz = state%frazil(i,j) / CS%time_step / CS%Lat_fusion
+      !  if (associated(fluxes%evap)) fluxes%evap(i,j) = (fluxes%evap(i,j) - fraz)*frac_area
+      !  CS%lprec(i,j)=CS%lprec(i,j) - fraz
+      !  state%frazil(i,j) = 0.0
+      !endif
 
       if (associated(fluxes%sens)) fluxes%sens(i,j) = -frac_area*CS%t_flux(i,j)*CS%flux_factor
       if (associated(fluxes%salt_flux)) fluxes%salt_flux(i,j) = frac_area * CS%salt_flux(i,j)*CS%flux_factor
