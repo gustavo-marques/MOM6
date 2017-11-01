@@ -497,7 +497,8 @@ subroutine MAUD_RISE_initialize_sponges(G, GV, tv, u, v, PF, use_ALE, CSp, ACSp)
 
     call read_data(filename,h_var,h(:,:,:), domain=G%Domain%mpp_domain)
 
-    call initialize_ALE_sponge(Idamp,h, nz, G, PF, ACSp)
+    call initialize_ALE_sponge(Idamp, G, PF, ACSp, h, nz)
+    !call initialize_ALE_sponge(Idamp,h, nz, G, PF, ACSp)
 
     !  The remaining calls to set_up_sponge_field can be in any order. !
     if ( associated(tv%T) ) then
