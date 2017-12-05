@@ -3128,10 +3128,9 @@ subroutine post_surface_diagnostics(CS, G, diag, sfc_state)
   real, dimension(SZI_(G),SZJ_(G)) :: &
     potTemp, &  ! TEOS10 potential temperature (deg C)
     pracSal, &  ! TEOS10 practical salinity
-    SST_sq, &   ! Surface temperature squared, in degC^2
-    SSS_sq, &   ! Surface salinity squared, in salnity units^2
-    sfc_speed   ! sea surface speed at h-points (m/s)
-
+    SST_sq,  &  ! Surface temperature squared, in degC^2
+    SSS_sq,  &  ! Surface salinity squared, in salnity units^2
+    sfc_speed   ! Sea surface speed at h-points (m/s)
   integer :: i, j, is, ie, js, je
 
   is = G%isc ; ie = G%iec ; js = G%jsc ; je = G%jec
@@ -3669,6 +3668,8 @@ subroutine calculate_surface_state(sfc_state, u, v, h, ssh, G, GV, CS)
       enddo ; enddo
     endif
   endif                                              ! end BULKMIXEDLAYER
+
+  call pass_vector(sfc_state%u, sfc_state%v, G%Domain)
 
   if (allocated(sfc_state%salt_deficit) .and. associated(CS%tv%salt_deficit)) then
     !$OMP parallel do default(shared)
