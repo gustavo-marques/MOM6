@@ -442,11 +442,7 @@ subroutine MAUD_RISE_initialize_sponges(G, GV, tv, u, v, PF, use_ALE, CSp, ACSp)
   !  and mask2dT is 1.
 
    do i=is,ie; do j=js,je
-      if (G%geoLatT(i,j) <= lensponge) then
-        dummy1 = -(G%geoLatT(i,j))/lensponge + 1.0
-        damp = 1.0/TNUDG * max(0.0,dummy1)
-
-      elseif (G%geoLatT(i,j) >= (lenlat - lensponge) .AND. G%geoLatT(i,j) <= lenlat) then
+      if (G%geoLatT(i,j) >= (lenlat - lensponge) .AND. G%geoLatT(i,j) <= lenlat) then
 
   ! 1 / day
         dummy1=(G%geoLatT(i,j)-(lenlat - lensponge))/(lensponge)
