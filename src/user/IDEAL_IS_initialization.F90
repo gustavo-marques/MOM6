@@ -444,7 +444,9 @@ subroutine IDEAL_IS_initialize_sponges(G, GV, tv, u, v, PF, use_ALE, CSp, ACSp)
    do i=is,ie; do j=js,je
       if (G%geoLatT(i,j) <= lensponge) then
         dummy1 = -(G%geoLatT(i,j))/lensponge + 1.0
-        damp = 1.0/TNUDG * max(0.0,dummy1)
+        !damp = 1.0/TNUDG * max(0.0,dummy1)
+        damp = 0.0
+        !write(*,*)'1st, G%geoLatT(i,j), damp',G%geoLatT(i,j), damp
 
       elseif (G%geoLatT(i,j) >= (lenlat - lensponge) .AND. G%geoLatT(i,j) <= lenlat) then
 
