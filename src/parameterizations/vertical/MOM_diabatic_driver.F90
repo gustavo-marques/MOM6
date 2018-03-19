@@ -386,15 +386,28 @@ subroutine diabatic(u, v, h, tv, fluxes, visc, ADp, CDp, dt, G, GV, CS)
       enddo ; enddo ; enddo
     endif
 
-    if (ASSOCIATED(fluxes%p_surf_full)) then
-      call make_frazil(h, tv, G, GV, CS%diabatic_aux_CSp, fluxes%p_surf_full)
+    if (ASSOCIATED(fluxes%frac_shelf_h)) then
+      if (ASSOCIATED(fluxes%p_surf_full)) then
+        call make_frazil(h, tv, G, GV, CS%diabatic_aux_CSp, fluxes%p_surf_full, fluxes%frac_shelf_h)
+      else
+        call make_frazil(h, tv, G, GV, CS%diabatic_aux_CSp,frac_shelf_h=fluxes%frac_shelf_h)
+      endif
     else
-      call make_frazil(h, tv, G, GV, CS%diabatic_aux_CSp)
+      if (ASSOCIATED(fluxes%p_surf_full)) then
+        call make_frazil(h, tv, G, GV, CS%diabatic_aux_CSp, fluxes%p_surf_full)
+      else
+        call make_frazil(h, tv, G, GV, CS%diabatic_aux_CSp)
+      endif
     endif
+
     if (showCallTree) call callTree_waypoint("done with 1st make_frazil (diabatic)")
 
     if (CS%frazil_tendency_diag) then
-      call diagnose_frazil_tendency(tv, h, temp_diag, dt, G, GV, CS, 1)
+      if (ASSOCIATED(fluxes%frac_shelf_h)) then
+        call diagnose_frazil_tendency(tv, h, temp_diag, dt, G, GV, CS, 1, fluxes%frac_shelf_h)
+      else
+        call diagnose_frazil_tendency(tv, h, temp_diag, dt, G, GV, CS, 1)
+      endif
     endif
 
   endif
@@ -1387,14 +1400,26 @@ subroutine diabatic(u, v, h, tv, fluxes, visc, ADp, CDp, dt, G, GV, CS)
       enddo ; enddo ; enddo
     endif
 
-    if (ASSOCIATED(fluxes%p_surf_full)) then
-      call make_frazil(h, tv, G, GV, CS%diabatic_aux_CSp, fluxes%p_surf_full)
+    if (ASSOCIATED(fluxes%frac_shelf_h)) then
+      if (ASSOCIATED(fluxes%p_surf_full)) then
+        call make_frazil(h, tv, G, GV, CS%diabatic_aux_CSp, fluxes%p_surf_full, fluxes%frac_shelf_h)
+      else
+        call make_frazil(h, tv, G, GV, CS%diabatic_aux_CSp,frac_shelf_h=fluxes%frac_shelf_h)
+      endif
     else
-      call make_frazil(h, tv, G, GV, CS%diabatic_aux_CSp)
+      if (ASSOCIATED(fluxes%p_surf_full)) then
+        call make_frazil(h, tv, G, GV, CS%diabatic_aux_CSp, fluxes%p_surf_full)
+      else
+        call make_frazil(h, tv, G, GV, CS%diabatic_aux_CSp)
+      endif
     endif
 
     if (CS%frazil_tendency_diag) then
-      call diagnose_frazil_tendency(tv, h, temp_diag, dt, G, GV, CS, 2)
+      if (ASSOCIATED(fluxes%frac_shelf_h)) then
+        call diagnose_frazil_tendency(tv, h, temp_diag, dt, G, GV, CS, 1, fluxes%frac_shelf_h)
+      else
+        call diagnose_frazil_tendency(tv, h, temp_diag, dt, G, GV, CS, 1)
+      endif
     endif
 
     if (showCallTree) call callTree_waypoint("done with 2nd make_frazil (diabatic)")
@@ -1658,7 +1683,7 @@ end subroutine diagnose_boundary_forcing_tendency
 !! This routine is called twice from within subroutine diabatic; at start and at
 !! end of the diabatic processes. The impacts from frazil are generally a function
 !! of depth.  Hence, when checking heat budget, be sure to remove HFSIFRAZIL from HFDS in k=1.
-subroutine diagnose_frazil_tendency(tv, h, temp_old, dt, G, GV, CS, ncall)
+subroutine diagnose_frazil_tendency(tv, h, temp_old, dt, G, GV, CS, ncall,frac_shelf_h)
   type(ocean_grid_type),                    intent(in) :: G        !< ocean grid structure
   type(verticalGrid_type),                  intent(in) :: GV       !< ocean vertical grid structure
   type(thermo_var_ptrs),                    intent(in) :: tv       !< points to updated thermodynamic fields
@@ -1667,14 +1692,21 @@ subroutine diagnose_frazil_tendency(tv, h, temp_old, dt, G, GV, CS, ncall)
   real,                                     intent(in) :: dt       !< time step (sec)
   integer,                                  intent(in) :: ncall    !< the first or second call of this routine
   type(diabatic_CS),                        pointer    :: CS       !< module control structure
+  real, dimension(:,:),              optional, pointer :: frac_shelf_h
 
   real, dimension(SZI_(G),SZJ_(G))         :: work_2d
   real    :: Idt
   integer :: i, j, k, is, ie, js, je, nz
+  logical :: ice_shelf
 
   is  = G%isc ; ie = G%iec ; js = G%jsc ; je = G%jec ; nz = G%ke
   Idt = 1/dt
   work_2d(:,:) = 0.0
+
+  ice_shelf = .false.
+  if (present(frac_shelf_h)) then
+    if (associated(frac_shelf_h)) ice_shelf = .true.
+  endif
 
   ! zero the tendencies at start of first call
   if(ncall == 1) then
@@ -1685,7 +1717,11 @@ subroutine diagnose_frazil_tendency(tv, h, temp_old, dt, G, GV, CS, ncall)
   ! temperature tendency
   if(CS%id_frazil_temp_tend > 0) then
     do k=1,nz ; do j=js,je ; do i=is,ie
-      CS%frazil_temp_diag(i,j,k) = CS%frazil_temp_diag(i,j,k) + Idt * (tv%T(i,j,k)-temp_old(i,j,k))
+      if (ice_shelf) then
+        if (frac_shelf_h(i,j) > 0.0) CS%frazil_temp_diag(i,j,k) = 0.0
+      else
+        CS%frazil_temp_diag(i,j,k) = CS%frazil_temp_diag(i,j,k) + Idt * (tv%T(i,j,k)-temp_old(i,j,k))
+      endif
     enddo ; enddo ; enddo
     if(ncall == 2) then
       call post_data(CS%id_frazil_temp_tend, CS%frazil_temp_diag(:,:,:), CS%diag)
@@ -1695,9 +1731,14 @@ subroutine diagnose_frazil_tendency(tv, h, temp_old, dt, G, GV, CS, ncall)
   ! heat tendency
   if(CS%id_frazil_heat_tend > 0 .or. CS%id_frazil_heat_tend_2d > 0) then
     do k=1,nz ; do j=js,je ; do i=is,ie
-      CS%frazil_heat_diag(i,j,k) = CS%frazil_heat_diag(i,j,k) + &
+      if (ice_shelf) then
+        if (frac_shelf_h(i,j) > 0.0) CS%frazil_heat_diag(i,j,k) = 0.0
+      else
+        CS%frazil_heat_diag(i,j,k) = CS%frazil_heat_diag(i,j,k) + &
                                    GV%H_to_kg_m2 * tv%C_p * h(i,j,k) * Idt * (tv%T(i,j,k)-temp_old(i,j,k))
-    enddo ; enddo ; enddo
+      endif
+
+     enddo ; enddo ; enddo
     if(CS%id_frazil_heat_tend  > 0 .and. ncall == 2) then
       call post_data(CS%id_frazil_heat_tend, CS%frazil_heat_diag(:,:,:), CS%diag)
     endif

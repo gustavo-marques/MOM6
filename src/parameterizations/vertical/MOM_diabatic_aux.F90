@@ -140,14 +140,15 @@ integer :: id_clock_uv_at_h, id_clock_frazil
 
 contains
 
-subroutine make_frazil(h, tv, G, GV, CS, p_surf)
+subroutine make_frazil(h, tv, G, GV, CS, p_surf,frac_shelf_h)
   type(ocean_grid_type),                 intent(in)    :: G
   type(verticalGrid_type),               intent(in)    :: GV
   real, dimension(SZI_(G),SZJ_(G),SZK_(G)), intent(in) :: h
   type(thermo_var_ptrs),                 intent(inout) :: tv
   type(diabatic_aux_CS),                 intent(in)    :: CS
   real, dimension(SZI_(G),SZJ_(G)), intent(in), optional :: p_surf
-
+  real, dimension(:,:), optional, pointer :: frac_shelf_h
+!  real, dimension(SZI_(G),SZJ_(G)), intent(in), optional :: frac_shelf_h !< Fractional ice shelf coverage
 !   Frazil formation keeps the temperature above the freezing point.
 ! This subroutine warms any water that is colder than the (currently
 ! surface) freezing point up to the freezing point and accumulates
@@ -172,6 +173,14 @@ subroutine make_frazil(h, tv, G, GV, CS, p_surf)
   logical :: T_fr_set  ! True if the freezing point has been calculated for a
                        ! row of points.
   integer :: i, j, k, is, ie, js, je, nz
+  logical :: ice_shelf
+  logical :: dummy
+
+  ice_shelf = .false.
+  if (present(frac_shelf_h)) then
+    if (associated(frac_shelf_h)) ice_shelf = .true.
+  endif
+
   is = G%isc ; ie = G%iec ; js = G%jsc ; je = G%jec ; nz = G%ke
 
   call cpu_clock_begin(id_clock_frazil)
@@ -179,10 +188,11 @@ subroutine make_frazil(h, tv, G, GV, CS, p_surf)
   if (.not.CS%pressure_dependent_frazil) then
     do k=1,nz ; do i=is,ie ; pressure(i,k) = 0.0 ; enddo ; enddo
   endif
-!$OMP parallel do default(none) shared(is,ie,js,je,CS,G,GV,h,nz,tv,p_surf) &
-!$OMP                           private(fraz_col,T_fr_set,T_freeze,hc,ps)  &
+!$OMP parallel do default(none) shared(is,ie,js,je,CS,G,GV,h,nz,tv,p_surf,frac_shelf_h,ice_shelf) &
+!$OMP                           private(fraz_col,T_fr_set,T_freeze,hc,ps,dummy)  &
 !$OMP                      firstprivate(pressure)
   do j=js,je
+
      ps(:) = 0.0
      if (PRESENT(p_surf)) then
        ps(:) = p_surf(:,j)
@@ -202,26 +212,38 @@ subroutine make_frazil(h, tv, G, GV, CS, p_surf)
 
     if (CS%reclaim_frazil) then
       T_fr_set = .false.
-      do i=is,ie ; if (tv%frazil(i,j) > 0.0) then
-        if (.not.T_fr_set) then
-          call calculate_TFreeze(tv%S(i:,j,1), pressure(i:,1), T_freeze(i:), &
-                                 1, ie-i+1, tv%eqn_of_state)
-          T_fr_set = .true.
+      do i=is,ie
+
+        dummy = .true.
+        if (ice_shelf) then
+         ! frazil is not formed under the ice shelf
+         if (frac_shelf_h(i,j) > 0.0) dummy = .false.
         endif
 
-        if (tv%T(i,j,1) > T_freeze(i)) then
-    ! If frazil had previously been formed, but the surface temperature is now
-    ! above freezing, cool the surface layer with the frazil heat deficit.
-          hc = (tv%C_p*GV%H_to_kg_m2) * h(i,j,1)
-          if (tv%frazil(i,j) - hc * (tv%T(i,j,1) - T_freeze(i)) <= 0.0) then
-            tv%T(i,j,1) = tv%T(i,j,1) - tv%frazil(i,j)/hc
-            tv%frazil(i,j) = 0.0
-          else
-            tv%frazil(i,j) = tv%frazil(i,j) - hc * (tv%T(i,j,1) - T_freeze(i))
-            tv%T(i,j,1) = T_freeze(i)
+        if (dummy) then
+          !write(*,*)'1st i,j,frac',i,j,frac_shelf_h(i,j)
+          if (tv%frazil(i,j) > 0.0) then
+            if (.not.T_fr_set) then
+              call calculate_TFreeze(tv%S(i:,j,1), pressure(i:,1), T_freeze(i:), &
+                                   1, ie-i+1, tv%eqn_of_state)
+              T_fr_set = .true.
+            endif
+
+            if (tv%T(i,j,1) > T_freeze(i)) then
+        ! If frazil had previously been formed, but the surface temperature is now
+        ! above freezing, cool the surface layer with the frazil heat deficit.
+              hc = (tv%C_p*GV%H_to_kg_m2) * h(i,j,1)
+              if (tv%frazil(i,j) - hc * (tv%T(i,j,1) - T_freeze(i)) <= 0.0) then
+                tv%T(i,j,1) = tv%T(i,j,1) - tv%frazil(i,j)/hc
+                tv%frazil(i,j) = 0.0
+              else
+                tv%frazil(i,j) = tv%frazil(i,j) - hc * (tv%T(i,j,1) - T_freeze(i))
+                tv%T(i,j,1) = T_freeze(i)
+              endif
+            endif
           endif
-        endif
-      endif ; enddo
+        endif ! dummy
+      enddo
     endif
 
     do k=nz,1,-1
@@ -229,33 +251,57 @@ subroutine make_frazil(h, tv, G, GV, CS, p_surf)
       do i=is,ie
         if ((G%mask2dT(i,j) > 0.0) .and. &
             ((tv%T(i,j,k) < 0.0) .or. (fraz_col(i) > 0.0))) then
-          if (.not.T_fr_set) then
-            call calculate_TFreeze(tv%S(i:,j,k), pressure(i:,k), T_freeze(i:), &
-                                   1, ie-i+1, tv%eqn_of_state)
-            T_fr_set = .true.
+
+          dummy = .true.
+          if (ice_shelf) then
+            ! if under the ice shelf, make h very thin to avoid cooling
+            if (frac_shelf_h(i,j) > 0.0) then
+              dummy = .false.
+            endif
           endif
 
-          hc = (tv%C_p*GV%H_to_kg_m2) * h(i,j,k)
-          if (h(i,j,k) <= 10.0*GV%Angstrom) then
-            ! Very thin layers should not be cooled by the frazil flux.
-            if (tv%T(i,j,k) < T_freeze(i)) then
-              fraz_col(i) = fraz_col(i) + hc * (T_freeze(i) - tv%T(i,j,k))
-              tv%T(i,j,k) = T_freeze(i)
+
+          if (dummy) then
+            !write(*,*)'2nd i,j,frac,dummy',i,j,frac_shelf_h(i,j),dummy
+            if (.not.T_fr_set) then
+              call calculate_TFreeze(tv%S(i:,j,k), pressure(i:,k), T_freeze(i:), &
+                                     1, ie-i+1, tv%eqn_of_state)
+              T_fr_set = .true.
             endif
-          else
-            if (fraz_col(i) + hc * (T_freeze(i) - tv%T(i,j,k)) <= 0.0) then
-              tv%T(i,j,k) = tv%T(i,j,k) - fraz_col(i)/hc
-              fraz_col(i) = 0.0
+
+            hc = (tv%C_p*GV%H_to_kg_m2) * h(i,j,k)
+            if (h(i,j,k) <= 10.0*GV%Angstrom) then
+              ! Very thin layers should not be cooled by the frazil flux.
+              if (tv%T(i,j,k) < T_freeze(i)) then
+                fraz_col(i) = fraz_col(i) + hc * (T_freeze(i) - tv%T(i,j,k))
+                tv%T(i,j,k) = T_freeze(i)
+              endif
             else
-              fraz_col(i) = fraz_col(i) + hc * (T_freeze(i) - tv%T(i,j,k))
-              tv%T(i,j,k) = T_freeze(i)
+              if (fraz_col(i) + hc * (T_freeze(i) - tv%T(i,j,k)) <= 0.0) then
+                tv%T(i,j,k) = tv%T(i,j,k) - fraz_col(i)/hc
+                fraz_col(i) = 0.0
+              else
+                fraz_col(i) = fraz_col(i) + hc * (T_freeze(i) - tv%T(i,j,k))
+                tv%T(i,j,k) = T_freeze(i)
+              endif
             endif
-          endif
+          endif ! dummy
         endif
       enddo
     enddo
     do i=is,ie
-      tv%frazil(i,j) = tv%frazil(i,j) + fraz_col(i)
+      if (ice_shelf) then
+        ! frazil is not formed under the ice shelf
+        if (frac_shelf_h(i,j) > 0.0) then
+          tv%frazil(i,j) = 0.0
+        !  write(*,*)'### IS: i,j,frac,fraz',i,j,frac_shelf_h(i,j),tv%frazil(i,j)
+        else
+          tv%frazil(i,j) = tv%frazil(i,j) + fraz_col(i)
+        !  write(*,*)'$$$ OFF: i,j,frac,fraz',i,j,frac_shelf_h(i,j),tv%frazil(i,j)
+        endif
+      else
+        tv%frazil(i,j) = tv%frazil(i,j) + fraz_col(i)
+      endif
     enddo
   enddo
   call cpu_clock_end(id_clock_frazil)
