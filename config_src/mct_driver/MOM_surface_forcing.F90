@@ -66,6 +66,9 @@ type, public :: surface_forcing_CS ;
                                 !! update_ocean_model. CIME uses AGRID, so this option
                                 !! is being hard coded for now.
   logical :: use_temperature    !< If true, temp and saln used as state variables
+  logical :: use_ice_shelf          !< If true, the ice shelf module will be active and
+                                !! pointers need to pass fluxes/states to the coupler
+                                !! will be allocated.
   real :: wind_stress_multiplier!< A multiplier applied to incoming wind stress (nondim).
   ! smg: remove when have A=B code reconciled
   logical :: bulkmixedlayer     !< If true, model based on bulk mixed layer code
@@ -573,9 +576,13 @@ subroutine convert_IOB_to_forces(IOB, forces, index_bounds, Time, G, CS)
   ! mechanical forcing type has been used.
   if (.not.forces%initialized) then
     call allocate_mech_forcing(G, forces, stress=.true., ustar=.true., &
-                               press=.true.)
-    call safe_alloc_ptr(forces%p_surf,isd,ied,jsd,jed)
-    call safe_alloc_ptr(forces%p_surf_full,isd,ied,jsd,jed)
+                               press=.true., shelf=CS%use_ice_shelf)
+
+  ! GMM - I don't believe the following is needed since these fields are
+  ! allocated in the call above.
+  !  call safe_alloc_ptr(forces%p_surf,isd,ied,jsd,jed)
+  !  call safe_alloc_ptr(forces%p_surf_full,isd,ied,jsd,jed)
+
     if (CS%rigid_sea_ice) then
       call safe_alloc_ptr(forces%rigidity_ice_u,IsdB,IedB,jsd,jed)
       call safe_alloc_ptr(forces%rigidity_ice_v,isd,ied,JsdB,JedB)
@@ -1175,6 +1182,9 @@ subroutine surface_forcing_init(Time, G, param_file, diag, CS, restore_salt, res
                  "The constant tidal amplitude used with INT_TIDE_DISSIPATION.", &
                  units="m s-1", default=0.0)
   endif
+
+  call get_param(param_file, mdl, "ICE_SHELF", CS%use_ice_shelf, default=.false., &
+                 do_not_log=.true.)
 
   call safe_alloc_ptr(CS%TKE_tidal,isd,ied,jsd,jed)
   call safe_alloc_ptr(CS%ustar_tidal,isd,ied,jsd,jed)
