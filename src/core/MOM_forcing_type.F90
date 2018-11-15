@@ -140,7 +140,7 @@ type, public :: forcing
                                  !! associated if ice shelves are enabled, and are
                                  !! exactly 0 away from shelves or on land.
   real, pointer, dimension(:,:) :: iceshelf_melt => NULL() !< Ice shelf melt rate (positive)
-                                 !! or freezing (negative) (in m/year)
+                                 !! or freezing (negative) (in kg m-2 s-1)
 
   ! Scalars set by surface forcing modules
   real :: vPrecGlobalAdj     !< adjustment to restoring vprec to zero out global net ( kg/(m^2 s) )
@@ -208,6 +208,9 @@ type, public :: mech_forcing
   real, pointer, dimension(:,:) :: frac_shelf_v  => NULL() !< Fractional ice shelf coverage of v-cells,
                 !! nondimensional from 0 to 1. This is only associated if ice shelves are enabled,
                 !! and is exactly 0 away from shelves or on land.
+  real, pointer, dimension(:,:) :: mass_land_ice => NULL()
+                !< Ice mass (kg) computed by a land ice model (e.g., CISM), which is used to compute
+                !! ice shelf thickness.
   real, pointer, dimension(:,:) :: &
     rigidity_ice_u => NULL(), & !< Depth-integrated lateral viscosity of ice shelves or sea ice at u-points (m3/s)
     rigidity_ice_v => NULL()    !< Depth-integrated lateral viscosity of ice shelves or sea ice at v-points (m3/s)
@@ -2627,6 +2630,7 @@ subroutine allocate_mech_forcing(G, forces, stress, ustar, shelf, press, iceberg
   call myAlloc(forces%rigidity_ice_v,isd,ied,JsdB,JedB, shelf)
   call myAlloc(forces%frac_shelf_u,IsdB,IedB,jsd,jed, shelf)
   call myAlloc(forces%frac_shelf_v,isd,ied,JsdB,JedB, shelf)
+  call myAlloc(forces%mass_land_ice,isd,ied,jsd,jed, shelf)
 
   !These fields should only on allocated when iceberg area is being passed through the coupler.
   call myAlloc(forces%area_berg,isd,ied,jsd,jed, iceberg)
@@ -2714,6 +2718,7 @@ subroutine deallocate_mech_forcing(forces)
   if (associated(forces%frac_shelf_v))   deallocate(forces%frac_shelf_v)
   if (associated(forces%area_berg))      deallocate(forces%area_berg)
   if (associated(forces%mass_berg))      deallocate(forces%mass_berg)
+  if (associated(forces%mass_land_ice))  deallocate(forces%mass_land_ice)
 
 end subroutine deallocate_mech_forcing
 
