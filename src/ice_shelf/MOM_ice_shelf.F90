@@ -98,7 +98,9 @@ type, public :: ice_shelf_CS ; private
   real :: Gamma_T_3EQ  !<  Nondimensional heat-transfer coefficient, used in the 3Eq. formulation
                        !<  This number should be specified by the user.
   real :: col_thick_melt_threshold !< if the mixed layer is below this threshold, melt rate
-  logical :: mass_from_file !< Read the ice shelf mass from a file every dt
+  logical :: mass_from_file    !< Read the ice shelf mass from a file every dt
+  logical :: mass_from_coupler !< Receives ice shelf mass from the coupler every coupling time-step.
+                               !! Current mass is then liearly interpolated.
 
   !!!! PHYSICAL AND NUMERICAL PARAMETERS FOR ICE DYNAMICS !!!!!!
 
@@ -304,8 +306,12 @@ subroutine shelf_calc_flux(state, fluxes, Time, time_step, CS, forces)
 
   if (CS%override_shelf_movement) then
     CS%time_step = time_step
-    ! update shelf mass
-    if (CS%mass_from_file) call update_shelf_mass(G, CS, ISS, Time)
+    ! update shelf mass:
+    ! 1) via file
+    if (CS%mass_from_file)    call update_shelf_mass(G, CS, ISS, Time)
+    ! 2) via data provided by the coupler. This is how MOM6 receives the ice shelf
+    ! thickness (or mass) from CISM.
+    if (CS%mass_from_coupler) call interpolate_shelf_mass(G, CS, ISS, Time)
   endif
 
   if (CS%DEBUG) then
@@ -1199,6 +1205,15 @@ subroutine initialize_ice_shelf(param_file, ocn_grid, Time, CS, diag, forces, fl
                  CS%mass_from_file, "Read the mass of the "//&
                  "ice shelf (every time step) from a file.", default=.false.)
 
+  call get_param(param_file, mdl, "ICE_SHELF_MASS_FROM_COUPLER", &
+                 CS%mass_from_coupler, "Receives ice sheet mass from the coupler (every coupling \n"//&
+                 "time step) and finds current value via linear interpolation.", default=.false.)
+
+  if (CS%mass_from_file .and. CS%mass_from_coupler) then
+    call MOM_error(FATAL, "initialize_ice_shelf: ICE_SHELF_MASS_FROM_FILE = True and \n"//&
+                   "ICE_SHELF_MASS_FROM_COUPLER = True. Please turn on just one of these options.")
+  endif
+
   if (CS%threeeq) &
     call get_param(param_file, mdl, "SHELF_S_ROOT", CS%find_salt_root, &
                  "If SHELF_S_ROOT = True, salinity at the ice/ocean interface (Sbdry) \n "//&
@@ -1660,6 +1675,41 @@ subroutine update_shelf_mass(G, CS, ISS, Time)
   call pass_var(ISS%mass_shelf, G%domain)
 
 end subroutine update_shelf_mass
+
+!> Finds the ice shelf mass at the current time using linear interpolation.
+subroutine interpolate_shelf_mass(G, CS, ISS, Time)
+  type(ocean_grid_type), intent(inout) :: G   !< The ocean's grid structure.
+  type(ice_shelf_CS),    intent(in)    :: CS  !< A pointer to the ice shelf control structure
+  type(ice_shelf_state), intent(inout) :: ISS !< The ice shelf state type that is being updated
+  type(time_type),       intent(in)    :: Time!< The current model time
+
+  ! local variables
+  integer :: i, j, is, ie, js, je
+  is = G%isc ; ie = G%iec ; js = G%jsc ; je = G%jec
+
+  call time_interp_external(CS%id_read_mass, Time, ISS%mass_shelf)
+
+  do j=js,je ; do i=is,ie
+    ISS%area_shelf_h(i,j) = 0.0
+    ISS%hmask(i,j) = 0.
+    if (ISS%mass_shelf(i,j) > 0.0) then
+      ISS%area_shelf_h(i,j) = G%areaT(i,j)
+      ISS%h_shelf(i,j) = ISS%mass_shelf(i,j)/CS%density_ice
+      ISS%hmask(i,j) = 1.
+    endif
+  enddo ; enddo
+
+  if (CS%min_thickness_simple_calve > 0.0) then
+    call ice_shelf_min_thickness_calve(G, ISS%h_shelf, ISS%area_shelf_h, ISS%hmask, &
+                                       CS%min_thickness_simple_calve)
+  endif
+
+  call pass_var(ISS%area_shelf_h, G%domain)
+  call pass_var(ISS%h_shelf, G%domain)
+  call pass_var(ISS%hmask, G%domain)
+  call pass_var(ISS%mass_shelf, G%domain)
+
+end subroutine interpolate_shelf_mass
 
 !> Save the ice shelf restart file
 subroutine ice_shelf_save_restart(CS, Time, directory, time_stamped, filename_suffix)
