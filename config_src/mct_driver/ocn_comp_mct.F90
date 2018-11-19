@@ -49,6 +49,7 @@ use mpp_domains_mod,      only: mpp_get_compute_domain
 use MOM_ocean_model,      only: ocean_public_type, ocean_state_type
 use MOM_ocean_model,      only: ocean_model_init , update_ocean_model, ocean_model_end
 use MOM_ocean_model,      only: convert_state_to_ocean_type
+use MOM_ocean_model,      only: atm_present, ice_present, glc_present, rof_present
 use MOM_surface_forcing,  only: surface_forcing_CS, forcing_save_restart
 use ocn_cap_methods,      only: ocn_import, ocn_export
 
@@ -427,7 +428,6 @@ subroutine ocn_run_mct( EClock, cdata_o, x2o_o, o2x_o)
   integer                   :: ocn_cpl_dt   !< one ocn coupling interval in seconds. (to be received from cesm)
   real (kind=8)             :: mom_cpl_dt   !< one ocn coupling interval in seconds. (internal)
   integer                   :: ncouple_per_day !< number of ocean coupled call in one day (non-dim)
-  logical                   :: atm_present  !< true if there is an atm component present
 
   ! reset shr logging to ocn log file:
   if (is_root_pe()) then
@@ -457,7 +457,11 @@ subroutine ocn_run_mct( EClock, cdata_o, x2o_o, o2x_o)
   ! Note: this is done only if ATM is present (whether data or prognostic)
   if (firstCall) then
     runtype = get_runtype()
-    call seq_infodata_GetData( glb%infodata, atm_present=atm_present )
+    call seq_infodata_GetData( glb%infodata, &
+                               atm_present=atm_present, &
+                               ice_present=ice_present, &
+                               rof_present=rof_present, &
+                               glc_present=glc_present)
 
     if (runtype /= "continue" .and. runtype /= "branch" .and. atm_present) then
       if (debug .and. is_root_pe()) write(glb%stdout,*) 'doubling first interval duration!'

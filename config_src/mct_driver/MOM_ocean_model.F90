@@ -210,6 +210,11 @@ end type ocean_state_type
 
 integer :: id_clock_forcing
 
+logical :: atm_present = .false. !< .true. if MOM6 is coupled to atm (whether prognostic or data)
+logical :: ice_present = .false. !< .true. if MOM6 is coupled to ice (whether prognostic or data)
+logical :: rof_present = .false. !< .true. if MOM6 is coupled to rof (whether prognostic or data)
+logical :: glc_present = .false. !< .true. if MOM6 is coupled to glc (whether prognostic or data)
+
 !=======================================================================
 contains
 !=======================================================================
