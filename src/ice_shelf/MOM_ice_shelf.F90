@@ -307,11 +307,11 @@ subroutine shelf_calc_flux(state, fluxes, Time, time_step, CS, forces)
   if (CS%override_shelf_movement) then
     CS%time_step = time_step
     ! update shelf mass:
-    ! 1) via file
+    ! 1) via netCDF file
     if (CS%mass_from_file)    call update_shelf_mass(G, CS, ISS, Time)
-    ! 2) via data provided by the coupler. This is how MOM6 receives the ice shelf
-    ! thickness (or mass) from CISM.
-    if (CS%mass_from_coupler) call interpolate_shelf_mass(G, CS, ISS, Time)
+    ! 2) via data provided by the coupler. This is how MOM6 receives the ice sheet/shelf
+    ! mass from CISM. This only implemented via MCT cap.
+    if (CS%mass_from_coupler) call update_mass_land_ice(G, CS, ISS, fluxes)
   endif
 
   if (CS%DEBUG) then
@@ -1676,19 +1676,28 @@ subroutine update_shelf_mass(G, CS, ISS, Time)
 
 end subroutine update_shelf_mass
 
-!> Finds the ice shelf mass at the current time using linear interpolation.
-subroutine interpolate_shelf_mass(G, CS, ISS, Time)
+!> Updates the ice sheet (shelf) mass using data from a coupeld ice sheet model.
+!! Currently, only the CISM is supported. Mass is updated via a tendency term,
+!! which is stored in the type fluxes. The tendency term is constructed via
+!! linear interpolation and this is done in the MTC cap.
+subroutine update_mass_land_ice(G, CS, ISS, fluxes)
   type(ocean_grid_type), intent(inout) :: G   !< The ocean's grid structure.
   type(ice_shelf_CS),    intent(in)    :: CS  !< A pointer to the ice shelf control structure
   type(ice_shelf_state), intent(inout) :: ISS !< The ice shelf state type that is being updated
-  type(time_type),       intent(in)    :: Time!< The current model time
+  type(forcing),         intent(inout) :: fluxes!< A structure containing pointers to
+                                                !! all possible mass, heat or salt flux forcing fields.
+                                                !!  Unused fields have NULL ptrs.
 
   ! local variables
   integer :: i, j, is, ie, js, je
   is = G%isc ; ie = G%iec ; js = G%jsc ; je = G%jec
 
-  call time_interp_external(CS%id_read_mass, Time, ISS%mass_shelf)
+  ! add mass tendency term, computed in the MCT cap
+  do j=js,je ; do i=is,ie
+    ISS%mass_shelf(i,j) = ISS%mass_shelf(i,j) + fluxes%mass_land_ice(i,j)
+  enddo; enddo
 
+  ! update other fields
   do j=js,je ; do i=is,ie
     ISS%area_shelf_h(i,j) = 0.0
     ISS%hmask(i,j) = 0.
@@ -1709,7 +1718,7 @@ subroutine interpolate_shelf_mass(G, CS, ISS, Time)
   call pass_var(ISS%hmask, G%domain)
   call pass_var(ISS%mass_shelf, G%domain)
 
-end subroutine interpolate_shelf_mass
+end subroutine update_mass_land_ice
 
 !> Save the ice shelf restart file
 subroutine ice_shelf_save_restart(CS, Time, directory, time_stamped, filename_suffix)
