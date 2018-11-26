@@ -172,8 +172,9 @@ type, public :: ice_ocean_boundary_type
   real, pointer, dimension(:,:) :: runoff          =>NULL() !< mass flux of liquid runoff (kg/m2/s)
   real, pointer, dimension(:,:) :: calving         =>NULL() !< mass flux of frozen runoff (kg/m2/s)
   real, pointer, dimension(:,:) :: ustar_berg      =>NULL() !< frictional velocity beneath icebergs (m/s)
-  real, pointer, dimension(:,:) :: area_berg       =>NULL() !< area covered by icebergs(m2/m2)
-  real, pointer, dimension(:,:) :: mass_berg       =>NULL() !< mass of icebergs(kg/m2)
+  real, pointer, dimension(:,:) :: area_berg       =>NULL() !< area covered by icebergs (m2/m2)
+  real, pointer, dimension(:,:) :: mass_berg       =>NULL() !< mass of icebergs (kg/m2)
+  real, pointer, dimension(:,:) :: mass_land_ice   =>NULL() !< land ice mass tendency (kg/m2)
   real, pointer, dimension(:,:) :: runoff_hflx     =>NULL() !< heat content of liquid runoff (W/m2)
   real, pointer, dimension(:,:) :: calving_hflx    =>NULL() !< heat content of frozen runoff (W/m2)
   real, pointer, dimension(:,:) :: p               =>NULL() !< pressure of overlying ice and atmosphere
@@ -417,6 +418,11 @@ subroutine convert_IOB_to_fluxes(IOB, fluxes, Time, G, CS, &
     ! ice runoff flux
     if (associated(fluxes%frunoff)) &
       fluxes%frunoff(i,j) = G%mask2dT(i,j) * IOB%rofi_flux(i-i0,j-j0)
+
+    ! land ice mass tendency
+    ! GMM: should we use mask2dT below?
+    if (associated(fluxes%mass_land_ice)) &
+      fluxes%mass_land_ice(i,j) = IOB%mass_land_ice(i-i0,j-j0)
 
     ! GMM, we don't have an icebergs yet so the following is not needed
     !if (((associated(IOB%ustar_berg) .and. (.not. associated(fluxes%ustar_berg)))   &
@@ -794,6 +800,7 @@ subroutine IOB_allocate(IOB, isc, iec, jsc, jec)
              IOB% ustar_berg (isc:iec,jsc:jec),      &
              IOB% area_berg (isc:iec,jsc:jec),       &
              IOB% mass_berg (isc:iec,jsc:jec),       &
+             IOB% mass_land_ice (isc:iec,jsc:jec),   &
              IOB% calving (isc:iec,jsc:jec),         &
              IOB% runoff_hflx (isc:iec,jsc:jec),     &
              IOB% calving_hflx (isc:iec,jsc:jec),    &
@@ -819,6 +826,7 @@ subroutine IOB_allocate(IOB, isc, iec, jsc, jec)
   IOB%ustar_berg      = 0.0
   IOB%area_berg       = 0.0
   IOB%mass_berg       = 0.0
+  IOB%mass_land_ice   = 0.0
   IOB%calving         = 0.0
   IOB%runoff_hflx     = 0.0
   IOB%calving_hflx    = 0.0
