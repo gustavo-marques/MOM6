@@ -9,7 +9,8 @@ module ocn_cap_methods
   use MOM_error_handler,   only: is_root_pe
   use mpp_domains_mod,     only: mpp_get_compute_domain
   use ocn_cpl_indices,     only: cpl_indices_type
-
+  use MOM_ice_shelf,       only: ice_shelf_CS
+  use MOM_ice_shelf_state, only: ice_shelf_state
   implicit none
   private
 
@@ -23,17 +24,24 @@ contains
 !=======================================================================
 
 !> Maps incomping ocean data to MOM6 data structures
-subroutine ocn_import(x2o, ind, grid, ice_ocean_boundary, ocean_public, logunit, Eclock, c1, c2, c3, c4)
+subroutine ocn_import(x2o, ind, grid, ice_ocean_boundary, ocean_public, ice_shelf_CSp, logunit, Eclock, glc_cpl_dt, &
+                     c1, c2, c3, c4)
   real(kind=8)                  , intent(in)    :: x2o(:,:)           !< incoming data
   type(cpl_indices_type)        , intent(in)    :: ind                !< Structure with MCT attribute vects and indices
   type(ocean_grid_type)         , intent(in)    :: grid               !< Ocean model grid
   type(ice_ocean_boundary_type) , intent(inout) :: ice_ocean_boundary !< Ocean boundary forcing
   type(ocean_public_type)       , intent(in)    :: ocean_public       !< Ocean surface state
+  type(ice_shelf_CS)            , intent(in)    :: ice_shelf_CSp      !< private structure containing
+                                                                      !! the ice shelf state.
   integer                       , intent(in)    :: logunit            !< Unit for stdout output
   type(ESMF_Clock)              , intent(in)    :: EClock             !< Time and time step ? \todo Why must this
+  integer                       , intent(in)    :: glc_cpl_dt         !< One glc coupling interval in seconds.
   real(kind=8), optional        , intent(in)    :: c1, c2, c3, c4     !< Coeffs. used in the shortwave decomposition
 
   ! Local variables
+  type(ice_shelf_state), pointer :: ISS => NULL() !< A structure with elements that describe
+                                          !! the ice-shelf state
+  real            :: mass_tend !< land ice mass tendency, kg/m2
   integer         :: i, j, ig, jg, isc, iec, jsc, jec  ! Grid indices
   integer         :: k
   integer         :: day, secs, rc
@@ -42,6 +50,8 @@ subroutine ocn_import(x2o, ind, grid, ice_ocean_boundary, ocean_public, logunit,
   !-----------------------------------------------------------------------
 
   isc = GRID%isc; iec = GRID%iec ; jsc = GRID%jsc; jec = GRID%jec
+
+  ISS => ice_shelf_CSp%ISS
 
   ! import atm and ice fields
   if (atm_present .or. ice_present) then
@@ -133,8 +143,11 @@ subroutine ocn_import(x2o, ind, grid, ice_ocean_boundary, ocean_public, logunit,
       do i = isc, iec
         ig = i + grid%jsc - isc
         k = k + 1 ! Increment position within gindex
-
-        ! todo
+        ! todo, mass_tend, in kg m-2 s-1
+        !mass_tend = (mass(i,j) - x2o(ind%x2o_???,k))/ glc_cpl_dt
+        ! GMM, test if it works my making mass decrease by 1%
+        mass_tend = -3.5E-8! tendency, kg m-2 s-1
+        ice_ocean_boundary%mass_land_ice(i,j) = mass_tend
       enddo
     enddo
   endif
