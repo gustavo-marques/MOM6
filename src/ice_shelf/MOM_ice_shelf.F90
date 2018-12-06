@@ -61,7 +61,8 @@ public shelf_calc_flux, add_shelf_flux, initialize_ice_shelf, ice_shelf_end
 public ice_shelf_save_restart, solo_time_step, add_shelf_forces
 
 !> Control structure that contains ice shelf parameters and diagnostics handles
-type, public :: ice_shelf_CS ; private
+! GMM, private needs to be removed below?
+type, public :: ice_shelf_CS !; private
   ! Parameters
   type(MOM_restart_CS), pointer :: restart_CSp => NULL() !< A pointer to the restart control
                                           !! structure for the ice shelves
@@ -1451,7 +1452,6 @@ subroutine initialize_ice_shelf(param_file, ocn_grid, Time, CS, diag, forces, fl
 
     ! This model is initialized internally or from a file.
     call initialize_ice_thickness(ISS%h_shelf, ISS%area_shelf_h, ISS%hmask, G, param_file)
-
     ! next make sure mass is consistent with thickness
     do j=G%jsd,G%jed ; do i=G%isd,G%ied
       if ((ISS%hmask(i,j) == 1) .or. (ISS%hmask(i,j) == 2)) then
@@ -1694,7 +1694,7 @@ subroutine update_mass_land_ice(G, CS, ISS, fluxes)
 
   ! add mass tendency term, computed in the MCT cap
   do j=js,je ; do i=is,ie
-    ISS%mass_shelf(i,j) = ISS%mass_shelf(i,j) + fluxes%mass_land_ice(i,j)
+    ISS%mass_shelf(i,j) = ISS%mass_shelf(i,j) + fluxes%mass_land_ice(i,j)*CS%time_step
   enddo; enddo
 
   ! update other fields
@@ -1881,5 +1881,4 @@ end subroutine solo_time_step
 !!
 !! Holland, David M., and Adrian Jenkins. Modeling thermodynamic ice-ocean interactions at the base of an ice shelf.
 !! Journal of Physical Oceanography 29.8 (1999): 1787-1800.
-
 end module MOM_ice_shelf
