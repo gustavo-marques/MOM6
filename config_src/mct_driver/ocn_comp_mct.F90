@@ -117,7 +117,7 @@ subroutine ocn_init_mct( EClock, cdata_o, x2o_o, o2x_o, NLFilename )
   type(ESMF_time)         :: time_var             !< ESMF_time variable to query time
   type(ESMF_time)         :: time_in_ESMF         !< Initial time for ocean
   type(ESMF_timeInterval) :: ocn_cpl_interval     !< Ocean coupling interval
-  integer                 :: ncouple_per_day
+  real (kind=8)           :: ncouple_per_day
   integer                 :: year, month, day, hour, minute, seconds, seconds_n, seconds_d, rc
   character(len=240)      :: runid                !< Run ID
   character(len=32)       :: runtype              !< Run type
@@ -374,7 +374,7 @@ subroutine ocn_init_mct( EClock, cdata_o, x2o_o, o2x_o, NLFilename )
   ! end if
 
   if (debug .and. root_pe().eq.pe_here()) print *, "calling ocn_export"
-  call ocn_export(glb%ind, glb%ocn_public, glb%grid, o2x_o%rattr, mom_cpl_dt, ncouple_per_day)
+  call ocn_export(glb%ind, glb%ocn_public, glb%grid, o2x_o%rattr, mom_cpl_dt)
 
   call t_stopf('MOM_mct_init')
 
@@ -428,7 +428,7 @@ subroutine ocn_run_mct( EClock, cdata_o, x2o_o, o2x_o)
   integer                   :: ocn_cpl_dt   !< one ocn coupling interval in seconds. (to be received from cesm)
   integer                   :: glc_cpl_dt   !< one glc coupling interval in seconds. (to be received from cesm)
   real (kind=8)             :: mom_cpl_dt   !< one ocn coupling interval in seconds. (internal)
-  integer                   :: ncouple_per_day !< number of ocean coupled call in one day (non-dim)
+  real (kind=8)             :: ncouple_per_day !< number of ocean coupled call in one day (non-dim)
 
   ! reset shr logging to ocn log file:
   if (is_root_pe()) then
@@ -521,7 +521,7 @@ subroutine ocn_run_mct( EClock, cdata_o, x2o_o, o2x_o)
   call update_ocean_model(ice_ocean_boundary, glb%ocn_state, glb%ocn_public, time_start, coupling_timestep)
 
   ! Return export state to driver
-  call ocn_export(glb%ind, glb%ocn_public, glb%grid, o2x_o%rattr, mom_cpl_dt, ncouple_per_day)
+  call ocn_export(glb%ind, glb%ocn_public, glb%grid, o2x_o%rattr, mom_cpl_dt)
 
   !--- write out intermediate restart file when needed.
   ! Check alarms for flag to write restart at end of day
