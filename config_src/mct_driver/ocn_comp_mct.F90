@@ -426,6 +426,7 @@ subroutine ocn_run_mct( EClock, cdata_o, x2o_o, o2x_o)
   logical, save      :: firstCall = .true.
   real (kind=8), parameter  ::  seconds_in_day = 86400.0 !< number of seconds in one day
   integer                   :: ocn_cpl_dt   !< one ocn coupling interval in seconds. (to be received from cesm)
+  integer                   :: glc_cpl_dt   !< one glc coupling interval in seconds. (to be received from cesm)
   real (kind=8)             :: mom_cpl_dt   !< one ocn coupling interval in seconds. (internal)
   integer                   :: ncouple_per_day !< number of ocean coupled call in one day (non-dim)
 
@@ -447,6 +448,10 @@ subroutine ocn_run_mct( EClock, cdata_o, x2o_o, o2x_o)
   coupling_timestep = set_time(seconds, days=day, err_msg=err_msg)
 
   call seq_timemgr_EClockGetData(EClock, dtime=ocn_cpl_dt)
+  ! GMM, how to get glc_cpl_dt?
+  !call seq_timemgr_EClockGetData(EClock, dtime=glc_cpl_dt)
+  glc_cpl_dt = 31536000 ! 1 year in sec
+
   ncouple_per_day = seconds_in_day / ocn_cpl_dt
   mom_cpl_dt = seconds_in_day / ncouple_per_day
 
@@ -504,10 +509,12 @@ subroutine ocn_run_mct( EClock, cdata_o, x2o_o, o2x_o)
   !glb%sw_decomp = .false.
   !END TODO:
   if (glb%sw_decomp) then
-    call ocn_import(x2o_o%rattr, glb%ind,  glb%grid, Ice_ocean_boundary, glb%ocn_public, glb%stdout, Eclock, &
-          c1=glb%c1, c2=glb%c2, c3=glb%c3, c4=glb%c4)
+    call ocn_import(x2o_o%rattr, glb%ind,  glb%grid, Ice_ocean_boundary, glb%ocn_public, &
+         glb%ocn_state%Ice_shelf_CSp, glb%stdout, Eclock, glc_cpl_dt, c1=glb%c1, c2=glb%c2, &
+         c3=glb%c3, c4=glb%c4)
   else
-    call ocn_import(x2o_o%rattr, glb%ind,  glb%grid, Ice_ocean_boundary, glb%ocn_public, glb%stdout, Eclock )
+    call ocn_import(x2o_o%rattr, glb%ind, glb%grid, Ice_ocean_boundary, glb%ocn_public, &
+         glb%ocn_state%Ice_shelf_CSp, glb%stdout, Eclock, glc_cpl_dt)
   end if
 
   ! Update internal ocean
