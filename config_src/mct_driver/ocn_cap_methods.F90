@@ -231,7 +231,7 @@ subroutine ocn_export(ind, ocn_public, grid, o2x, dt_int)
         o2x(ind%o2x_Fioo_q, n)   = ocn_public%frazil(ig,jg) * grid%mask2dT(i,j) * I_time_int
       else
         ! Melt_potential: change from J/m^2 to W/m^2
-        o2x(ind%o2x_Fioo_q, n)   = -ocn_public%melt_potential(ig,jg) * grid%mask2dT(i,j) * I_time_int !* ncouple_per_day
+        o2x(ind%o2x_Fioo_q, n)   = -ocn_public%melt_potential(ig,jg) * grid%mask2dT(i,j) * I_time_int
         ! make sure Melt_potential is always <= 0
         if (o2x(ind%o2x_Fioo_q, n) > 0.0) o2x(ind%o2x_Fioo_q, n) = 0.0
       endif
