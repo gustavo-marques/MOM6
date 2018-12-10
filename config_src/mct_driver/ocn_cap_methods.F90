@@ -78,13 +78,13 @@ subroutine ocn_import(x2o, ind, grid, ice_ocean_boundary, ocean_public, ice_shel
         ice_ocean_boundary%lw_flux(i,j) = (x2o(ind%x2o_Faxa_lwdn,k) + x2o(ind%x2o_Foxx_lwup,k))
 
         ! specific humitidy flux
-        ice_ocean_boundary%q_flux(i,j) = x2o(ind%x2o_Foxx_evap,k) !???TODO: should this be a minus sign
+        ice_ocean_boundary%q_flux(i,j) = x2o(ind%x2o_Foxx_evap,k)
 
         ! sensible heat flux (W/m2)
-        ice_ocean_boundary%t_flux(i,j) = x2o(ind%x2o_Foxx_sen,k)  !???TODO: should this be a minus sign
+        ice_ocean_boundary%t_flux(i,j) = x2o(ind%x2o_Foxx_sen,k)
 
         ! latent heat flux (W/m^2)
-        ice_ocean_boundary%latent_flux(i,j) = x2o(ind%x2o_Foxx_lat,k) !???TODO: should this be a minus sign
+        ice_ocean_boundary%latent_flux(i,j) = x2o(ind%x2o_Foxx_lat,k)
 
         ! liquid runoff
         ice_ocean_boundary%rofl_flux(i,j) = x2o(ind%x2o_Foxx_rofl,k) * GRID%mask2dT(ig,jg)
@@ -143,10 +143,13 @@ subroutine ocn_import(x2o, ind, grid, ice_ocean_boundary, ocean_public, ice_shel
       do i = isc, iec
         ig = i + grid%jsc - isc
         k = k + 1 ! Increment position within gindex
-        ! todo, mass_tend, in kg m-2 s-1
-        !mass_tend = (mass(i,j) - x2o(ind%x2o_???,k))/ glc_cpl_dt
-        ! GMM, test if it works my making mass decrease by 1%
-        mass_tend = -3.5E-8! tendency, kg m-2 s-1
+        ! TODO: CISM should pass mass tendency to the coupler, in kg m-2 s-1
+        ! The following is a workaround to compute mass tendency.
+        if (x2o(ind%x2o_Sg_thck,k) /= 0.0) then
+          mass_tend = (ISS%mass_shelf(ig,jg) - x2o(ind%x2o_Sg_thck,k))/ glc_cpl_dt
+        else
+          mass_tend = 0.0
+        endif
         ice_ocean_boundary%mass_land_ice(i,j) = mass_tend
       enddo
     enddo

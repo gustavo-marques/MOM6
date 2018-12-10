@@ -22,6 +22,7 @@ module ocn_cpl_indices
     integer :: o2x_Faoo_fdms_ocn !< DMS flux
 
     ! coupler to ocean
+    integer :: x2o_Sg_thck       !< Land ice thinkness (m)
     integer :: x2o_Si_ifrac      !< Fractional ice wrt ocean
     integer :: x2o_So_duu10n     !< 10m wind speed squared (m^2/s^2)
     integer :: x2o_Sa_pslv       !< Sea-level pressure (Pa)
@@ -112,6 +113,7 @@ contains
     ind%o2x_Faoo_fdms_ocn = mct_avect_indexra(o2x,'Faoo_fdms_ocn',perrWith='quiet')
 
     ! coupler to ocean
+    ind%x2o_Sg_thck       = mct_avect_indexra(x2o,'Sg_thck')
     ind%x2o_Si_ifrac      = mct_avect_indexra(x2o,'Si_ifrac')
     ind%x2o_Sa_pslv       = mct_avect_indexra(x2o,'Sa_pslv')
     ind%x2o_So_duu10n     = mct_avect_indexra(x2o,'So_duu10n')
