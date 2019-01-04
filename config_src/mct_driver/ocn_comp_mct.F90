@@ -37,7 +37,7 @@ use MOM_grid,             only: ocean_grid_type, get_global_grid_size
 use MOM_error_handler,    only: MOM_error, FATAL, is_root_pe, WARNING
 use MOM_time_manager,     only: time_type, set_date, set_time, set_calendar_type, NOLEAP
 use MOM_time_manager,     only: operator(+), operator(-), operator(*), operator(/)
-use MOM_time_manager,     only: operator(==), operator(/=), operator(>), get_time
+use MOM_time_manager,     only: operator(==), operator(/=), operator(>), get_time, get_date
 use MOM_file_parser,      only: get_param, log_version, param_file_type
 use MOM_get_input,        only: Get_MOM_Input, directories
 use MOM_EOS,              only: gsw_sp_from_sr, gsw_pt_from_ct
@@ -80,7 +80,7 @@ private :: get_runtype
 private :: ocean_model_init_sfc
 
 ! Flag for debugging
-logical, parameter :: debug=.true.
+logical, parameter :: debug=.false.
 
 !> Control structure for this module
 type MCT_MOM_Data
@@ -94,6 +94,7 @@ type MCT_MOM_Data
   integer                          :: stdout               !< standard output unit. (by default, points to ocn.log.* )
   character(len=384)               :: pointer_filename     !< Name of the ascii file that contains the path
                                                            !! and filename of the latest restart file.
+  integer                             :: dt_forcing           !< The time interval to step MOM, in s.
 end type MCT_MOM_Data
 
 type(MCT_MOM_Data)            :: glb !< global structure
@@ -245,6 +246,11 @@ subroutine ocn_init_mct( EClock, cdata_o, x2o_o, o2x_o, NLFilename )
   ! read useful runtime params
   call get_MOM_Input(param_file, dirs_tmp, check_params=.false.)
   !call log_version(param_file, mdl, version, "")
+
+  call get_param(param_file, mdl, "DT_FORCING", glb%dt_forcing, &
+                 "The time step for changing forcing, coupling with other \n"//&
+                 "components, or potentially writing certain diagnostics. \n"//&
+                 "The default value is given by DT.", units="s", default=0)
 
   call get_param(param_file, mdl, "POINTER_FILENAME", glb%pointer_filename, &
                  "Name of the ascii file that contains the path and filename of" // &
@@ -411,9 +417,10 @@ subroutine ocn_run_mct( EClock, cdata_o, x2o_o, o2x_o)
   type(ESMF_timeInterval) :: ocn_cpl_interval !< The length of one ocean coupling interval
   integer :: year, month, day, hour, minute, seconds, seconds_n, seconds_d, rc
   logical :: write_restart_at_eod      !< Controls if restart files must be written
-  logical :: debug=.false.
+  logical :: debug=.true.
   type(time_type) :: time_start        !< Start of coupled time interval to pass to MOM6
   type(time_type) :: coupling_timestep !< Coupled time interval to pass to MOM6
+  type(time_type) :: forcing_timestep  !< Forcing time interval to pass to MOM6
   character(len=128) :: err_msg        !< Error message
   character(len=32)  :: timestamp      !< Name of intermediate restart file
   character(len=384) :: restartname    !< The restart file name (no dir)
@@ -427,8 +434,10 @@ subroutine ocn_run_mct( EClock, cdata_o, x2o_o, o2x_o)
   real (kind=8), parameter  ::  seconds_in_day = 86400.0 !< number of seconds in one day
   integer                   :: ocn_cpl_dt   !< one ocn coupling interval in seconds. (to be received from cesm)
   integer                   :: glc_cpl_dt   !< one glc coupling interval in seconds. (to be received from cesm)
+  integer                   :: nsteps_per_ocn_cpl_dt !< number of forcing intervals per number of coupling interval
   real (kind=8)             :: mom_cpl_dt   !< one ocn coupling interval in seconds. (internal)
   real (kind=8)             :: ncouple_per_day !< number of ocean coupled call in one day (non-dim)
+  integer                   :: t !< to be used when looping over nsteps_per_ocn_cpl_dt
 
   ! reset shr logging to ocn log file:
   if (is_root_pe()) then
@@ -449,7 +458,8 @@ subroutine ocn_run_mct( EClock, cdata_o, x2o_o, o2x_o)
 
   call seq_timemgr_EClockGetData(EClock, dtime=ocn_cpl_dt)
   ! GMM, how to get glc_cpl_dt?
-  !call seq_timemgr_EClockGetData(EClock, dtime=glc_cpl_dt)
+  ! The following is being hard-coded since we cannot get glc_cpl_dt from here.
+  ! This shuold be removed once glc provides the mass tendency.
   glc_cpl_dt = 31536000 ! 1 year in sec
 
   ncouple_per_day = seconds_in_day / ocn_cpl_dt
@@ -478,7 +488,18 @@ subroutine ocn_run_mct( EClock, cdata_o, x2o_o, o2x_o)
     endif
 
     firstCall = .false.
-  end if
+  endif
+
+  ! number of forcing time steps per number of ocean coupling calls
+  if (glb%dt_forcing /= 0) then
+    nsteps_per_ocn_cpl_dt = ocn_cpl_dt / glb%dt_forcing
+    ! Set the forcing interval duration
+    forcing_timestep = set_time(seconds=glb%dt_forcing, days=0, err_msg=err_msg)
+  else
+    ! in this case forcing_timestep = coupling_timestep
+    nsteps_per_ocn_cpl_dt = 1
+    forcing_timestep = coupling_timestep
+  endif
 
   ! Debugging clocks
   if (debug .and. is_root_pe()) then
@@ -497,7 +518,10 @@ subroutine ocn_run_mct( EClock, cdata_o, x2o_o, o2x_o)
     call ESMF_ClockGet(EClock, TimeStep=ocn_cpl_interval, rc=rc)
     call ESMF_TimeIntervalGet(ocn_cpl_interval, yy=year, mm=month, d=day, s=seconds, sn=seconds_n, sd=seconds_d, rc=rc)
     write(glb%stdout,*) 'ocn_init_mct, time step: y,m,d-',year,month,day,'s,sn,sd=',seconds,seconds_n,seconds_d
+    call get_date(time_start, year, month, day, hour, minute, seconds, err_msg=err_msg)
+    write(glb%stdout,*) 'ocn_run_mct, time_start: y,m,d-',year,month,day,'h,m,s=',hour,minute,seconds
   endif
+
 
   ! set the cdata pointers:
   ! \todo this was done in _init_, is it needed again. Does this infodata need to be in glb%?
@@ -505,9 +529,6 @@ subroutine ocn_run_mct( EClock, cdata_o, x2o_o, o2x_o)
   call seq_cdata_setptrs(cdata_o, infodata=glb%infodata)
 
   ! Translate import fields to ice_ocean_boundary
-  !TODO: make this an input variable
-  !glb%sw_decomp = .false.
-  !END TODO:
   if (glb%sw_decomp) then
     call ocn_import(x2o_o%rattr, glb%ind,  glb%grid, Ice_ocean_boundary, glb%ocn_public, &
          glb%ocn_state%Ice_shelf_CSp, glb%stdout, Eclock, glc_cpl_dt, c1=glb%c1, c2=glb%c2, &
@@ -515,59 +536,73 @@ subroutine ocn_run_mct( EClock, cdata_o, x2o_o, o2x_o)
   else
     call ocn_import(x2o_o%rattr, glb%ind, glb%grid, Ice_ocean_boundary, glb%ocn_public, &
          glb%ocn_state%Ice_shelf_CSp, glb%stdout, Eclock, glc_cpl_dt)
-  end if
+  endif
 
-  ! Update internal ocean
-  call update_ocean_model(ice_ocean_boundary, glb%ocn_state, glb%ocn_public, time_start, coupling_timestep)
+  ! Loop over nsteps_per_ocn_cpl_dt. In most cases nsteps_per_ocn_cpl_dt = 1.
+  ! When glc is active, the ocean will step nsteps_per_ocn_cpl_dt times before
+  ! sending data to the coupler.
+  do t = 1,nsteps_per_ocn_cpl_dt
+
+    ! update internal ocean
+    call update_ocean_model(ice_ocean_boundary, glb%ocn_state, glb%ocn_public, time_start, forcing_timestep)
+
+    ! update start_time
+    time_start = time_start + forcing_timestep
+
+    !--- write out intermediate restart file when needed.
+    ! Check alarms for flag to write restart at end of day
+    write_restart_at_eod = seq_timemgr_RestartAlarmIsOn(EClock)
+    if (debug .and. is_root_pe()) write(glb%stdout,*) 'ocn_run_mct, write_restart_at_eod=', write_restart_at_eod
+
+    call ESMF_ClockGet(EClock, CurrTime=time_var, rc=rc)
+    call ESMF_TimeGet(time_var, yy=year, mm=month, dd=day, h=hour, m=minute, s=seconds, rc=rc)
+    if (debug .and. is_root_pe()) write(glb%stdout,*) 'current time: y,m,d-',year,month,day,'h,m,s=',hour,minute,seconds
+
+    if (write_restart_at_eod) then
+      ! case name
+      call seq_infodata_GetData( glb%infodata, case_name=runid )
+      ! add time stamp to the restart filename
+      call ESMF_ClockGet(EClock, CurrTime=time_var, rc=rc)
+      call ESMF_TimeGet(time_var, yy=year, mm=month, dd=day, h=hour, m=minute, s=seconds, rc=rc)
+      seconds = seconds + hour*3600 + minute*60
+      write(restartname,'(A,".mom6.r.",I4.4,"-",I2.2,"-",I2.2,"-",I5.5)') trim(runid), year, month, day, seconds
+
+      call save_restart(glb%ocn_state%dirs%restart_output_dir, glb%ocn_state%Time, glb%grid, &
+                        glb%ocn_state%restart_CSp, .false., filename=restartname, GV=glb%ocn_state%GV)
+
+      ! write name of restart file in the rpointer file
+      nu = shr_file_getUnit()
+      if (is_root_pe()) then
+        restart_pointer_file = trim(glb%pointer_filename)
+        open(nu, file=restart_pointer_file, form='formatted', status='unknown')
+        write(nu,'(a)') trim(restartname) //'.nc'
+        close(nu)
+        write(glb%stdout,*) 'ocn restart pointer file written: ',trim(restartname)
+      endif
+      call shr_file_freeUnit(nu)
+
+      ! Is this needed?
+      call forcing_save_restart(glb%ocn_state%forcing_CSp, glb%grid, glb%ocn_state%Time, &
+                              glb%ocn_state%dirs%restart_output_dir, .true.)
+
+      ! Once we start using the ice shelf module, the following will be needed
+      if (glb%ocn_state%use_ice_shelf) then
+        call ice_shelf_save_restart(glb%ocn_state%Ice_shelf_CSp, glb%ocn_state%Time, &
+                                    glb%ocn_state%dirs%restart_output_dir, .true.)
+      endif
+
+    endif
+
+    ! reset shr logging to original values
+    if (is_root_pe()) then
+      call shr_file_setLogUnit(shrlogunit)
+      call shr_file_setLogLevel(shrloglev)
+    endif
+
+  enddo ! forcing time step
 
   ! Return export state to driver
   call ocn_export(glb%ind, glb%ocn_public, glb%grid, o2x_o%rattr, mom_cpl_dt)
-
-  !--- write out intermediate restart file when needed.
-  ! Check alarms for flag to write restart at end of day
-  write_restart_at_eod = seq_timemgr_RestartAlarmIsOn(EClock)
-  if (debug .and. is_root_pe()) write(glb%stdout,*) 'ocn_run_mct, write_restart_at_eod=', write_restart_at_eod
-
-  if (write_restart_at_eod) then
-    ! case name
-    call seq_infodata_GetData( glb%infodata, case_name=runid )
-    ! add time stamp to the restart filename
-    call ESMF_ClockGet(EClock, CurrTime=time_var, rc=rc)
-    call ESMF_TimeGet(time_var, yy=year, mm=month, dd=day, h=hour, m=minute, s=seconds, rc=rc)
-    seconds = seconds + hour*3600 + minute*60
-    write(restartname,'(A,".mom6.r.",I4.4,"-",I2.2,"-",I2.2,"-",I5.5)') trim(runid), year, month, day, seconds
-
-    call save_restart(glb%ocn_state%dirs%restart_output_dir, glb%ocn_state%Time, glb%grid, &
-                      glb%ocn_state%restart_CSp, .false., filename=restartname, GV=glb%ocn_state%GV)
-
-    ! write name of restart file in the rpointer file
-    nu = shr_file_getUnit()
-    if (is_root_pe()) then
-      restart_pointer_file = trim(glb%pointer_filename)
-      open(nu, file=restart_pointer_file, form='formatted', status='unknown')
-      write(nu,'(a)') trim(restartname) //'.nc'
-      close(nu)
-      write(glb%stdout,*) 'ocn restart pointer file written: ',trim(restartname)
-    endif
-    call shr_file_freeUnit(nu)
-
-    ! Is this needed?
-    call forcing_save_restart(glb%ocn_state%forcing_CSp, glb%grid, glb%ocn_state%Time, &
-                              glb%ocn_state%dirs%restart_output_dir, .true.)
-
-    ! Once we start using the ice shelf module, the following will be needed
-    if (glb%ocn_state%use_ice_shelf) then
-      call ice_shelf_save_restart(glb%ocn_state%Ice_shelf_CSp, glb%ocn_state%Time, &
-                                  glb%ocn_state%dirs%restart_output_dir, .true.)
-    endif
-
-  endif
-
-  ! reset shr logging to original values
-  if (is_root_pe()) then
-    call shr_file_setLogUnit(shrlogunit)
-    call shr_file_setLogLevel(shrloglev)
-  endif
 
 end subroutine ocn_run_mct
 
