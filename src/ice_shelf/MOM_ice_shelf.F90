@@ -58,11 +58,10 @@ implicit none ; private
 #endif
 
 public shelf_calc_flux, add_shelf_flux, initialize_ice_shelf, ice_shelf_end
-public ice_shelf_save_restart, solo_time_step, add_shelf_forces
+public ice_shelf_save_restart, solo_time_step, add_shelf_forces, get_ice_shelf_mass
 
 !> Control structure that contains ice shelf parameters and diagnostics handles
-! GMM, private needs to be removed below?
-type, public :: ice_shelf_CS !; private
+type, public :: ice_shelf_CS ; private
   ! Parameters
   type(MOM_restart_CS), pointer :: restart_CSp => NULL() !< A pointer to the restart control
                                           !! structure for the ice shelves
@@ -1729,6 +1728,21 @@ subroutine update_mass_land_ice(G, CS, ISS, fluxes)
   call pass_var(ISS%mass_shelf, G%domain)
 
 end subroutine update_mass_land_ice
+
+!> Copies the ice shelf mass into variable mass
+subroutine get_ice_shelf_mass(ICS, mass, G)
+  type(ice_shelf_CS),              pointer     :: ICS    !< Control structure for
+                                                !! this module
+  type(ocean_grid_type),              intent(in)  :: G     !< Grid structure
+  real, dimension(SZI_(G),SZJ_(G)), intent(inout) :: mass  !<  mass per unit area of
+                                                !! the ice shelf or sheet, in kg m-2.
+  ! Local variables
+  integer :: i,j
+  do j = G%jsc, G%jec ; do i = G%isc, G%iec
+    mass(i,j) = ICS%ISS%mass_shelf(i,j)
+  enddo ; enddo
+end subroutine get_ice_shelf_mass
+
 
 !> Save the ice shelf restart file
 subroutine ice_shelf_save_restart(CS, Time, directory, time_stamped, filename)
