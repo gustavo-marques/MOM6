@@ -1210,7 +1210,7 @@ subroutine initialize_ice_shelf(param_file, ocn_grid, Time, CS, diag, forces, fl
                  "ice shelf (every time step) from a file.", default=.false.)
 
   call get_param(param_file, mdl, "ICE_SHELF_MASS_FROM_COUPLER", &
-                 CS%mass_from_coupler, "Receives ice sheet mass from the coupler (every coupling \n"//&
+                 CS%mass_from_coupler, "Receives land ice mass from the coupler (every coupling \n"//&
                  "time step) and finds current value via linear interpolation.", default=.false.)
 
   if (CS%mass_from_file .and. CS%mass_from_coupler) then
@@ -1685,9 +1685,10 @@ subroutine update_shelf_mass(G, CS, ISS, Time)
 
 end subroutine update_shelf_mass
 
-!> Updates the ice sheet (shelf) mass using data from a coupeld ice sheet model.
-!! Currently, only the CISM is supported. Mass is updated via a tendency term,
-!! which is stored in the type fluxes. The tendency term is constructed via
+!> Updates the ice sheet (shelf) mass using data from an ice sheet model.
+!! Currently, only CISM is supported and the communication is done via
+!! CESM infrastructure. Mass is updated via a tendency term,
+!! which is stored in the fluxes type. The tendency term is constructed via
 !! linear interpolation and this is done in the MTC cap.
 subroutine update_mass_land_ice(G, CS, ISS, fluxes)
   type(ocean_grid_type), intent(inout) :: G   !< The ocean's grid structure.
