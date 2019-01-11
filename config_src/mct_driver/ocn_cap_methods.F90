@@ -10,7 +10,7 @@ module ocn_cap_methods
   use mpp_domains_mod,     only: mpp_get_compute_domain
   use ocn_cpl_indices,     only: cpl_indices_type
   use MOM_ice_shelf,       only: ice_shelf_CS
-  use MOM_ice_shelf_state, only: ice_shelf_state
+  use MOM_ice_shelf_state, only: ice_shelf_state, get_ice_shelf_mass
   implicit none
   private
 
@@ -39,19 +39,16 @@ subroutine ocn_import(x2o, ind, grid, ice_ocean_boundary, ocean_public, ice_shel
   real(kind=8), optional        , intent(in)    :: c1, c2, c3, c4     !< Coeffs. used in the shortwave decomposition
 
   ! Local variables
-  type(ice_shelf_state), pointer :: ISS => NULL() !< A structure with elements that describe
-                                          !! the ice-shelf state
-  real            :: mass_tend !< land ice mass tendency, kg/m2
-  integer         :: i, j, ig, jg, isc, iec, jsc, jec  ! Grid indices
-  integer         :: k
-  integer         :: day, secs, rc
-  type(ESMF_time) :: currTime
-  character(*), parameter :: F01  = "('(ocn_import) ',a,4(i6,2x),d21.14)"
+  real, dimension(:,:), pointer :: mass_shelf !< The mass per unit area of the ice shelf or sheet, in kg m-2.
+  real                          :: mass_tend !< land ice mass tendency, kg/m2
+  integer                       :: i, j, ig, jg, isc, iec, jsc, jec  ! Grid indices
+  integer                       :: k
+  integer                       :: day, secs, rc
+  type(ESMF_time)               :: currTime
+  character(*), parameter       :: F01  = "('(ocn_import) ',a,4(i6,2x),d21.14)"
   !-----------------------------------------------------------------------
 
   isc = GRID%isc; iec = GRID%iec ; jsc = GRID%jsc; jec = GRID%jec
-
-  ISS => ice_shelf_CSp%ISS
 
   ! import atm and ice fields
   if (atm_present .or. ice_present) then
@@ -137,16 +134,17 @@ subroutine ocn_import(x2o, ind, grid, ice_ocean_boundary, ocean_public, ice_shel
 
   ! import glc fields
   if (glc_present) then
+    call get_ice_shelf_mass(ice_shelf_CSp%ISS, mass_shelf(:,:), grid)
+    call pass_var(mass_shelf, grid%domain)
     k = 0
     do j = jsc, jec
-      jg = j + grid%jsc - jsc
       do i = isc, iec
-        ig = i + grid%jsc - isc
         k = k + 1 ! Increment position within gindex
         ! TODO: CISM should pass mass tendency to the coupler, in kg m-2 s-1
         ! The following is a workaround to compute mass tendency.
         if (x2o(ind%x2o_Sg_thck,k) /= 0.0) then
-          mass_tend = (ISS%mass_shelf(ig,jg) - x2o(ind%x2o_Sg_thck,k))/ glc_cpl_dt
+          ! (thck_{n+1} - thck_{n})/dt
+          mass_tend = (x2o(ind%x2o_Sg_thck,k) - ISS%mass_shelf(i,j))/ glc_cpl_dt
         else
           mass_tend = 0.0
         endif
