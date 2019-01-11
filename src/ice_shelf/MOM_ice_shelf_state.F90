@@ -18,7 +18,7 @@ use MOM_checksums, only : hchksum, qchksum, chksum, uchksum, vchksum, uvchksum
 
 implicit none ; private
 
-public ice_shelf_state_end, ice_shelf_state_init
+public ice_shelf_state_end, ice_shelf_state_init, get_ice_shelf_mass
 
 !> Structure that describes the ice shelf state
 type, public :: ice_shelf_state
@@ -80,6 +80,19 @@ subroutine ice_shelf_state_init(ISS, G)
   allocate(ISS%tfreeze(isd:ied,jsd:jed) )      ; ISS%tfreeze(:,:) = 0.0
 
 end subroutine ice_shelf_state_init
+
+!> Copies the ice shelf mass into variable mass
+subroutine get_ice_shelf_mass(CS, mass, G)
+  type(ice_shelf_state),              pointer     :: CS    !< Control structure for
+                                                !! this module
+  type(ocean_grid_type),              intent(in)  :: G     !< Grid structure
+  real, dimension(SZI_(G),SZJ_(G)), intent(inout) :: mass  !< bnd. layer depth (m)
+  ! Local variables
+  integer :: i,j
+  do j = G%jsc, G%jec ; do i = G%isc, G%iec
+    mass(i,j) = CS%%mass_shelf(i,j)
+  enddo ; enddo
+end subroutine get_ice_shelf_mass
 
 
 !> Deallocates all memory associated with this module
