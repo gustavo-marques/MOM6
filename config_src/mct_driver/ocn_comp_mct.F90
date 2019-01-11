@@ -94,7 +94,8 @@ type MCT_MOM_Data
   integer                          :: stdout               !< standard output unit. (by default, points to ocn.log.* )
   character(len=384)               :: pointer_filename     !< Name of the ascii file that contains the path
                                                            !! and filename of the latest restart file.
-  integer                             :: dt_forcing           !< The time interval to step MOM, in s.
+  logical                          :: use_ice_shelf = .false. !< if true, enables the ice shelf module.
+  integer                          :: dt_forcing              !< The time interval to step MOM, in s.
 end type MCT_MOM_Data
 
 type(MCT_MOM_Data)            :: glb !< global structure
@@ -123,6 +124,7 @@ subroutine ocn_init_mct( EClock, cdata_o, x2o_o, o2x_o, NLFilename )
   character(len=240)      :: runid                !< Run ID
   character(len=32)       :: runtype              !< Run type
   character(len=240)      :: restartfile          !< Path/Name of restart file
+  character(len=240)      :: restart_ice_shelf!< Path/Name of restart file for the ice shelf module
   integer                 :: nu                   !< i/o unit to read pointer file
   character(len=240)      :: restart_pointer_file !< File name for restart pointer file
   character(len=240)      :: restartpath          !< Path of the restart file
@@ -256,6 +258,9 @@ subroutine ocn_init_mct( EClock, cdata_o, x2o_o, o2x_o, NLFilename )
                  "Name of the ascii file that contains the path and filename of" // &
                  " the latest restart file.", default='rpointer.ocn')
 
+  call get_param(param_file, mdl, "ICE_SHELF",  glb%use_ice_shelf, &
+                 "If true, enables the ice shelf model.", default=.false.)
+
   call get_param(param_file, mdl, "SW_DECOMP", glb%sw_decomp, &
                  "If True, read coeffs c1, c2, c3 and c4 and decompose" // &
                  "the net shortwave radiation (SW) into four components:\n" // &
@@ -288,7 +293,8 @@ subroutine ocn_init_mct( EClock, cdata_o, x2o_o, o2x_o, NLFilename )
   runtype = get_runtype()
   if (runtype == "initial") then
     ! startup (new run) - 'n' is needed below since we don't specify input_filename in input.nml
-    call ocean_model_init(glb%ocn_public, glb%ocn_state, time0, time0, input_restart_file = 'n')
+    call ocean_model_init(glb%ocn_public, glb%ocn_state, time0, time0, input_restart_file = 'n',&
+                          restart_ice_shelf = 'n')
   else  ! hybrid or branch or continuos runs
     ! get output path root
     call seq_infodata_GetData( glb%infodata, outPathRoot=restartpath )
@@ -298,13 +304,17 @@ subroutine ocn_init_mct( EClock, cdata_o, x2o_o, o2x_o, NLFilename )
     if (is_root_pe()) write(glb%stdout,*) 'Reading ocn pointer file: ',restart_pointer_file
     open(nu, file=restart_pointer_file, form='formatted', status='unknown')
     read(nu,'(a)') restartfile
+    ! if the ice shelf module is enable, read corresponding restart file
+    if (glb%use_ice_shelf) read(nu,'(a)') restart_ice_shelf
     close(nu)
     !restartfile = trim(restartpath) // trim(restartfile)
     if (is_root_pe()) then
       write(glb%stdout,*) 'Reading restart file: ',trim(restartfile)
+      if (glb%use_ice_shelf) write(glb%stdout,*) 'Reading ice shelf restart file: ',trim(restart_ice_shelf)
     end if
     call shr_file_freeUnit(nu)
-    call ocean_model_init(glb%ocn_public, glb%ocn_state, time0, time0, input_restart_file=trim(restartfile))
+    call ocean_model_init(glb%ocn_public, glb%ocn_state, time0, time0, input_restart_file=trim(restartfile), &
+                          restart_ice_shelf=trim(restart_ice_shelf))
   endif
   if (is_root_pe()) then
     write(glb%stdout,'(/12x,a/)') '======== COMPLETED MOM INITIALIZATION ========'
@@ -549,57 +559,62 @@ subroutine ocn_run_mct( EClock, cdata_o, x2o_o, o2x_o)
     ! update start_time
     time_start = time_start + forcing_timestep
 
-    !--- write out intermediate restart file when needed.
-    ! Check alarms for flag to write restart at end of day
-    write_restart_at_eod = seq_timemgr_RestartAlarmIsOn(EClock)
-    if (debug .and. is_root_pe()) write(glb%stdout,*) 'ocn_run_mct, write_restart_at_eod=', write_restart_at_eod
+  enddo ! forcing time step
 
+  !--- write out intermediate restart file when needed.
+  ! Check alarms for flag to write restart at end of day
+  write_restart_at_eod = seq_timemgr_RestartAlarmIsOn(EClock)
+  if (debug .and. is_root_pe()) write(glb%stdout,*) 'ocn_run_mct, write_restart_at_eod=', write_restart_at_eod
+
+  call ESMF_ClockGet(EClock, CurrTime=time_var, rc=rc)
+  call ESMF_TimeGet(time_var, yy=year, mm=month, dd=day, h=hour, m=minute, s=seconds, rc=rc)
+  if (debug .and. is_root_pe()) write(glb%stdout,*) 'current time: y,m,d-',year,month,day,'h,m,s=',hour,minute,seconds
+
+  if (write_restart_at_eod) then
+    ! case name
+    call seq_infodata_GetData( glb%infodata, case_name=runid )
+    ! add time stamp to the restart filename
     call ESMF_ClockGet(EClock, CurrTime=time_var, rc=rc)
     call ESMF_TimeGet(time_var, yy=year, mm=month, dd=day, h=hour, m=minute, s=seconds, rc=rc)
-    if (debug .and. is_root_pe()) write(glb%stdout,*) 'current time: y,m,d-',year,month,day,'h,m,s=',hour,minute,seconds
+    seconds = seconds + hour*3600 + minute*60
+    write(restartname,'(A,".mom6.r.",I4.4,"-",I2.2,"-",I2.2,"-",I5.5)') trim(runid), year, month, day, seconds
 
-    if (write_restart_at_eod) then
-      ! case name
-      call seq_infodata_GetData( glb%infodata, case_name=runid )
-      ! add time stamp to the restart filename
-      call ESMF_ClockGet(EClock, CurrTime=time_var, rc=rc)
-      call ESMF_TimeGet(time_var, yy=year, mm=month, dd=day, h=hour, m=minute, s=seconds, rc=rc)
-      seconds = seconds + hour*3600 + minute*60
-      write(restartname,'(A,".mom6.r.",I4.4,"-",I2.2,"-",I2.2,"-",I5.5)') trim(runid), year, month, day, seconds
+    call save_restart(glb%ocn_state%dirs%restart_output_dir, glb%ocn_state%Time, glb%grid, &
+                      glb%ocn_state%restart_CSp, .false., filename=restartname, GV=glb%ocn_state%GV)
 
-      call save_restart(glb%ocn_state%dirs%restart_output_dir, glb%ocn_state%Time, glb%grid, &
-                        glb%ocn_state%restart_CSp, .false., filename=restartname, GV=glb%ocn_state%GV)
-
-      ! write name of restart file in the rpointer file
-      nu = shr_file_getUnit()
-      if (is_root_pe()) then
-        restart_pointer_file = trim(glb%pointer_filename)
-        open(nu, file=restart_pointer_file, form='formatted', status='unknown')
+    ! write name of restart file in the rpointer file
+    nu = shr_file_getUnit()
+    if (is_root_pe()) then
+      restart_pointer_file = trim(glb%pointer_filename)
+      open(nu, file=restart_pointer_file, form='formatted', status='unknown')
+      write(nu,'(a)') trim(restartname) //'.nc'
+      if (glb%use_ice_shelf) then
+        write(restartname,'(A,".shelf.r.",I4.4,"-",I2.2,"-",I2.2,"-",I5.5)') trim(runid), year, month, day, seconds
         write(nu,'(a)') trim(restartname) //'.nc'
-        close(nu)
-        write(glb%stdout,*) 'ocn restart pointer file written: ',trim(restartname)
       endif
-      call shr_file_freeUnit(nu)
+      close(nu)
+      write(glb%stdout,*) 'ocn restart pointer file written: ',trim(restartname)
+    endif
+    call shr_file_freeUnit(nu)
 
-      ! Is this needed?
-      call forcing_save_restart(glb%ocn_state%forcing_CSp, glb%grid, glb%ocn_state%Time, &
+    ! Is this needed?
+    call forcing_save_restart(glb%ocn_state%forcing_CSp, glb%grid, glb%ocn_state%Time, &
                               glb%ocn_state%dirs%restart_output_dir, .true.)
 
-      ! Once we start using the ice shelf module, the following will be needed
-      if (glb%ocn_state%use_ice_shelf) then
-        call ice_shelf_save_restart(glb%ocn_state%Ice_shelf_CSp, glb%ocn_state%Time, &
-                                    glb%ocn_state%dirs%restart_output_dir, .true.)
-      endif
-
+    ! Once we start using the ice shelf module, the following will be needed
+    if (glb%use_ice_shelf) then
+      write(restartname,'(A,".shelf.r.",I4.4,"-",I2.2,"-",I2.2,"-",I5.5)') trim(runid), year, month, day, seconds
+      call ice_shelf_save_restart(glb%ocn_state%Ice_shelf_CSp, glb%ocn_state%Time, &
+                                  glb%ocn_state%dirs%restart_output_dir, .false., filename=restartname)
     endif
 
-    ! reset shr logging to original values
-    if (is_root_pe()) then
-      call shr_file_setLogUnit(shrlogunit)
-      call shr_file_setLogLevel(shrloglev)
-    endif
+  endif
 
-  enddo ! forcing time step
+  ! reset shr logging to original values
+  if (is_root_pe()) then
+    call shr_file_setLogUnit(shrlogunit)
+    call shr_file_setLogLevel(shrloglev)
+  endif
 
   ! Return export state to driver
   call ocn_export(glb%ind, glb%ocn_public, glb%grid, o2x_o%rattr, mom_cpl_dt)

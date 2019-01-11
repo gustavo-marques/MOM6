@@ -1054,7 +1054,8 @@ end subroutine add_shelf_flux
 
 
 !> Initializes shelf model data, parameters and diagnostics
-subroutine initialize_ice_shelf(param_file, ocn_grid, Time, CS, diag, forces, fluxes, Time_in, solo_ice_sheet_in)
+subroutine initialize_ice_shelf(param_file, ocn_grid, Time, CS, diag, forces, fluxes, Time_in, &
+                                solo_ice_sheet_in, restart_ice_shelf)
   type(param_file_type),        intent(in)    :: param_file !< A structure to parse for run-time parameters
   type(ocean_grid_type),        pointer       :: ocn_grid   !< The calling ocean model's horizontal grid structure
   type(time_type),              intent(inout) :: Time !< The clock that that will indicate the model time
@@ -1066,7 +1067,9 @@ subroutine initialize_ice_shelf(param_file, ocn_grid, Time, CS, diag, forces, fl
   type(time_type),    optional, intent(in)    :: Time_in !< The time at initialization.
   logical,            optional, intent(in)    :: solo_ice_sheet_in !< If present, this indicates whether
                                                    !! a solo ice-sheet driver.
+  character(len=*),optional, intent(in)       :: restart_ice_shelf !< If present, name of restart file to read
 
+  ! local variables
   type(ocean_grid_type), pointer :: G  => NULL(), OG  => NULL() ! Pointers to grids for convenience.
   type(ice_shelf_state), pointer :: ISS => NULL() !< A structure with elements that describe
                                           !! the ice-shelf state
@@ -1094,7 +1097,7 @@ subroutine initialize_ice_shelf(param_file, ocn_grid, Time, CS, diag, forces, fl
   !   Go through all of the infrastructure initialization calls, since this is
   ! being treated as an independent component that just happens to use the
   ! MOM's grid and infrastructure.
-  call Get_MOM_Input(dirs=dirs)
+  call Get_MOM_Input(dirs=dirs, default_input_filename=restart_ice_shelf)
 
   ! Set up the ice-shelf domain and grid
   wd_halos(:)=0
@@ -1414,7 +1417,8 @@ subroutine initialize_ice_shelf(param_file, ocn_grid, Time, CS, diag, forces, fl
 
   new_sim = .false.
   if ((dirs%input_filename(1:1) == 'n') .and. &
-      (LEN_TRIM(dirs%input_filename) == 1)) new_sim = .true.
+      (LEN_TRIM(dirs%input_filename) == 1) .and. &
+      (LEN_TRIM(restart_ice_shelf) == 1)) new_sim = .true.
 
   if (CS%override_shelf_movement .and. CS%mass_from_file) then
 
@@ -1463,8 +1467,13 @@ subroutine initialize_ice_shelf(param_file, ocn_grid, Time, CS, diag, forces, fl
   elseif (.not.new_sim) then
     ! This line calls a subroutine that reads the initial conditions from a restart file.
     call MOM_mesg("MOM_ice_shelf.F90, initialize_ice_shelf: Restoring ice shelf from file.")
-    call restore_state(dirs%input_filename, dirs%restart_input_dir, Time, &
-                       G, CS%restart_CSp)
+    if ((LEN_TRIM(restart_ice_shelf) >= 1)) then
+      call restore_state(restart_ice_shelf, dirs%restart_input_dir, Time, &
+                         G, CS%restart_CSp)
+    else
+      call restore_state(dirs%input_filename, dirs%restart_input_dir, Time, &
+                         G, CS%restart_CSp)
+    endif
   endif ! .not. new_sim
 
   CS%Time = Time
@@ -1721,15 +1730,16 @@ subroutine update_mass_land_ice(G, CS, ISS, fluxes)
 end subroutine update_mass_land_ice
 
 !> Save the ice shelf restart file
-subroutine ice_shelf_save_restart(CS, Time, directory, time_stamped, filename_suffix)
+subroutine ice_shelf_save_restart(CS, Time, directory, time_stamped, filename)
   type(ice_shelf_CS),         pointer    :: CS !< ice shelf control structure
   type(time_type),            intent(in) :: Time !< model time at this call
   character(len=*), optional, intent(in) :: directory !< An optional directory into which to write
                                                !! these restart files.
   logical,          optional, intent(in) :: time_stamped !< f true, the restart file names include
                                                !! a unique time stamp.  The default is false.
-  character(len=*), optional, intent(in) :: filename_suffix !< An optional suffix (e.g., a
-                                               !! time-stamp) to append to the restart file names.
+  character(len=*), optional, intent(in) :: filename !< An optional filename that overrides
+                                               !!  the name in CS%restartfile.
+
   ! local variables
   type(ocean_grid_type), pointer :: G => NULL()
   character(len=200) :: restart_dir
@@ -1739,7 +1749,7 @@ subroutine ice_shelf_save_restart(CS, Time, directory, time_stamped, filename_su
   if (present(directory)) then ; restart_dir = directory
   else ; restart_dir = CS%restart_output_dir ; endif
 
-  call save_restart(restart_dir, Time, CS%grid, CS%restart_CSp, time_stamped)
+  call save_restart(restart_dir, Time, CS%grid, CS%restart_CSp, time_stamped=time_stamped, filename=filename)
 
 end subroutine ice_shelf_save_restart
 
