@@ -9,8 +9,8 @@ module ocn_cap_methods
   use MOM_error_handler,   only: is_root_pe
   use mpp_domains_mod,     only: mpp_get_compute_domain
   use ocn_cpl_indices,     only: cpl_indices_type
-  use MOM_ice_shelf,       only: ice_shelf_CS
-  use MOM_ice_shelf_state, only: ice_shelf_state, get_ice_shelf_mass
+  use MOM_ice_shelf,       only: ice_shelf_CS, get_ice_shelf_mass
+  use MOM_ice_shelf_state, only: ice_shelf_state
   implicit none
   private
 
@@ -31,7 +31,7 @@ subroutine ocn_import(x2o, ind, grid, ice_ocean_boundary, ocean_public, ice_shel
   type(ocean_grid_type)         , intent(in)    :: grid               !< Ocean model grid
   type(ice_ocean_boundary_type) , intent(inout) :: ice_ocean_boundary !< Ocean boundary forcing
   type(ocean_public_type)       , intent(in)    :: ocean_public       !< Ocean surface state
-  type(ice_shelf_CS)            , intent(in)    :: ice_shelf_CSp      !< private structure containing
+  type(ice_shelf_CS)            , pointer       :: ice_shelf_CSp      !< private structure containing
                                                                       !! the ice shelf state.
   integer                       , intent(in)    :: logunit            !< Unit for stdout output
   type(ESMF_Clock)              , intent(in)    :: EClock             !< Time and time step ? \todo Why must this
@@ -134,7 +134,7 @@ subroutine ocn_import(x2o, ind, grid, ice_ocean_boundary, ocean_public, ice_shel
 
   ! import glc fields
   if (glc_present) then
-    call get_ice_shelf_mass(ice_shelf_CSp%ISS, mass_shelf(:,:), grid)
+    call get_ice_shelf_mass(ice_shelf_CSp, mass_shelf(:,:), grid)
     call pass_var(mass_shelf, grid%domain)
     k = 0
     do j = jsc, jec
@@ -144,7 +144,7 @@ subroutine ocn_import(x2o, ind, grid, ice_ocean_boundary, ocean_public, ice_shel
         ! The following is a workaround to compute mass tendency.
         if (x2o(ind%x2o_Sg_thck,k) /= 0.0) then
           ! (thck_{n+1} - thck_{n})/dt
-          mass_tend = (x2o(ind%x2o_Sg_thck,k) - ISS%mass_shelf(i,j))/ glc_cpl_dt
+          mass_tend = (x2o(ind%x2o_Sg_thck,k) - mass_shelf(i,j))/ glc_cpl_dt
         else
           mass_tend = 0.0
         endif
