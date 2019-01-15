@@ -142,8 +142,8 @@ type, public :: forcing
   real, pointer, dimension(:,:) :: iceshelf_melt => NULL() !< Ice shelf melt rate (positive)
                                  !! or freezing (negative) (in kg m-2 s-1)
   real, pointer, dimension(:,:) :: mass_land_ice => NULL()
-                !< Ice mass (kg), computed by a land ice model (e.g., CISM), which should be added/removed so that
-                !! the land ice thickness converges to that given by the land model after a coupled time-step.
+                !< Ice mass tendency (kg m-2 s-1), computed by a land ice model (e.g., CISM), which should be added/removed
+                !! so that the land ice thickness converges to that given by the land model after a coupled time-step.
                 !! In other words, this is the land ice mass tendency.
   ! Scalars set by surface forcing modules
   real :: vPrecGlobalAdj     !< adjustment to restoring vprec to zero out global net ( kg/(m^2 s) )
@@ -230,13 +230,14 @@ type, public :: forcing_diags
 
   !>@{ Forcing diagnostic handles
   ! mass flux diagnostic handles
-  integer :: id_prcme        = -1, id_evap        = -1
-  integer :: id_precip       = -1, id_vprec       = -1
-  integer :: id_lprec        = -1, id_fprec       = -1
-  integer :: id_lrunoff      = -1, id_frunoff     = -1
-  integer :: id_net_massout  = -1, id_net_massin  = -1
-  integer :: id_massout_flux = -1, id_massin_flux = -1
-  integer :: id_seaice_melt  = -1
+  integer :: id_prcme          = -1, id_evap        = -1
+  integer :: id_precip         = -1, id_vprec       = -1
+  integer :: id_lprec          = -1, id_fprec       = -1
+  integer :: id_lrunoff        = -1, id_frunoff     = -1
+  integer :: id_net_massout    = -1, id_net_massin  = -1
+  integer :: id_massout_flux   = -1, id_massin_flux = -1
+  integer :: id_seaice_melt    = -1
+  integer :: id_mass_land_ice  = -1
 
   ! global area integrated mass flux diagnostic handles
   integer :: id_total_prcme        = -1, id_total_evap        = -1
@@ -1215,6 +1216,9 @@ subroutine register_forcing_type_diags(Time, diag, use_temperature, handles, use
   handles%id_precip = register_diag_field('ocean_model', 'precip', diag%axesT1, Time, &
         'Liquid + frozen precipitation into ocean', 'kg m-2 s-1')
 
+  handles%id_mass_land_ice = register_diag_field('ocean_model', 'mass_land_ice', diag%axesT1, Time, &
+        'Land ice mass tendency', 'kg m-2 s-1')
+
   handles%id_fprec = register_diag_field('ocean_model', 'fprec', diag%axesT1, Time,     &
         'Frozen precipitation into ocean', 'kg m-2 s-1',                                &
         standard_name='snowfall_flux', cmor_field_name='prsn',                          &
@@ -2077,6 +2081,8 @@ subroutine forcing_diagnostics(fluxes, sfc_state, dt, G, diag, handles)
   if (query_averaging_enabled(diag)) then
 
     ! post the diagnostics for surface mass fluxes ==================================
+
+    if (handles%id_mass_land_ice > 0) call post_data(handles%id_mass_land_ice,fluxes%mass_land_ice,diag)
 
     if (handles%id_prcme > 0 .or. handles%id_total_prcme > 0 .or. handles%id_prcme_ga > 0) then
       do j=js,je ; do i=is,ie
