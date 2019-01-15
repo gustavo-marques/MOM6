@@ -146,7 +146,7 @@ subroutine ocn_import(x2o, ind, grid, ice_ocean_boundary, ocean_public, ice_shel
         ! TODO: CISM should pass mass tendency to the coupler, in kg m-2 s-1
         ! The following is a workaround to compute mass tendency.
         if (x2o(ind%x2o_Sg_thck,k) /= 0.0) then
-          mass_tend = (ISS%mass_shelf(ig,jg) - x2o(ind%x2o_Sg_thck,k))/ glc_cpl_dt
+          mass_tend = (x2o(ind%x2o_Sg_thck,k) - ISS%mass_shelf(ig,jg))/ glc_cpl_dt
         else
           mass_tend = 0.0
         endif
