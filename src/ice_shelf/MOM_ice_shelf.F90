@@ -157,7 +157,7 @@ type, public :: ice_shelf_CS !; private
              id_u_ml = -1, id_v_ml = -1, id_sbdry = -1, &
              id_h_shelf = -1, id_h_mask = -1, &
              id_surf_elev = -1, id_bathym = -1, &
-             id_area_shelf_h = -1, &
+             id_area_shelf_h = -1, id_mass_land_ice = -1, &
              id_ustar_shelf = -1, id_shelf_mass = -1, id_mass_flux = -1
   !>@}
 
@@ -636,7 +636,8 @@ subroutine shelf_calc_flux(state, fluxes, Time, time_step, CS, forces)
   endif
 
   ! Melting has been computed, now is time to update thickness and mass
-  if ( CS%override_shelf_movement .and. (.not.CS%mass_from_file)) then
+  if ( CS%override_shelf_movement .and. (.not.CS%mass_from_file) .and. &
+     (.not. CS%mass_from_coupler)) then
     call change_thickness_using_melt(ISS, G, time_step, fluxes, CS%density_ice, CS%debug)
   endif
 
@@ -658,6 +659,7 @@ subroutine shelf_calc_flux(state, fluxes, Time, time_step, CS, forces)
 
   call enable_averaging(time_step,Time,CS%diag)
   if (CS%id_shelf_mass > 0) call post_data(CS%id_shelf_mass, ISS%mass_shelf, CS%diag)
+  if (CS%id_mass_land_ice > 0) call post_data(CS%id_mass_land_ice, fluxes%mass_land_ice, CS%diag)
   if (CS%id_area_shelf_h > 0) call post_data(CS%id_area_shelf_h, ISS%area_shelf_h, CS%diag)
   if (CS%id_ustar_shelf > 0) call post_data(CS%id_ustar_shelf, fluxes%ustar_shelf, CS%diag)
   if (CS%id_melt > 0) call post_data(CS%id_melt, fluxes%iceshelf_melt, CS%diag)
@@ -1530,6 +1532,8 @@ subroutine initialize_ice_shelf(param_file, ocn_grid, Time, CS, diag, forces, fl
      'Ice Shelf Area in cell', 'meter-2')
   CS%id_shelf_mass = register_diag_field('ocean_model', 'shelf_mass', CS%diag%axesT1, CS%Time, &
      'mass of shelf', 'kg/m^2')
+  CS%id_mass_land_ice = register_diag_field('ocean_model', 'land_ice_mass_ten', CS%diag%axesT1, CS%Time, &
+     'land ice mass tendendy', 'kg m-2 s-1')
   CS%id_h_shelf = register_diag_field('ocean_model', 'h_shelf', CS%diag%axesT1, CS%Time, &
        'ice shelf thickness', 'm')
   CS%id_mass_flux = register_diag_field('ocean_model', 'mass_flux', CS%diag%axesT1,&
