@@ -141,6 +141,10 @@ type, public :: forcing
                                  !! exactly 0 away from shelves or on land.
   real, pointer, dimension(:,:) :: iceshelf_melt => NULL() !< Ice shelf melt rate (positive)
                                  !! or freezing (negative) (in kg m-2 s-1)
+  real, pointer, dimension(:,:) :: mass_land_ice => NULL() !< Ice mass tendency (kg m-2 s-1), computed by
+                !! a land ice model (e.g., CISM), which should be added/removed so that the land ice thickness
+                !! converges to that given by the land model after a coupled time-step.
+                !! In other words, this is the land ice mass tendency.
   ! Scalars set by surface forcing modules
   real :: vPrecGlobalAdj     !< adjustment to restoring vprec to zero out global net ( kg/(m^2 s) )
   real :: saltFluxGlobalAdj  !< adjustment to restoring salt flux to zero out global net ( kg salt/(m^2 s) )
