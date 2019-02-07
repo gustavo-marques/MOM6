@@ -150,6 +150,8 @@ type, public :: ice_shelf_CS !; private
   real    :: lambda1                     !< liquidus coeff., Needed if find_salt_root = true
   real    :: lambda2                     !< liquidus coeff., Needed if find_salt_root = true
   real    :: lambda3                     !< liquidus coeff., Needed if find_salt_root = true
+  integer :: n_smooth_melt               !< Number of times to smooth melt rate using a laplacian filter.
+
   !>@{ Diagnostic handles
   integer :: id_melt = -1, id_exch_vel_s = -1, id_exch_vel_t = -1, &
              id_tfreeze = -1, id_tfl_shelf = -1, &
@@ -312,6 +314,8 @@ subroutine shelf_calc_flux(state, fluxes, Time, time_step, CS, forces)
     if (CS%mass_from_file)    call update_shelf_mass(G, CS, ISS, Time)
     ! 2) via data provided by the coupler. This is how MOM6 receives the ice sheet/shelf
     ! mass from CISM. This only implemented via MCT cap.
+    ! Option to smooth fluxes%mass_land_ice
+    if (CS%n_smooth_melt >= 1) call smooth_var(G,fluxes%mass_land_ice, CS, state%Hml)
     if (CS%mass_from_coupler) call update_mass_land_ice(G, CS, ISS, fluxes)
   endif
 
@@ -576,6 +580,9 @@ subroutine shelf_calc_flux(state, fluxes, Time, time_step, CS, forces)
 
     enddo ! i-loop
   enddo ! j-loop
+
+  ! option to water_flux, which is converted to melt rate below
+  if (CS%n_smooth_melt >= 1) call smooth_var(G,ISS%water_flux, CS)
 
   ! ISS%water_flux = net liquid water into the ocean ( kg/(m^2 s) )
   ! We want melt in m/year
@@ -1199,6 +1206,11 @@ subroutine initialize_ice_shelf(param_file, ocn_grid, Time, CS, diag, forces, fl
                 CS%T0, "Surface temperature in the resoring region.", &
                 default=-1.9, do_not_log=.true.)
 
+  call get_param(param_file, mdl, "N_SMOOTH_MELT_RATE", CS%n_smooth_melt, &
+                 "If >= 1, apply a 1-1-4-1-1 Laplacian filter on the melt rate field, \n"//&
+                 "N_SMOOTH_MELT_RATE times, to reduce horizontal grid-point noise, or. \n"//&
+                 " checkerboard noise. If = 0, does not apply the filter.", default=0)
+
   call get_param(param_file, mdl, "SHELF_3EQ_GAMMA", CS%const_gamma, &
                  "If true, user specifies a constant nondimensional heat-transfer coefficient \n"//&
                  "(GAMMA_T_3EQ), from which the salt-transfer coefficient is then computed \n"//&
@@ -1733,6 +1745,59 @@ subroutine update_mass_land_ice(G, CS, ISS, fluxes)
   call pass_var(ISS%mass_shelf, G%domain)
 
 end subroutine update_mass_land_ice
+
+!> Apply a 1-1-4-1-1 Laplacian filter n_smooth_melt times on any 2D field (var) to reduce
+!! horizontal two-grid-point noise. If bld is included in the call, smoothing is not
+!! applied at points where bld(i,j)<0.01 (i.e., grounded points).
+subroutine smooth_var(G,var,CS,bld)
+  ! Arguments
+  type(ice_shelf_CS),                           pointer    :: CS    !< Control structure for this module
+  type(ocean_grid_type),                        intent(in) :: G     !< Ocean grid control structure
+  real, dimension(SZI_(G),SZJ_(G)),             intent(inout) :: var!< any 2D array to be filtered
+  real, dimension(SZI_(G),SZJ_(G)),       optional,intent(in) :: bld!< boundary layer depth [m]
+
+  ! local variables
+  real, dimension(SZI_(G),SZJ_(G)) :: var_original !< original var array
+  real :: wc, ww, we, wn, ws !< averaging weights for smoothing
+  integer :: i, j, k, s      !< indices
+  logical :: skip_grounded   !< if true, does not apply smoothing when bld<0.01 m
+
+  skip_grounded = present(bld)
+
+  do s=1,CS%n_smooth_melt
+
+    ! Update halos
+    call pass_var(var, G%Domain)
+
+    var_original = var
+    ! apply smoothing on melt rate
+    do j = G%jsc, G%jec
+      do i = G%isc, G%iec
+
+        ! skip land points
+        if (var(i,j)==0.) cycle
+        ! skip grounded points
+        if (skip_grounded) then
+          if (bld(i,j)<0.01) cycle
+        endif
+
+        ! compute weights
+        ww = 0.125
+        we = 0.125
+        ws = 0.125
+        wn = 0.125
+        wc = 1.0 - (ww+we+wn+ws)
+
+        var(i,j) =      wc * var_original(i,j)   &
+                      + ww * var_original(i-1,j) &
+                      + we * var_original(i+1,j) &
+                      + ws * var_original(i,j-1) &
+                      + wn * var_original(i,j+1)
+
+      enddo
+    enddo
+  enddo ! s-loop
+end subroutine smooth_var
 
 !> Save the ice shelf restart file
 subroutine ice_shelf_save_restart(CS, Time, directory, time_stamped, filename)
