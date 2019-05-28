@@ -1,30 +1,8 @@
+!> The subroutines here provide hooks for document generation functions at
+!! various levels of granularity.
 module MOM_document
-!***********************************************************************
-!*                   GNU General Public License                        *
-!* This file is a part of MOM.                                         *
-!*                                                                     *
-!* MOM is free software; you can redistribute it and/or modify it and  *
-!* are expected to follow the terms of the GNU General Public License  *
-!* as published by the Free Software Foundation; either version 2 of   *
-!* the License, or (at your option) any later version.                 *
-!*                                                                     *
-!* MOM is distributed in the hope that it will be useful, but WITHOUT  *
-!* ANY WARRANTY; without even the implied warranty of MERCHANTABILITY  *
-!* or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU General Public    *
-!* License for more details.                                           *
-!*                                                                     *
-!* For the full text of the GNU General Public License,                *
-!* write to: Free Software Foundation, Inc.,                           *
-!*           675 Mass Ave, Cambridge, MA 02139, USA.                   *
-!* or see:   http://www.gnu.org/licenses/gpl.html                      *
-!***********************************************************************
 
-!********+*********+*********+*********+*********+*********+*********+**
-!*                                                                     *
-!*    The subroutines here provide hooks for document generation       *
-!*  functions at various levels of granularity.                        *
-!*                                                                     *
-!********+*********+*********+*********+*********+*********+*********+**
+! This file is part of MOM6. See LICENSE.md for the license.
 
 use MOM_time_manager, only : time_type
 use MOM_error_handler, only : MOM_error, FATAL, WARNING, is_root_pe
@@ -34,6 +12,7 @@ implicit none ; private
 public doc_param, doc_subroutine, doc_function, doc_module, doc_init, doc_end
 public doc_openBlock, doc_closeBlock
 
+!> Document parameter values
 interface doc_param
   module procedure doc_param_none, &
                    doc_param_logical, doc_param_logical_array, &
@@ -43,41 +22,49 @@ interface doc_param
                    doc_param_time
 end interface
 
-integer, parameter :: mLen = 1240 ! Length of interface/message strings
+integer, parameter :: mLen = 1240 !< Length of interface/message strings
 
+!> A structure that controls where the documentation occurs, its veborsity and formatting.
 type, public :: doc_type ; private
-  integer :: unitAll = -1           ! The open unit number for docFileBase + .all.
-  integer :: unitShort = -1         ! The open unit number for docFileBase + .short.
-  integer :: unitLayout = -1        ! The open unit number for docFileBase + .layout.
-  logical :: filesAreOpen = .false. ! True if any files were successfully opened.
-  character(len=mLen) :: docFileBase = '' ! The basename of the files where run-time
-                                    ! parameters, settings and defaults are documented.
-  logical :: complete = .true.      ! If true, document all parameters.
-  logical :: minimal = .true.       ! If true, document non-default parameters.
-  logical :: layout = .true.        ! If true, document layout parameters.
-  logical :: defineSyntax = .false. ! If true, use #def syntax instead of a=b syntax
-  logical :: warnOnConflicts = .false. ! Cause a WARNING error if defaults differ.
-  integer :: commentColumn = 32     ! Number of spaces before the comment marker.
-  type(link_msg), pointer :: chain_msg => NULL() ! Db of messages
-  character(len=240) :: blockPrefix = '' ! The full name of the current block.
+  integer :: unitAll = -1           !< The open unit number for docFileBase + .all.
+  integer :: unitShort = -1         !< The open unit number for docFileBase + .short.
+  integer :: unitLayout = -1        !< The open unit number for docFileBase + .layout.
+  integer :: unitDebugging  = -1    !< The open unit number for docFileBase + .debugging.
+  logical :: filesAreOpen = .false. !< True if any files were successfully opened.
+  character(len=mLen) :: docFileBase = '' !< The basename of the files where run-time
+                                    !! parameters, settings and defaults are documented.
+  logical :: complete = .true.      !< If true, document all parameters.
+  logical :: minimal = .true.       !< If true, document non-default parameters.
+  logical :: layout = .true.        !< If true, document layout parameters.
+  logical :: debugging = .true.     !< If true, document debugging parameters.
+  logical :: defineSyntax = .false. !< If true, use '\#def' syntax instead of a=b syntax
+  logical :: warnOnConflicts = .false. !< Cause a WARNING error if defaults differ.
+  integer :: commentColumn = 32     !< Number of spaces before the comment marker.
+  type(link_msg), pointer :: chain_msg => NULL() !< Database of messages
+  character(len=240) :: blockPrefix = '' !< The full name of the current block.
 end type doc_type
 
+!> A linked list of the parameter documentation messages that have been issued so far.
 type :: link_msg ; private
-  type(link_msg), pointer :: next => NULL()  ! Facilitates linked list
-  character(len=80) :: name                  ! Parameter name
-  character(len=620) :: msg                  ! Parameter value and default
+  type(link_msg), pointer :: next => NULL()  !< Facilitates linked list
+  character(len=80) :: name                  !< Parameter name
+  character(len=620) :: msg                  !< Parameter value and default
 end type link_msg
 
-character(len=4), parameter :: STRING_TRUE = 'True'
-character(len=5), parameter :: STRING_FALSE = 'False'
+character(len=4), parameter :: STRING_TRUE  = 'True'  !< A string for true logicals
+character(len=5), parameter :: STRING_FALSE = 'False' !< A string for false logicals
 
 contains
 
 ! ----------------------------------------------------------------------
 
+!> This subroutine handles parameter documentation with no value.
 subroutine doc_param_none(doc, varname, desc, units)
-  type(doc_type),   pointer    :: doc
-  character(len=*), intent(in) :: varname, desc, units
+  type(doc_type),   pointer    :: doc     !< A pointer to a structure that controls where the
+                                          !! documentation occurs and its formatting
+  character(len=*), intent(in) :: varname !< The name of the parameter being documented
+  character(len=*), intent(in) :: desc    !< A description of the parameter being documented
+  character(len=*), intent(in) :: units   !< The units of the parameter being documented
 ! This subroutine handles parameter documentation with no value.
   integer :: numspc
   character(len=mLen) :: mesg
@@ -95,12 +82,18 @@ subroutine doc_param_none(doc, varname, desc, units)
   endif
 end subroutine doc_param_none
 
-subroutine doc_param_logical(doc, varname, desc, units, val, default, layoutParam)
-  type(doc_type),   pointer    :: doc
-  character(len=*), intent(in) :: varname, desc, units
-  logical,          intent(in) :: val
-  logical,          optional, intent(in) :: default
-  logical,          optional, intent(in) :: layoutParam
+!> This subroutine handles parameter documentation for logicals.
+subroutine doc_param_logical(doc, varname, desc, units, val, default, &
+                             layoutParam, debuggingParam)
+  type(doc_type),    pointer    :: doc     !< A pointer to a structure that controls where the
+                                           !! documentation occurs and its formatting
+  character(len=*),  intent(in) :: varname !< The name of the parameter being documented
+  character(len=*),  intent(in) :: desc    !< A description of the parameter being documented
+  character(len=*),  intent(in) :: units   !< The units of the parameter being documented
+  logical,           intent(in) :: val     !< The value of this parameter
+  logical, optional, intent(in) :: default !< The default value of this parameter
+  logical, optional, intent(in) :: layoutParam !< If present and true, this is a layout parameter.
+  logical, optional, intent(in) :: debuggingParam !< If present and true, this is a debugging parameter.
 ! This subroutine handles parameter documentation for logicals.
   character(len=mLen) :: mesg
   logical :: equalsDefault
@@ -126,16 +119,23 @@ subroutine doc_param_logical(doc, varname, desc, units, val, default, layoutPara
     endif
 
     if (mesgHasBeenDocumented(doc, varName, mesg)) return ! Avoid duplicates
-    call writeMessageAndDesc(doc, mesg, desc, equalsDefault, layoutParam=layoutParam)
+    call writeMessageAndDesc(doc, mesg, desc, equalsDefault, &
+                             layoutParam=layoutParam, debuggingParam=debuggingParam)
   endif
 end subroutine doc_param_logical
 
-subroutine doc_param_logical_array(doc, varname, desc, units, vals, default, layoutParam)
-  type(doc_type),   pointer    :: doc
-  character(len=*), intent(in) :: varname, desc, units
-  logical,          intent(in) :: vals(:)
-  logical,          optional, intent(in) :: default
-  logical,          optional, intent(in) :: layoutParam
+!> This subroutine handles parameter documentation for arrays of logicals.
+subroutine doc_param_logical_array(doc, varname, desc, units, vals, default, &
+                                   layoutParam, debuggingParam)
+  type(doc_type),    pointer    :: doc     !< A pointer to a structure that controls where the
+                                           !! documentation occurs and its formatting
+  character(len=*),  intent(in) :: varname !< The name of the parameter being documented
+  character(len=*),  intent(in) :: desc    !< A description of the parameter being documented
+  character(len=*),  intent(in) :: units   !< The units of the parameter being documented
+  logical,           intent(in) :: vals(:) !< The array of values to record
+  logical, optional, intent(in) :: default !< The default value of this parameter
+  logical, optional, intent(in) :: layoutParam !< If present and true, this is a layout parameter.
+  logical, optional, intent(in) :: debuggingParam !< If present and true, this is a debugging parameter.
 ! This subroutine handles parameter documentation for arrays of logicals.
   integer :: i
   character(len=mLen) :: mesg
@@ -169,16 +169,23 @@ subroutine doc_param_logical_array(doc, varname, desc, units, vals, default, lay
     endif
 
     if (mesgHasBeenDocumented(doc, varName, mesg)) return ! Avoid duplicates
-    call writeMessageAndDesc(doc, mesg, desc, equalsDefault, layoutParam=layoutParam)
+    call writeMessageAndDesc(doc, mesg, desc, equalsDefault, &
+                             layoutParam=layoutParam, debuggingParam=debuggingParam)
   endif
 end subroutine doc_param_logical_array
 
-subroutine doc_param_int(doc, varname, desc, units, val, default, layoutParam)
-  type(doc_type),   pointer    :: doc
-  character(len=*), intent(in) :: varname, desc, units
-  integer,          intent(in) :: val
-  integer,          optional, intent(in) :: default
-  logical,          optional, intent(in) :: layoutParam
+!> This subroutine handles parameter documentation for integers.
+subroutine doc_param_int(doc, varname, desc, units, val, default, &
+                         layoutParam, debuggingParam)
+  type(doc_type),    pointer    :: doc     !< A pointer to a structure that controls where the
+                                           !! documentation occurs and its formatting
+  character(len=*),  intent(in) :: varname !< The name of the parameter being documented
+  character(len=*),  intent(in) :: desc    !< A description of the parameter being documented
+  character(len=*),  intent(in) :: units   !< The units of the parameter being documented
+  integer,           intent(in) :: val     !< The value of this parameter
+  integer, optional, intent(in) :: default !< The default value of this parameter
+  logical, optional, intent(in) :: layoutParam !< If present and true, this is a layout parameter.
+  logical, optional, intent(in) :: debuggingParam !< If present and true, this is a debugging parameter.
 ! This subroutine handles parameter documentation for integers.
   character(len=mLen) :: mesg
   character(len=doc%commentColumn)  :: valstring
@@ -198,16 +205,23 @@ subroutine doc_param_int(doc, varname, desc, units, val, default, layoutParam)
     endif
 
     if (mesgHasBeenDocumented(doc, varName, mesg)) return ! Avoid duplicates
-    call writeMessageAndDesc(doc, mesg, desc, equalsDefault, layoutParam=layoutParam)
+    call writeMessageAndDesc(doc, mesg, desc, equalsDefault, &
+                             layoutParam=layoutParam, debuggingParam=debuggingParam)
   endif
 end subroutine doc_param_int
 
-subroutine doc_param_int_array(doc, varname, desc, units, vals, default, layoutParam)
-  type(doc_type),   pointer    :: doc
-  character(len=*), intent(in) :: varname, desc, units
-  integer,          intent(in) :: vals(:)
-  integer,          optional, intent(in) :: default
-  logical,          optional, intent(in) :: layoutParam
+!> This subroutine handles parameter documentation for arrays of integers.
+subroutine doc_param_int_array(doc, varname, desc, units, vals, default, &
+                               layoutParam, debuggingParam)
+  type(doc_type),    pointer    :: doc     !< A pointer to a structure that controls where the
+                                           !! documentation occurs and its formatting
+  character(len=*),  intent(in) :: varname !< The name of the parameter being documented
+  character(len=*),  intent(in) :: desc    !< A description of the parameter being documented
+  character(len=*),  intent(in) :: units   !< The units of the parameter being documented
+  integer,           intent(in) :: vals(:) !< The array of values to record
+  integer, optional, intent(in) :: default !< The default value of this parameter
+  logical, optional, intent(in) :: layoutParam !< If present and true, this is a layout parameter.
+  logical, optional, intent(in) :: debuggingParam !< If present and true, this is a debugging parameter.
 ! This subroutine handles parameter documentation for arrays of integers.
   integer :: i
   character(len=mLen) :: mesg
@@ -233,16 +247,22 @@ subroutine doc_param_int_array(doc, varname, desc, units, vals, default, layoutP
     endif
 
     if (mesgHasBeenDocumented(doc, varName, mesg)) return ! Avoid duplicates
-    call writeMessageAndDesc(doc, mesg, desc, equalsDefault, layoutParam=layoutParam)
+    call writeMessageAndDesc(doc, mesg, desc, equalsDefault, &
+                             layoutParam=layoutParam, debuggingParam=debuggingParam)
   endif
 
 end subroutine doc_param_int_array
 
-subroutine doc_param_real(doc, varname, desc, units, val, default)
-  type(doc_type),   pointer    :: doc
-  character(len=*), intent(in) :: varname, desc, units
-  real,             intent(in) :: val
-  real,             optional, intent(in) :: default
+!> This subroutine handles parameter documentation for reals.
+subroutine doc_param_real(doc, varname, desc, units, val, default, debuggingParam)
+  type(doc_type),    pointer    :: doc     !< A pointer to a structure that controls where the
+                                           !! documentation occurs and its formatting
+  character(len=*),  intent(in) :: varname !< The name of the parameter being documented
+  character(len=*),  intent(in) :: desc    !< A description of the parameter being documented
+  character(len=*),  intent(in) :: units   !< The units of the parameter being documented
+  real,              intent(in) :: val     !< The value of this parameter
+  real,    optional, intent(in) :: default !< The default value of this parameter
+  logical, optional, intent(in) :: debuggingParam !< If present and true, this is a debugging parameter.
 ! This subroutine handles parameter documentation for reals.
   character(len=mLen) :: mesg
   character(len=doc%commentColumn)  :: valstring
@@ -262,15 +282,21 @@ subroutine doc_param_real(doc, varname, desc, units, val, default)
     endif
 
     if (mesgHasBeenDocumented(doc, varName, mesg)) return ! Avoid duplicates
-    call writeMessageAndDesc(doc, mesg, desc, equalsDefault)
+    call writeMessageAndDesc(doc, mesg, desc, equalsDefault, &
+                             debuggingParam=debuggingParam)
   endif
 end subroutine doc_param_real
 
-subroutine doc_param_real_array(doc, varname, desc, units, vals, default)
-  type(doc_type),   pointer    :: doc
-  character(len=*), intent(in) :: varname, desc, units
-  real,             intent(in) :: vals(:)
-  real,             optional, intent(in) :: default
+!> This subroutine handles parameter documentation for arrays of reals.
+subroutine doc_param_real_array(doc, varname, desc, units, vals, default, debuggingParam)
+  type(doc_type),    pointer    :: doc     !< A pointer to a structure that controls where the
+                                           !! documentation occurs and its formatting
+  character(len=*),  intent(in) :: varname !< The name of the parameter being documented
+  character(len=*),  intent(in) :: desc    !< A description of the parameter being documented
+  character(len=*),  intent(in) :: units   !< The units of the parameter being documented
+  real,              intent(in) :: vals(:) !< The array of values to record
+  real,    optional, intent(in) :: default !< The default value of this parameter
+  logical, optional, intent(in) :: debuggingParam !< If present and true, this is a debugging parameter.
 ! This subroutine handles parameter documentation for arrays of reals.
   integer :: i
   character(len=mLen) :: mesg
@@ -293,17 +319,25 @@ subroutine doc_param_real_array(doc, varname, desc, units, vals, default)
     endif
 
     if (mesgHasBeenDocumented(doc, varName, mesg)) return ! Avoid duplicates
-    call writeMessageAndDesc(doc, mesg, desc, equalsDefault)
+    call writeMessageAndDesc(doc, mesg, desc, equalsDefault, &
+                             debuggingParam=debuggingParam)
   endif
 
 end subroutine doc_param_real_array
 
-subroutine doc_param_char(doc, varname, desc, units, val, default, layoutParam)
-  type(doc_type),   pointer    :: doc
-  character(len=*), intent(in) :: varname, desc, units
-  character(len=*), intent(in) :: val
-  character(len=*), optional, intent(in) :: default
-  logical,          optional, intent(in) :: layoutParam
+!> This subroutine handles parameter documentation for character strings.
+subroutine doc_param_char(doc, varname, desc, units, val, default, &
+                          layoutParam, debuggingParam)
+  type(doc_type),    pointer    :: doc     !< A pointer to a structure that controls where the
+                                           !! documentation occurs and its formatting
+  character(len=*),  intent(in) :: varname !< The name of the parameter being documented
+  character(len=*),  intent(in) :: desc    !< A description of the parameter being documented
+  character(len=*),  intent(in) :: units   !< The units of the parameter being documented
+  character(len=*),  intent(in) :: val     !< The value of the parameter
+  character(len=*), &
+           optional, intent(in) :: default !< The default value of this parameter
+  logical, optional, intent(in) :: layoutParam !< If present and true, this is a layout parameter.
+  logical, optional, intent(in) :: debuggingParam !< If present and true, this is a debugging parameter.
 ! This subroutine handles parameter documentation for character strings.
   character(len=mLen) :: mesg
   logical :: equalsDefault
@@ -321,15 +355,18 @@ subroutine doc_param_char(doc, varname, desc, units, val, default, layoutParam)
     endif
 
     if (mesgHasBeenDocumented(doc, varName, mesg)) return ! Avoid duplicates
-    call writeMessageAndDesc(doc, mesg, desc, equalsDefault, layoutParam=layoutParam)
+    call writeMessageAndDesc(doc, mesg, desc, equalsDefault, &
+                             layoutParam=layoutParam, debuggingParam=debuggingParam)
   endif
 
 end subroutine doc_param_char
 
+!> This subroutine handles documentation for opening a parameter block.
 subroutine doc_openBlock(doc, blockName, desc)
-  type(doc_type),   pointer    :: doc
-  character(len=*), intent(in) :: blockName
-  character(len=*), optional, intent(in) :: desc
+  type(doc_type),   pointer    :: doc       !< A pointer to a structure that controls where the
+                                            !! documentation occurs and its formatting
+  character(len=*), intent(in) :: blockName !< The name of the parameter block being opened
+  character(len=*), optional, intent(in) :: desc !< A description of the parameter block being opened
 ! This subroutine handles documentation for opening a parameter block.
   character(len=mLen) :: mesg
   character(len=doc%commentColumn) :: valstring
@@ -349,9 +386,11 @@ subroutine doc_openBlock(doc, blockName, desc)
   doc%blockPrefix = trim(doc%blockPrefix)//trim(blockName)//'%'
 end subroutine doc_openBlock
 
+!> This subroutine handles documentation for closing a parameter block.
 subroutine doc_closeBlock(doc, blockName)
-  type(doc_type),   pointer    :: doc
-  character(len=*), intent(in) :: blockName
+  type(doc_type),   pointer    :: doc !< A pointer to a structure that controls where the
+                                      !! documentation occurs and its formatting
+  character(len=*), intent(in) :: blockName !< The name of the parameter block being closed
 ! This subroutine handles documentation for closing a parameter block.
   character(len=mLen) :: mesg
   character(len=doc%commentColumn) :: valstring
@@ -373,11 +412,18 @@ subroutine doc_closeBlock(doc, blockName)
   endif
 end subroutine doc_closeBlock
 
-subroutine doc_param_time(doc, varname, desc, units, val, default)
-  type(doc_type),   pointer    :: doc
-  character(len=*), intent(in) :: varname, desc, units
-  type(time_type),  intent(in) :: val
-  type(time_type),  optional, intent(in) :: default
+!> This subroutine handles parameter documentation for time-type variables.
+subroutine doc_param_time(doc, varname, desc, units, val, default, &
+                          layoutParam, debuggingParam)
+  type(doc_type),   pointer    :: doc     !< A pointer to a structure that controls where the
+                                          !! documentation occurs and its formatting
+  character(len=*), intent(in) :: varname !< The name of the parameter being documented
+  character(len=*), intent(in) :: desc    !< A description of the parameter being documented
+  character(len=*), intent(in) :: units   !< The units of the parameter being documented
+  type(time_type),  intent(in) :: val     !< The value of the parameter
+  type(time_type),  optional, intent(in) :: default !< The default value of this parameter
+  logical,          optional, intent(in) :: layoutParam !< If present and true, this is a layout parameter.
+  logical,          optional, intent(in) :: debuggingParam !< If present and true, this is a debugging parameter.
 ! This subroutine handles parameter documentation for time-type variables.
 !  ### This needs to be written properly!
   integer :: numspc
@@ -394,30 +440,37 @@ subroutine doc_param_time(doc, varname, desc, units, val, default)
     if (len_trim(units) > 0) mesg = trim(mesg)//"   ["//trim(units)//"]"
 
     if (mesgHasBeenDocumented(doc, varName, mesg)) return ! Avoid duplicates
-    call writeMessageAndDesc(doc, mesg, desc, equalsDefault)
+    call writeMessageAndDesc(doc, mesg, desc, equalsDefault, &
+                             layoutParam=layoutParam, debuggingParam=debuggingParam)
   endif
 
 end subroutine doc_param_time
 
-subroutine writeMessageAndDesc(doc, vmesg, desc, valueWasDefault, indent, layoutParam)
-  type(doc_type),             intent(in) :: doc
-  character(len=*),           intent(in) :: vmesg, desc
-  logical,          optional, intent(in) :: valueWasDefault
-  integer,          optional, intent(in) :: indent
-  logical,          optional, intent(in) :: layoutParam
+!> This subroutine writes out the message and description to the documetation files.
+subroutine writeMessageAndDesc(doc, vmesg, desc, valueWasDefault, indent, &
+                               layoutParam, debuggingParam)
+  type(doc_type),    intent(in) :: doc     !< A pointer to a structure that controls where the
+                                           !! documentation occurs and its formatting
+  character(len=*),  intent(in) :: vmesg   !< A message with the parameter name, units, and default value.
+  character(len=*),  intent(in) :: desc    !< A description of the parameter being documented
+  logical, optional, intent(in) :: valueWasDefault !< If true, this parameter has its default value
+  integer, optional, intent(in) :: indent      !< An amount by which to indent this message
+  logical, optional, intent(in) :: layoutParam !< If present and true, this is a layout parameter.
+  logical, optional, intent(in) :: debuggingParam !< If present and true, this is a debugging parameter.
   character(len=mLen) :: mesg
   integer :: start_ind = 1, end_ind, indnt, tab, len_tab, len_nl
-  logical :: all, short, layout
+  logical :: all, short, layout, debug
 
-  layout = .false.
-  if (present(layoutParam)) layout = layoutParam
-  all = doc%complete .and. (doc%unitAll > 0) .and. .not. layout
-  short = doc%minimal .and. (doc%unitShort > 0) .and. .not. layout
+  layout = .false. ; if (present(layoutParam)) layout = layoutParam
+  debug = .false. ; if (present(debuggingParam)) debug = debuggingParam
+  all = doc%complete .and. (doc%unitAll > 0) .and. .not. (layout .or. debug)
+  short = doc%minimal .and. (doc%unitShort > 0) .and. .not. (layout .or. debug)
   if (present(valueWasDefault)) short = short .and. (.not. valueWasDefault)
 
   if (all) write(doc%unitAll, '(a)') trim(vmesg)
   if (short) write(doc%unitShort, '(a)') trim(vmesg)
   if (layout) write(doc%unitLayout, '(a)') trim(vmesg)
+  if (debug) write(doc%unitDebugging, '(a)') trim(vmesg)
 
   if (len_trim(desc) == 0) return
 
@@ -442,6 +495,7 @@ subroutine writeMessageAndDesc(doc, vmesg, desc, valueWasDefault, indent, layout
       if (all) write(doc%unitAll, '(a)') trim(mesg)
       if (short) write(doc%unitShort, '(a)') trim(mesg)
       if (layout) write(doc%unitLayout, '(a)') trim(mesg)
+      if (debug) write(doc%unitDebugging, '(a)') trim(mesg)
     else
       mesg = repeat(" ",indnt)//"! "//trim(desc(start_ind:))
       do ; tab = index(mesg, "\t")
@@ -451,6 +505,7 @@ subroutine writeMessageAndDesc(doc, vmesg, desc, valueWasDefault, indent, layout
       if (all) write(doc%unitAll, '(a)') trim(mesg)
       if (short) write(doc%unitShort, '(a)') trim(mesg)
       if (layout) write(doc%unitLayout, '(a)') trim(mesg)
+      if (debug) write(doc%unitDebugging, '(a)') trim(mesg)
       exit
     endif
 
@@ -459,8 +514,9 @@ end subroutine writeMessageAndDesc
 
 ! ----------------------------------------------------------------------
 
+!> This function returns a string with a real formatted like '(G)'
 function real_string(val)
-  real, intent(in)  :: val
+  real, intent(in)  :: val !< The value being written into a string
   character(len=32) :: real_string
 ! This function returns a string with a real formatted like '(G)'
   integer :: len, ind
@@ -491,9 +547,14 @@ function real_string(val)
   elseif (val == 0.) then
     real_string = "0.0"
   else
-    write(real_string(1:32), '(ES23.14)') val
-    if (.not.testFormattedFloatIsReal(real_string,val)) then
-     write(real_string(1:32), '(ES23.15)') val
+    if ((abs(val) <= 1.0e-100) .or. (abs(val) >= 1.0e100)) then
+      write(real_string(1:32), '(ES24.14E3)') val
+      if (.not.testFormattedFloatIsReal(real_string,val)) &
+        write(real_string(1:32), '(ES24.15E3)') val
+    else
+      write(real_string(1:32), '(ES23.14)') val
+      if (.not.testFormattedFloatIsReal(real_string,val)) &
+        write(real_string(1:32), '(ES23.15)') val
     endif
     do
       ind = index(real_string,"0E")
@@ -505,10 +566,14 @@ function real_string(val)
   real_string = adjustl(real_string)
 end function real_string
 
-function real_array_string(vals,sep)
-  character(len=1320) :: real_array_string
-  real, intent(in)  :: vals(:)
-  character(len=*), optional :: sep
+!> Returns a character string of a comma-separated, compact formatted, reals
+!> e.g. "1., 2., 5*3., 5.E2", that give the list of values.
+function real_array_string(vals, sep)
+  character(len=1320)    :: real_array_string !< The output string listing vals
+  real,      intent(in)  :: vals(:) !< The array of values to record
+  character(len=*), &
+    optional, intent(in) :: sep     !< The separator between successive values,
+                                    !! by default it is ', '.
 ! Returns a character string of a comma-separated, compact formatted, reals
 ! e.g. "1., 2., 5*3., 5.E2"
   ! Local variables
@@ -544,9 +609,10 @@ function real_array_string(vals,sep)
   enddo
 end function real_array_string
 
+!> This function tests whether a real value is encoded in a string.
 function testFormattedFloatIsReal(str, val)
-  character(len=*), intent(in) :: str
-  real,             intent(in) :: val
+  character(len=*), intent(in) :: str !< The string that match val
+  real,             intent(in) :: val !< The value being tested
   logical                      :: testFormattedFloatIsReal
   ! Local variables
   real :: scannedVal
@@ -559,25 +625,31 @@ function testFormattedFloatIsReal(str, val)
   endif
 end function testFormattedFloatIsReal
 
+!> This function returns a string with an integer formatted like '(I)'
 function int_string(val)
-  integer, intent(in)  :: val
+  integer, intent(in)  :: val !< The value being written into a string
   character(len=24)    :: int_string
 ! This function returns a string with an integer formatted like '(I)'
   write(int_string, '(i24)') val
   int_string = adjustl(int_string)
 end function int_string
 
+!> This function returns a string with an logical formatted like '(L)'
 function logical_string(val)
-  logical, intent(in)  :: val
+  logical, intent(in)  :: val !< The value being written into a string
   character(len=24)    :: logical_string
 ! This function returns a string with an logical formatted like '(L)'
   write(logical_string, '(l24)') val
   logical_string = adjustl(logical_string)
 end function logical_string
 
+!> This function returns a string for formatted parameter assignment
 function define_string(doc,varName,valString,units)
-  type(doc_type),   pointer    :: doc
-  character(len=*), intent(in) :: varName, valString, units
+  type(doc_type),   pointer    :: doc     !< A pointer to a structure that controls where the
+                                          !! documentation occurs and its formatting
+  character(len=*), intent(in) :: varName !< The name of the parameter being documented
+  character(len=*), intent(in) :: valString !< A string containing the value of the parameter
+  character(len=*), intent(in) :: units   !< The units of the parameter being documented
   character(len=mLen) :: define_string
 ! This function returns a string for formatted parameter assignment
   integer :: numSpaces
@@ -592,9 +664,12 @@ function define_string(doc,varName,valString,units)
   if (len_trim(units) > 0) define_string = trim(define_string)//"   ["//trim(units)//"]"
 end function define_string
 
+!> This function returns a string for formatted false logicals
 function undef_string(doc,varName,units)
-  type(doc_type),   pointer    :: doc
-  character(len=*), intent(in) :: varName, units
+  type(doc_type),   pointer    :: doc     !< A pointer to a structure that controls where the
+                                          !! documentation occurs and its formatting
+  character(len=*), intent(in) :: varName !< The name of the parameter being documented
+  character(len=*), intent(in) :: units   !< The units of the parameter being documented
   character(len=mLen) :: undef_string
 ! This function returns a string for formatted false logicals
   integer :: numSpaces
@@ -612,9 +687,12 @@ end function undef_string
 
 ! ----------------------------------------------------------------------
 
+!> This subroutine handles the module documentation
 subroutine doc_module(doc, modname, desc)
-  type(doc_type),   pointer    :: doc
-  character(len=*), intent(in) :: modname, desc
+  type(doc_type),   pointer    :: doc     !< A pointer to a structure that controls where the
+                                          !! documentation occurs and its formatting
+  character(len=*), intent(in) :: modname !< The name of the module being documented
+  character(len=*), intent(in) :: desc    !< A description of the module being documented
 ! This subroutine handles the module documentation
   character(len=mLen) :: mesg
 
@@ -628,18 +706,26 @@ subroutine doc_module(doc, modname, desc)
   endif
 end subroutine doc_module
 
+!> This subroutine handles the subroutine documentation
 subroutine doc_subroutine(doc, modname, subname, desc)
-  type(doc_type),   pointer    :: doc
-  character(len=*), intent(in) :: modname, subname, desc
+  type(doc_type),   pointer    :: doc     !< A pointer to a structure that controls where the
+                                          !! documentation occurs and its formatting
+  character(len=*), intent(in) :: modname !< The name of the module being documented
+  character(len=*), intent(in) :: subname !< The name of the subroutine being documented
+  character(len=*), intent(in) :: desc    !< A description of the subroutine being documented
 ! This subroutine handles the subroutine documentation
   if (.not. (is_root_pe() .and. associated(doc))) return
   call open_doc_file(doc)
 
 end subroutine doc_subroutine
 
+!> This subroutine handles the function documentation
 subroutine doc_function(doc, modname, fnname, desc)
-  type(doc_type),   pointer    :: doc
-  character(len=*), intent(in) :: modname, fnname, desc
+  type(doc_type),   pointer    :: doc     !< A pointer to a structure that controls where the
+                                          !! documentation occurs and its formatting
+  character(len=*), intent(in) :: modname !< The name of the module being documented
+  character(len=*), intent(in) :: fnname  !< The name of the function being documented
+  character(len=*), intent(in) :: desc    !< A description of the function being documented
 ! This subroutine handles the function documentation
   if (.not. (is_root_pe() .and. associated(doc))) return
   call open_doc_file(doc)
@@ -648,12 +734,20 @@ end subroutine doc_function
 
 ! ----------------------------------------------------------------------
 
-subroutine doc_init(docFileBase, doc, minimal, complete)
-  character(len=*),  intent(in)  :: docFileBase
-  type(doc_type),    pointer     :: doc
-  logical, optional, intent(in)  :: minimal, complete
-! Arguments: docFileBase - The name of the doc file.
-!  (inout)   doc - The doc_type to populate.
+!> Initialize the parameter documentation
+subroutine doc_init(docFileBase, doc, minimal, complete, layout, debugging)
+  character(len=*),  intent(in)  :: docFileBase !< The base file name for this set of parameters,
+                                             !! for example MOM_parameter_doc
+  type(doc_type),    pointer     :: doc      !< A pointer to a structure that controls where the
+                                             !! documentation occurs and its formatting
+  logical, optional, intent(in)  :: minimal  !< If present and true, write out the files (.short) documenting
+                                             !! those parameters that do not take on their default values.
+  logical, optional, intent(in)  :: complete !< If present and true, write out the (.all) files documenting all
+                                             !! parameters
+  logical, optional, intent(in)  :: layout   !< If present and true, write out the (.layout) files documenting
+                                             !! the layout parameters
+  logical, optional, intent(in)  :: debugging !< If present and true, write out the (.debugging) files documenting
+                                             !! the debugging parameters
 
   if (.not. associated(doc)) then
     allocate(doc)
@@ -661,11 +755,18 @@ subroutine doc_init(docFileBase, doc, minimal, complete)
 
   doc%docFileBase = docFileBase
   if (present(minimal)) doc%minimal = minimal
-  if (present(minimal)) doc%complete = complete
+  if (present(complete)) doc%complete = complete
+  if (present(layout)) doc%layout = layout
+  if (present(debugging)) doc%debugging = debugging
+
 end subroutine doc_init
 
+!> This subroutine allocates and populates a structure that controls where the
+!! documentation occurs and its formatting, and opens up the files controlled
+!! by this structure
 subroutine open_doc_file(doc)
-  type(doc_type), pointer    :: doc
+  type(doc_type), pointer :: doc !< A pointer to a structure that controls where the
+                                 !! documentation occurs and its formatting
 
   logical :: opened, new_file
   integer :: ios
@@ -682,7 +783,8 @@ subroutine open_doc_file(doc)
       open(doc%unitAll, file=trim(fileName), access='SEQUENTIAL', form='FORMATTED', &
            action='WRITE', status='REPLACE', iostat=ios)
       write(doc%unitAll, '(a)') &
-       '! This file was written by the model and records all non-layout parameters used at run-time.'
+       '! This file was written by the model and records all non-layout '//&
+       'or debugging parameters used at run-time.'
     else ! This file is being reopened, and should be appended.
       open(doc%unitAll, file=trim(fileName), access='SEQUENTIAL', form='FORMATTED', &
            action='WRITE', status='OLD', position='APPEND', iostat=ios)
@@ -736,8 +838,30 @@ subroutine open_doc_file(doc)
     doc%filesAreOpen = .true.
   endif
 
+  if ((len_trim(doc%docFileBase) > 0) .and. doc%debugging .and. (doc%unitDebugging<0)) then
+    new_file = .true. ; if (doc%unitDebugging /= -1) new_file = .false.
+    doc%unitDebugging = find_unused_unit_number()
+
+    write(fileName(1:240),'(a)') trim(doc%docFileBase)//'.debugging'
+    if (new_file) then
+      open(doc%unitDebugging, file=trim(fileName), access='SEQUENTIAL', form='FORMATTED', &
+           action='WRITE', status='REPLACE', iostat=ios)
+      write(doc%unitDebugging, '(a)') &
+       '! This file was written by the model and records the debugging parameters used at run-time.'
+    else ! This file is being reopened, and should be appended.
+      open(doc%unitDebugging, file=trim(fileName), access='SEQUENTIAL', form='FORMATTED', &
+           action='WRITE', status='OLD', position='APPEND', iostat=ios)
+    endif
+    inquire(doc%unitDebugging, opened=opened)
+    if ((.not.opened) .or. (ios /= 0)) then
+      call MOM_error(FATAL, "Failed to open doc file "//trim(fileName)//".")
+    endif
+    doc%filesAreOpen = .true.
+  endif
+
 end subroutine open_doc_file
 
+!> Find an unused unit number, returning >0 if found, and triggering a FATAL error if not.
 function find_unused_unit_number()
 ! Find an unused unit number.
 ! Returns >0 if found. FATAL if not.
@@ -751,9 +875,12 @@ function find_unused_unit_number()
     "doc_init failed to find an unused unit number.")
 end function find_unused_unit_number
 
+!> This subroutine closes the the files controlled by doc, and sets flags in
+!! doc to indicate that parameterization is no longer permitted.
 subroutine doc_end(doc)
-  type(doc_type), pointer :: doc
-  type(link_msg), pointer :: this, next
+  type(doc_type), pointer :: doc !< A pointer to a structure that controls where the
+                                 !! documentation occurs and its formatting
+  type(link_msg), pointer :: this => NULL(), next => NULL()
 
   if (.not.associated(doc)) return
 
@@ -772,6 +899,11 @@ subroutine doc_end(doc)
     doc%unitLayout = -2
   endif
 
+  if (doc%unitDebugging > 0) then
+    close(doc%unitDebugging)
+    doc%unitDebugging = -2
+  endif
+
   doc%filesAreOpen = .false.
 
   this => doc%chain_msg
@@ -784,12 +916,16 @@ end subroutine doc_end
 
 ! -----------------------------------------------------------------------------
 
+!> Returns true if documentation has already been written
 function mesgHasBeenDocumented(doc,varName,mesg)
-  type(doc_type),   pointer     :: doc
-  character(len=*), intent(in)  :: varName, mesg
+  type(doc_type),   pointer     :: doc  !< A pointer to a structure that controls where the
+                                        !! documentation occurs and its formatting
+  character(len=*), intent(in)  :: varName !< The name of the parameter being documented
+  character(len=*), intent(in)  :: mesg !< A message with parameter values, defaults, and descriptions
+                                        !! to compare with the message that was written previously
   logical                       :: mesgHasBeenDocumented
 ! Returns true if documentation has already been written
-  type(link_msg), pointer :: newLink, this, last
+  type(link_msg), pointer :: newLink => NULL(), this => NULL(), last => NULL()
 
   mesgHasBeenDocumented = .false.
 

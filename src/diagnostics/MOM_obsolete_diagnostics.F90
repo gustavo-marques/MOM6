@@ -25,12 +25,12 @@ subroutine register_obsolete_diagnostics(param_file, diag)
 ! This include declares and sets the variable "version".
 #include "version_variable.h"
   ! Local variables
-  character(len=40)  :: mod = "MOM_obsolete_diagnostics"  !< This module's name.
+  character(len=40)  :: mdl = "MOM_obsolete_diagnostics"  !< This module's name.
   logical :: foundEntry, causeFatal
   integer :: errType
 
-  call log_version(param_file, mod, version)
-  call get_param(param_file, mod, "OBSOLETE_DIAGNOSTIC_IS_FATAL", causeFatal,              &
+  call log_version(param_file, mdl, version)
+  call get_param(param_file, mdl, "OBSOLETE_DIAGNOSTIC_IS_FATAL", causeFatal,              &
                  "If an obsolete diagnostic variable appears in the diag_table\n"//        &
                  "then cause a FATAL error rather than issue a WARNING.", default=.true.)
 
@@ -64,9 +64,9 @@ end subroutine register_obsolete_diagnostics
 !> Fakes a register of a diagnostic to find out if an obsolete
 !! parameter appears in the diag_table.
 logical function found_in_diagtable(diag, varName, newVarName)
-  type(diag_ctrl),            intent(in) :: diag
-  character(len=*),            intent(in) :: varName
-  character(len=*), optional, intent(in) :: newVarName
+  type(diag_ctrl),            intent(in) :: diag       !< A structure used to control diagnostics.
+  character(len=*),           intent(in) :: varName    !< The obsolete diagnostic name
+  character(len=*), optional, intent(in) :: newVarName !< The valid name of this diagnostic
   ! Local
   integer :: handle ! Integer handle returned from diag_manager
 

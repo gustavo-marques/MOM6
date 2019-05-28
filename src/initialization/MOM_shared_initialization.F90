@@ -4,7 +4,7 @@ module MOM_shared_initialization
 
 ! This file is part of MOM6. See LICENSE.md for the license.
 
-use MOM_coms, only : max_across_PEs
+use MOM_coms, only : max_across_PEs, reproducing_sum
 use MOM_domains, only : pass_var, pass_vector, sum_across_PEs, broadcast
 use MOM_domains, only : root_PE, To_All, SCALAR_PAIR, CGRID_NE, AGRID
 use MOM_dyn_horgrid, only : dyn_horgrid_type
@@ -12,9 +12,10 @@ use MOM_error_handler, only : MOM_mesg, MOM_error, FATAL, WARNING, is_root_pe
 use MOM_error_handler, only : callTree_enter, callTree_leave, callTree_waypoint
 use MOM_file_parser, only : get_param, log_param, param_file_type, log_version
 use MOM_io, only : close_file, create_file, fieldtype, file_exists
-use MOM_io, only : read_data, SINGLE_FILE, MULTIPLE
+use MOM_io, only : MOM_read_data, MOM_read_vector, SINGLE_FILE, MULTIPLE
 use MOM_io, only : slasher, vardesc, write_field, var_desc
 use MOM_string_functions, only : uppercase
+use MOM_unit_scaling, only : unit_scale_type
 
 use netcdf
 
@@ -29,6 +30,11 @@ public reset_face_lengths_named, reset_face_lengths_file, reset_face_lengths_lis
 public read_face_length_list, set_velocity_depth_max, set_velocity_depth_min
 public compute_global_grid_integrals, write_ocean_geometry_file
 
+! A note on unit descriptions in comments: MOM6 uses units that can be rescaled for dimensional
+! consistency testing. These are noted in comments with units like Z, H, L, and T, along with
+! their mks counterparts with notation like "a velocity [Z T-1 ~> m s-1]".  If the units
+! vary with the Boussinesq approximation, the Boussinesq variant is given first.
+
 contains
 
 ! -----------------------------------------------------------------------------
@@ -37,31 +43,32 @@ subroutine MOM_shared_init_init(PF)
   type(param_file_type),   intent(in)    :: PF   !< A structure indicating the open file
                                                  !! to parse for model parameter values.
 
-  character(len=40)  :: mod = "MOM_shared_initialization" ! This module's name.
+  character(len=40)  :: mdl = "MOM_shared_initialization" ! This module's name.
 
 ! This include declares and sets the variable "version".
 #include "version_variable.h"
-  call log_version(PF, mod, version, &
+  call log_version(PF, mdl, version, &
    "Sharable code to initialize time-invariant fields, like bathymetry and Coriolis parameters.")
 
 end subroutine MOM_shared_init_init
 ! -----------------------------------------------------------------------------
 
 !> MOM_initialize_rotation makes the appropriate call to set up the Coriolis parameter.
-subroutine MOM_initialize_rotation(f, G, PF)
+subroutine MOM_initialize_rotation(f, G, PF, US)
   type(dyn_horgrid_type),                       intent(in)  :: G  !< The dynamic horizontal grid type
-  real, dimension(G%IsdB:G%IedB,G%JsdB:G%JedB), intent(out) :: f  !< The Coriolis parameter in s-1
+  real, dimension(G%IsdB:G%IedB,G%JsdB:G%JedB), intent(out) :: f  !< The Coriolis parameter [T-1 ~> s-1]
   type(param_file_type),                        intent(in)  :: PF !< Parameter file structure
+  type(unit_scale_type),              optional, intent(in)  :: US !< A dimensional unit scaling type
 
 !   This subroutine makes the appropriate call to set up the Coriolis parameter.
 ! This is a separate subroutine so that it can be made public and shared with
 ! the ice-sheet code or other components.
 ! Set up the Coriolis parameter, f, either analytically or from file.
-  character(len=40)  :: mod = "MOM_initialize_rotation" ! This subroutine's name.
+  character(len=40)  :: mdl = "MOM_initialize_rotation" ! This subroutine's name.
   character(len=200) :: config
 
-  call callTree_enter(trim(mod)//"(), MOM_shared_initialization.F90")
-  call get_param(PF, mod, "ROTATION", config, &
+  call callTree_enter(trim(mdl)//"(), MOM_shared_initialization.F90")
+  call get_param(PF, mdl, "ROTATION", config, &
                  "This specifies how the Coriolis parameter is specified: \n"//&
                  " \t 2omegasinlat - Use twice the planetary rotation rate \n"//&
                  " \t\t times the sine of latitude.\n"//&
@@ -69,23 +76,24 @@ subroutine MOM_initialize_rotation(f, G, PF)
                  " \t USER - call a user modified routine.", &
                  default="2omegasinlat")
   select case (trim(config))
-    case ("2omegasinlat"); call set_rotation_planetary(f, G, PF)
-    case ("beta"); call set_rotation_beta_plane(f, G, PF)
-    case ("betaplane"); call set_rotation_beta_plane(f, G, PF)
+    case ("2omegasinlat"); call set_rotation_planetary(f, G, PF, US)
+    case ("beta"); call set_rotation_beta_plane(f, G, PF, US)
+    case ("betaplane"); call set_rotation_beta_plane(f, G, PF, US)
    !case ("nonrotating") ! Note from AJA: Missing case?
     case default ; call MOM_error(FATAL,"MOM_initialize: "// &
       "Unrecognized rotation setup "//trim(config))
   end select
-  call callTree_leave(trim(mod)//'()')
+  call callTree_leave(trim(mdl)//'()')
 end subroutine MOM_initialize_rotation
 
 !> Calculates the components of grad f (Coriolis parameter)
-subroutine MOM_calculate_grad_Coriolis(dF_dx, dF_dy, G)
+subroutine MOM_calculate_grad_Coriolis(dF_dx, dF_dy, G, US)
   type(dyn_horgrid_type),             intent(inout) :: G !< The dynamic horizontal grid type
   real, dimension(G%isd:G%ied,G%jsd:G%jed), &
-                                      intent(out)   :: dF_dx !< x-component of grad f
+                                      intent(out)   :: dF_dx !< x-component of grad f [T-1 m-1 ~> s-1 m-1]
   real, dimension(G%isd:G%ied,G%jsd:G%jed), &
-                                      intent(out)   :: dF_dy !< y-component of grad f
+                                      intent(out)   :: dF_dy !< y-component of grad f [T-1 m-1 ~> s-1 m-1]
+  type(unit_scale_type),    optional, intent(in)    :: US !< A dimensional unit scaling type
   ! Local variables
   integer :: i,j
   real :: f1, f2
@@ -108,85 +116,90 @@ subroutine MOM_calculate_grad_Coriolis(dF_dx, dF_dy, G)
   call pass_vector(dF_dx, dF_dy, G%Domain, stagger=AGRID)
 end subroutine MOM_calculate_grad_Coriolis
 
-!> Return the global maximum ocean bottom depth in m.
-function diagnoseMaximumDepth(D,G)
+!> Return the global maximum ocean bottom depth in the same units as the input depth.
+function diagnoseMaximumDepth(D, G)
   type(dyn_horgrid_type),  intent(in) :: G !< The dynamic horizontal grid type
   real, dimension(G%isd:G%ied,G%jsd:G%jed), &
-                           intent(in) :: D !< Ocean bottom depth in m
-  real :: diagnoseMaximumDepth             !< The global maximum ocean bottom depth in m
+                           intent(in) :: D !< Ocean bottom depth in m or Z
+  real :: diagnoseMaximumDepth             !< The global maximum ocean bottom depth in m or Z
   ! Local variables
   integer :: i,j
-  diagnoseMaximumDepth=D(G%isc,G%jsc)
-  do j=G%jsc, G%jec
-    do i=G%isc, G%iec
-      diagnoseMaximumDepth=max(diagnoseMaximumDepth,D(i,j))
-    enddo
-  enddo
+  diagnoseMaximumDepth = D(G%isc,G%jsc)
+  do j=G%jsc, G%jec ; do i=G%isc, G%iec
+    diagnoseMaximumDepth = max(diagnoseMaximumDepth,D(i,j))
+  enddo ; enddo
   call max_across_PEs(diagnoseMaximumDepth)
 end function diagnoseMaximumDepth
 
 
 !> Read gridded depths from file
-subroutine initialize_topography_from_file(D, G, param_file)
+subroutine initialize_topography_from_file(D, G, param_file, US)
   type(dyn_horgrid_type),           intent(in)  :: G !< The dynamic horizontal grid type
   real, dimension(G%isd:G%ied,G%jsd:G%jed), &
-                                    intent(out) :: D !< Ocean bottom depth in m
+                                    intent(out) :: D !< Ocean bottom depth in m or Z if US is present
   type(param_file_type),            intent(in)  :: param_file !< Parameter file structure
+  type(unit_scale_type),  optional, intent(in)  :: US !< A dimensional unit scaling type
   ! Local variables
+  real :: m_to_Z  ! A dimensional rescaling factor.
   character(len=200) :: filename, topo_file, inputdir ! Strings for file/path
   character(len=200) :: topo_varname                  ! Variable name in file
-  character(len=40)  :: mod = "initialize_topography_from_file" ! This subroutine's name.
+  character(len=40)  :: mdl = "initialize_topography_from_file" ! This subroutine's name.
 
-  call callTree_enter(trim(mod)//"(), MOM_shared_initialization.F90")
+  call callTree_enter(trim(mdl)//"(), MOM_shared_initialization.F90")
 
-  call get_param(param_file, mod, "INPUTDIR", inputdir, default=".")
+  m_to_Z = 1.0 ; if (present(US)) m_to_Z = US%m_to_Z
+
+  call get_param(param_file, mdl, "INPUTDIR", inputdir, default=".")
   inputdir = slasher(inputdir)
-  call get_param(param_file, mod, "TOPO_FILE", topo_file, &
+  call get_param(param_file, mdl, "TOPO_FILE", topo_file, &
                  "The file from which the bathymetry is read.", &
                  default="topog.nc")
-  call get_param(param_file, mod, "TOPO_VARNAME", topo_varname, &
+  call get_param(param_file, mdl, "TOPO_VARNAME", topo_varname, &
                  "The name of the bathymetry variable in TOPO_FILE.", &
                  default="depth")
 
   filename = trim(inputdir)//trim(topo_file)
-  call log_param(param_file, mod, "INPUTDIR/TOPO_FILE", filename)
+  call log_param(param_file, mdl, "INPUTDIR/TOPO_FILE", filename)
 
   if (.not.file_exists(filename, G%Domain)) call MOM_error(FATAL, &
        " initialize_topography_from_file: Unable to open "//trim(filename))
 
-  D(:,:) = -9.E30 ! Initializing to a very large negative depth (tall mountains)
-                  ! everywhere before reading from a file should do nothing.
-                  ! However, in the instance of masked-out PEs, halo regions
-                  ! are not updated when a processor does not exist. We need to
-                  ! ensure the depth in masked-out PEs appears to be that of land
-                  ! so this line does that in the halo regions. For non-masked PEs
-                  ! the halo region is filled properly with a later pass_var().
-  call read_data(filename,trim(topo_varname),D,domain=G%Domain%mpp_domain)
+  D(:,:) = -9.e30*m_to_Z ! Initializing to a very large negative depth (tall mountains) everywhere
+                         ! before reading from a file should do nothing. However, in the instance of
+                         ! masked-out PEs, halo regions are not updated when a processor does not
+                         ! exist. We need to ensure the depth in masked-out PEs appears to be that
+                         ! of land so this line does that in the halo regions. For non-masked PEs
+                         ! the halo region is filled properly with a later pass_var().
+  call MOM_read_data(filename, trim(topo_varname), D, G%Domain, scale=m_to_Z)
 
-  call apply_topography_edits_from_file(D, G, param_file)
+  call apply_topography_edits_from_file(D, G, param_file, US)
 
-  call callTree_leave(trim(mod)//'()')
+  call callTree_leave(trim(mdl)//'()')
 end subroutine initialize_topography_from_file
 
 !> Applies a list of topography overrides read from a netcdf file
-subroutine apply_topography_edits_from_file(D, G, param_file)
+subroutine apply_topography_edits_from_file(D, G, param_file, US)
   type(dyn_horgrid_type),           intent(in)    :: G !< The dynamic horizontal grid type
   real, dimension(G%isd:G%ied,G%jsd:G%jed), &
-                                    intent(inout) :: D !< Ocean bottom depth in m
+                                    intent(inout) :: D !< Ocean bottom depth in m or Z if US is present
   type(param_file_type),            intent(in)    :: param_file !< Parameter file structure
+  type(unit_scale_type),  optional, intent(in)    :: US !< A dimensional unit scaling type
 
   ! Local variables
+  real :: m_to_Z  ! A dimensional rescaling factor.
   character(len=200) :: topo_edits_file, inputdir ! Strings for file/path
-  character(len=40)  :: mod = "apply_topography_edits_from_file" ! This subroutine's name.
+  character(len=40)  :: mdl = "apply_topography_edits_from_file" ! This subroutine's name.
   integer :: n_edits, n, ashape(5), i, j, ncid, id, ncstatus, iid, jid, zid
   integer, dimension(:), allocatable :: ig, jg
   real, dimension(:), allocatable :: new_depth
 
-  call callTree_enter(trim(mod)//"(), MOM_shared_initialization.F90")
+  call callTree_enter(trim(mdl)//"(), MOM_shared_initialization.F90")
 
-  call get_param(param_file, mod, "INPUTDIR", inputdir, default=".")
+  m_to_Z = 1.0 ; if (present(US)) m_to_Z = US%m_to_Z
+
+  call get_param(param_file, mdl, "INPUTDIR", inputdir, default=".")
   inputdir = slasher(inputdir)
-  call get_param(param_file, mod, "TOPO_EDITS_FILE", topo_edits_file, &
+  call get_param(param_file, mdl, "TOPO_EDITS_FILE", topo_edits_file, &
                  "The file from which to read a list of i,j,z topography overrides.", &
                  default="")
 
@@ -265,8 +278,9 @@ subroutine apply_topography_edits_from_file(D, G, param_file)
     j = jg(n) - G%jsd_global + 2
     if (i>=G%isc .and. i<=G%iec .and. j>=G%jsc .and. j<=G%jec) then
       if (new_depth(n)/=0.) then
-        write(*,'(a,3i5,f8.2,a,f8.2,2i4)') 'Ocean topography edit: ',n,ig(n),jg(n),D(i,j),'->',abs(new_depth(n)),i,j
-        D(i,j) = abs(new_depth(n)) ! Allows for height-file edits (i.e. converts negatives)
+        write(*,'(a,3i5,f8.2,a,f8.2,2i4)') &
+          'Ocean topography edit: ',n,ig(n),jg(n),D(i,j)/m_to_Z,'->',abs(new_depth(n)),i,j
+        D(i,j) = abs(m_to_Z*new_depth(n)) ! Allows for height-file edits (i.e. converts negatives)
       else
         call MOM_error(FATAL, ' apply_topography_edits_from_file: '//&
           "A zero depth edit would change the land mask and is not allowed in"//trim(topo_edits_file))
@@ -276,68 +290,65 @@ subroutine apply_topography_edits_from_file(D, G, param_file)
 
   deallocate( ig, jg, new_depth )
 
-  call callTree_leave(trim(mod)//'()')
+  call callTree_leave(trim(mdl)//'()')
 end subroutine apply_topography_edits_from_file
 
 !> initialize the bathymetry based on one of several named idealized configurations
-subroutine initialize_topography_named(D, G, param_file, topog_config, max_depth)
+subroutine initialize_topography_named(D, G, param_file, topog_config, max_depth, US)
   type(dyn_horgrid_type),           intent(in)  :: G !< The dynamic horizontal grid type
   real, dimension(G%isd:G%ied,G%jsd:G%jed), &
-                                    intent(out) :: D !< Ocean bottom depth in m
+                                    intent(out) :: D !< Ocean bottom depth in m or Z if US is present
   type(param_file_type),            intent(in)  :: param_file !< Parameter file structure
   character(len=*),                 intent(in)  :: topog_config !< The name of an idealized
                                                               !! topographic configuration
-  real,                             intent(in)  :: max_depth  !< Maximum depth of model in m
+  real,                             intent(in)  :: max_depth  !< Maximum depth of model in the units of D
+  type(unit_scale_type),  optional, intent(in)  :: US !< A dimensional unit scaling type
 
-! Arguments: D          - the bottom depth in m. Intent out.
-!  (in)      G          - The ocean's grid structure.
-!  (in)      param_file - A structure indicating the open file to parse for
-!                         model parameter values.
-!  (in)      topog_config - The name of an idealized topographic configuration.
-!  (in)      max_depth  - The maximum depth in m.
+  ! This subroutine places the bottom depth in m into D(:,:), shaped according to the named config.
 
-! This subroutine places the bottom depth in m into D(:,:), shaped in a spoon
-  real :: min_depth            ! The minimum depth in m.
+  ! Local variables
+  real :: m_to_Z               ! A dimensional rescaling factor.
+  real :: min_depth            ! The minimum depth [Z ~> m].
   real :: PI                   ! 3.1415926... calculated as 4*atan(1)
-  real :: D0                   ! A constant to make the maximum     !
-                               ! basin depth MAXIMUM_DEPTH.         !
-  real :: expdecay             ! A decay scale of associated with   !
-                               ! the sloping boundaries, in m.      !
-  real :: Dedge                ! The depth in m at the basin edge.  !
+  real :: D0                   ! A constant to make the maximum  basin depth MAXIMUM_DEPTH.
+  real :: expdecay             ! A decay scale of associated with the sloping boundaries [m].
+  real :: Dedge                ! The depth [Z ~> m], at the basin edge
 ! real :: south_lat, west_lon, len_lon, len_lat, Rad_earth
   integer :: i, j, is, ie, js, je, isd, ied, jsd, jed
-  character(len=40)  :: mod = "initialize_topography_named" ! This subroutine's name.
+  character(len=40)  :: mdl = "initialize_topography_named" ! This subroutine's name.
   is = G%isc ; ie = G%iec ; js = G%jsc ; je = G%jec
   isd = G%isd ; ied = G%ied ; jsd = G%jsd ; jed = G%jed
 
-  call callTree_enter(trim(mod)//"(), MOM_shared_initialization.F90")
+  call callTree_enter(trim(mdl)//"(), MOM_shared_initialization.F90")
   call MOM_mesg("  MOM_shared_initialization.F90, initialize_topography_named: "//&
                  "TOPO_CONFIG = "//trim(topog_config), 5)
 
-  call get_param(param_file, mod, "MINIMUM_DEPTH", min_depth, &
-                 "The minimum depth of the ocean.", units="m", default=0.0)
+  m_to_Z = 1.0 ; if (present(US)) m_to_Z = US%m_to_Z
+
+  call get_param(param_file, mdl, "MINIMUM_DEPTH", min_depth, &
+                 "The minimum depth of the ocean.", units="m", default=0.0, scale=m_to_Z)
   if (max_depth<=0.) call MOM_error(FATAL,"initialize_topography_named: "// &
       "MAXIMUM_DEPTH has a non-sensical value! Was it set?")
 
   if (trim(topog_config) /= "flat") then
-    call get_param(param_file, mod, "EDGE_DEPTH", Dedge, &
+    call get_param(param_file, mdl, "EDGE_DEPTH", Dedge, &
                    "The depth at the edge of one of the named topographies.", &
-                   units="m", default=100.0)
-!   call get_param(param_file, mod, "SOUTHLAT", south_lat, &
+                   units="m", default=100.0, scale=m_to_Z)
+!   call get_param(param_file, mdl, "SOUTHLAT", south_lat, &
 !                  "The southern latitude of the domain.", units="degrees", &
 !                  fail_if_missing=.true.)
-!   call get_param(param_file, mod, "LENLAT", len_lat, &
+!   call get_param(param_file, mdl, "LENLAT", len_lat, &
 !                  "The latitudinal length of the domain.", units="degrees", &
 !                  fail_if_missing=.true.)
-!   call get_param(param_file, mod, "WESTLON", west_lon, &
+!   call get_param(param_file, mdl, "WESTLON", west_lon, &
 !                  "The western longitude of the domain.", units="degrees", &
 !                  default=0.0)
-!   call get_param(param_file, mod, "LENLON", len_lon, &
+!   call get_param(param_file, mdl, "LENLON", len_lon, &
 !                  "The longitudinal length of the domain.", units="degrees", &
 !                  fail_if_missing=.true.)
-!   call get_param(param_file, mod, "RAD_EARTH", Rad_Earth, &
+!   call get_param(param_file, mdl, "RAD_EARTH", Rad_Earth, &
 !                  "The radius of the Earth.", units="m", default=6.378e6)
-    call get_param(param_file, mod, "TOPOG_SLOPE_SCALE", expdecay, &
+    call get_param(param_file, mdl, "TOPOG_SLOPE_SCALE", expdecay, &
                    "The exponential decay scale used in defining some of \n"//&
                    "the named topographies.", units="m", default=400000.0)
   endif
@@ -390,43 +401,42 @@ subroutine initialize_topography_named(D, G, param_file, topog_config, max_depth
     if (D(i,j) < min_depth) D(i,j) = 0.5*min_depth
   enddo ; enddo
 
-  call callTree_leave(trim(mod)//'()')
+  call callTree_leave(trim(mdl)//'()')
 end subroutine initialize_topography_named
 ! -----------------------------------------------------------------------------
 
 ! -----------------------------------------------------------------------------
 !> limit_topography ensures that  min_depth < D(x,y) < max_depth
-subroutine limit_topography(D, G, param_file, max_depth)
+subroutine limit_topography(D, G, param_file, max_depth, US)
   type(dyn_horgrid_type), intent(in)    :: G !< The dynamic horizontal grid type
   real, dimension(G%isd:G%ied,G%jsd:G%jed), &
-                          intent(inout) :: D !< Ocean bottom depth in m
+                          intent(inout) :: D !< Ocean bottom depth in m or Z if US is present
   type(param_file_type),  intent(in)    :: param_file !< Parameter file structure
-  real,                   intent(in)    :: max_depth  !< Maximum depth of model in m
-! Arguments: D          - the bottom depth in m. Intent in/out.
-!  (in)      G          - The ocean's grid structure.
-!  (in)      param_file - A structure indicating the open file to parse for
-!                         model parameter values.
-!  (in)      max_depth  - The maximum depth in m.
+  real,                   intent(in)    :: max_depth  !< Maximum depth of model in the units of D
+  type(unit_scale_type), optional, intent(in) :: US   !< A dimensional unit scaling type
 
-! This subroutine ensures that    min_depth < D(x,y) < max_depth
+  ! Local variables
+  real :: m_to_Z  ! A dimensional rescaling factor.
   integer :: i, j
-  character(len=40)  :: mod = "limit_topography" ! This subroutine's name.
+  character(len=40)  :: mdl = "limit_topography" ! This subroutine's name.
   real :: min_depth, mask_depth
 
-  call callTree_enter(trim(mod)//"(), MOM_shared_initialization.F90")
+  call callTree_enter(trim(mdl)//"(), MOM_shared_initialization.F90")
 
-  call get_param(param_file, mod, "MINIMUM_DEPTH", min_depth, &
+  m_to_Z = 1.0 ; if (present(US)) m_to_Z = US%m_to_Z
+
+  call get_param(param_file, mdl, "MINIMUM_DEPTH", min_depth, &
                  "If MASKING_DEPTH is unspecified, then anything shallower than\n"//&
                  "MINIMUM_DEPTH is assumed to be land and all fluxes are masked out.\n"//&
                  "If MASKING_DEPTH is specified, then all depths shallower than\n"//&
                  "MINIMUM_DEPTH but deeper than MASKING_DEPTH are rounded to MINIMUM_DEPTH.", &
-                 units="m", default=0.0)
-  call get_param(param_file, mod, "MASKING_DEPTH", mask_depth, &
-                 "The depth below which to mask the ocean as land.", units="m", &
-                 default=-9999.0, do_not_log=.true.)
+                 units="m", default=0.0, scale=m_to_Z)
+  call get_param(param_file, mdl, "MASKING_DEPTH", mask_depth, &
+                 "The depth below which to mask the ocean as land.", &
+                 units="m", default=-9999.0, scale=m_to_Z, do_not_log=.true.)
 
 ! Make sure that min_depth < D(x,y) < max_depth
-  if (mask_depth<-9990.) then
+  if (mask_depth < -9990.*m_to_Z) then
     do j=G%jsd,G%jed ; do i=G%isd,G%ied
       D(i,j) = min( max( D(i,j), 0.5*min_depth ), max_depth )
     enddo ; enddo
@@ -440,68 +450,78 @@ subroutine limit_topography(D, G, param_file, max_depth)
     enddo ; enddo
   endif
 
-  call callTree_leave(trim(mod)//'()')
+  call callTree_leave(trim(mdl)//'()')
 end subroutine limit_topography
 ! -----------------------------------------------------------------------------
 
 ! -----------------------------------------------------------------------------
-subroutine set_rotation_planetary(f, G, param_file)
-  type(dyn_horgrid_type),                        intent(in)  :: G
-  real, dimension(G%IsdB:G%IedB,G%JsdB:G%JedB), intent(out) :: f
-  type(param_file_type),                        intent(in)  :: param_file
-! Arguments: f          - Coriolis parameter (vertical component) in s^-1
-!     (in)   G          - grid type
-!     (in)   param_file - parameter file type
+!> This subroutine sets up the Coriolis parameter for a sphere
+subroutine set_rotation_planetary(f, G, param_file, US)
+  type(dyn_horgrid_type), intent(in)  :: G  !< The dynamic horizontal grid
+  real, dimension(G%IsdB:G%IedB,G%JsdB:G%JedB), &
+                          intent(out) :: f  !< Coriolis parameter (vertical component) [T-1 ~> s-1]
+  type(param_file_type),  intent(in)  :: param_file !< A structure to parse for run-time parameters
+  type(unit_scale_type), optional, intent(in) :: US !< A dimensional unit scaling type
 
 ! This subroutine sets up the Coriolis parameter for a sphere
-  character(len=30) :: mod = "set_rotation_planetary" ! This subroutine's name.
+  character(len=30) :: mdl = "set_rotation_planetary" ! This subroutine's name.
   integer :: I, J
-  real    :: PI, omega
+  real    :: PI
+  real    :: omega  ! The planetary rotation rate [T-1 ~> s-1]
+  real    :: T_to_s ! A time unit conversion factor
 
-  call callTree_enter(trim(mod)//"(), MOM_shared_initialization.F90")
+  call callTree_enter(trim(mdl)//"(), MOM_shared_initialization.F90")
+
+  T_to_s = 1.0 ; if (present(US)) T_to_s = US%T_to_s
 
   call get_param(param_file, "set_rotation_planetary", "OMEGA", omega, &
                  "The rotation rate of the earth.", units="s-1", &
-                 default=7.2921e-5)
+                 default=7.2921e-5, scale=T_to_s)
   PI = 4.0*atan(1.0)
 
   do I=G%IsdB,G%IedB ; do J=G%JsdB,G%JedB
     f(I,J) = ( 2.0 * omega ) * sin( ( PI * G%geoLatBu(I,J) ) / 180.)
   enddo ; enddo
 
-  call callTree_leave(trim(mod)//'()')
+  call callTree_leave(trim(mdl)//'()')
 end subroutine set_rotation_planetary
 ! -----------------------------------------------------------------------------
 
 ! -----------------------------------------------------------------------------
-subroutine set_rotation_beta_plane(f, G, param_file)
-  type(dyn_horgrid_type),                        intent(in)  :: G
-  real, dimension(G%IsdB:G%IedB,G%JsdB:G%JedB), intent(out) :: f
-  type(param_file_type),                        intent(in)  :: param_file
-! Arguments: f          - Coriolis parameter (vertical component) in s^-1
-!     (in)   G          - grid type
-!     (in)   param_file - parameter file type
+!> This subroutine sets up the Coriolis parameter for a beta-plane or f-plane
+subroutine set_rotation_beta_plane(f, G, param_file, US)
+  type(dyn_horgrid_type), intent(in)  :: G  !< The dynamic horizontal grid
+  real, dimension(G%IsdB:G%IedB,G%JsdB:G%JedB), &
+                          intent(out) :: f  !< Coriolis parameter (vertical component) [T-1 ~> s-1]
+  type(param_file_type),  intent(in)  :: param_file !< A structure to parse for run-time parameters
+  type(unit_scale_type), optional, intent(in) :: US !< A dimensional unit scaling type
 
 ! This subroutine sets up the Coriolis parameter for a beta-plane
   integer :: I, J
-  real    :: f_0, beta, y_scl, Rad_Earth, PI
-  character(len=40)  :: mod = "set_rotation_beta_plane" ! This subroutine's name.
+  real    :: f_0    ! The reference value of the Coriolis parameter [T-1 ~> s-1]
+  real    :: beta   ! The meridional gradient of the Coriolis parameter [T-1 m-1 ~> s-1 m-1]
+  real    :: y_scl, Rad_Earth
+  real    :: T_to_s ! A time unit conversion factor
+  real    :: PI
+  character(len=40)  :: mdl = "set_rotation_beta_plane" ! This subroutine's name.
   character(len=200) :: axis_units
 
-  call callTree_enter(trim(mod)//"(), MOM_shared_initialization.F90")
+  call callTree_enter(trim(mdl)//"(), MOM_shared_initialization.F90")
 
-  call get_param(param_file, mod, "F_0", f_0, &
+  T_to_s = 1.0 ; if (present(US)) T_to_s = US%T_to_s
+
+  call get_param(param_file, mdl, "F_0", f_0, &
                  "The reference value of the Coriolis parameter with the \n"//&
-                 "betaplane option.", units="s-1", default=0.0)
-  call get_param(param_file, mod, "BETA", beta, &
+                 "betaplane option.", units="s-1", default=0.0, scale=T_to_s)
+  call get_param(param_file, mdl, "BETA", beta, &
                  "The northward gradient of the Coriolis parameter with \n"//&
-                 "the betaplane option.", units="m-1 s-1", default=0.0)
-  call get_param(param_file, mod, "AXIS_UNITS", axis_units, default="degrees")
+                 "the betaplane option.", units="m-1 s-1", default=0.0, scale=T_to_s)
+  call get_param(param_file, mdl, "AXIS_UNITS", axis_units, default="degrees")
 
   PI = 4.0*atan(1.0)
   select case (axis_units(1:1))
     case ("d")
-      call get_param(param_file, mod, "RAD_EARTH", Rad_Earth, &
+      call get_param(param_file, mdl, "RAD_EARTH", Rad_Earth, &
                    "The radius of the Earth.", units="m", default=6.378e6)
       y_scl = Rad_Earth/PI
     case ("k"); y_scl = 1.E3
@@ -515,48 +535,93 @@ subroutine set_rotation_beta_plane(f, G, param_file)
     f(I,J) = f_0 + beta * ( G%geoLatBu(I,J) * y_scl )
   enddo ; enddo
 
-  call callTree_leave(trim(mod)//'()')
+  call callTree_leave(trim(mdl)//'()')
 end subroutine set_rotation_beta_plane
 
 !> initialize_grid_rotation_angle initializes the arrays with the sine and
 !!   cosine of the angle between logical north on the grid and true north.
 subroutine initialize_grid_rotation_angle(G, PF)
-  type(dyn_horgrid_type), intent(inout) :: G   !< The model's horizontal grid structure.
+  type(dyn_horgrid_type), intent(inout) :: G   !< The dynamic horizontal grid
   type(param_file_type),  intent(in)    :: PF  !< A structure indicating the open file
                                                !! to parse for model parameter values.
 
   real    :: angle, lon_scale
-  integer :: i, j
+  real    :: len_lon    ! The periodic range of longitudes, usually 360 degrees.
+  real    :: pi_720deg  ! One quarter the conversion factor from degrees to radians.
+  real    :: lonB(2,2)  ! The longitude of a point, shifted to have about the same value.
+  character(len=40)  :: mdl = "initialize_grid_rotation_angle" ! This subroutine's name.
+  logical :: use_bugs
+  integer :: i, j, m, n
 
-  do j=G%jsc,G%jec ; do i=G%isc,G%iec
-    lon_scale    = cos((G%geoLatBu(I-1,J-1) + G%geoLatBu(I,J-1  ) + &
-                        G%geoLatBu(I-1,J) + G%geoLatBu(I,J)) * atan(1.0)/180)
-    angle        = atan2((G%geoLonBu(I-1,J) + G%geoLonBu(I,J) - &
-                          G%geoLonBu(I-1,J-1) - G%geoLonBu(I,J-1))*lon_scale, &
-                          G%geoLatBu(I-1,J) + G%geoLatBu(I,J) - &
-                          G%geoLatBu(I-1,J-1) - G%geoLatBu(I,J-1) )
-    G%sin_rot(i,j) = sin(angle) ! angle is the clockwise angle from lat/lon to ocean
-    G%cos_rot(i,j) = cos(angle) ! grid (e.g. angle of ocean "north" from true north)
-  enddo ; enddo
+  call get_param(PF, mdl, "GRID_ROTATION_ANGLE_BUGS", use_bugs, &
+                 "If true, use an older algorithm to calculate the sine and \n"//&
+                 "cosines needed rotate between grid-oriented directions and \n"//&
+                 "true north and east.  Differences arise at the tripolar fold.", &
+                 default=.True.)
 
-  ! ### THIS DOESN'T SEEM RIGHT AT A CUBED-SPHERE FOLD -RWH
-  call pass_var(G%cos_rot, G%Domain)
-  call pass_var(G%sin_rot, G%Domain)
+  if (use_bugs) then
+    do j=G%jsc,G%jec ; do i=G%isc,G%iec
+      lon_scale    = cos((G%geoLatBu(I-1,J-1) + G%geoLatBu(I,J-1  ) + &
+                          G%geoLatBu(I-1,J) + G%geoLatBu(I,J)) * atan(1.0)/180)
+      angle        = atan2((G%geoLonBu(I-1,J) + G%geoLonBu(I,J) - &
+                            G%geoLonBu(I-1,J-1) - G%geoLonBu(I,J-1))*lon_scale, &
+                            G%geoLatBu(I-1,J) + G%geoLatBu(I,J) - &
+                            G%geoLatBu(I-1,J-1) - G%geoLatBu(I,J-1) )
+      G%sin_rot(i,j) = sin(angle) ! angle is the clockwise angle from lat/lon to ocean
+      G%cos_rot(i,j) = cos(angle) ! grid (e.g. angle of ocean "north" from true north)
+    enddo ; enddo
+
+    ! This is not right at a tripolar or cubed-sphere fold.
+    call pass_var(G%cos_rot, G%Domain)
+    call pass_var(G%sin_rot, G%Domain)
+  else
+    pi_720deg = atan(1.0) / 180.0
+    len_lon = 360.0 ; if (G%len_lon > 0.0) len_lon = G%len_lon
+    do j=G%jsc,G%jec ; do i=G%isc,G%iec
+      do n=1,2 ; do m=1,2
+        lonB(m,n) = modulo_around_point(G%geoLonBu(I+m-2,J+n-2), G%geoLonT(i,j), len_lon)
+      enddo ; enddo
+      lon_scale = cos(pi_720deg*((G%geoLatBu(I-1,J-1) + G%geoLatBu(I,J)) + &
+                                 (G%geoLatBu(I,J-1) + G%geoLatBu(I-1,J)) ) )
+      angle = atan2(lon_scale*((lonB(1,2) - lonB(2,1)) + (lonB(2,2) - lonB(1,1))), &
+                    (G%geoLatBu(I-1,J) - G%geoLatBu(I,J-1)) + &
+                    (G%geoLatBu(I,J) - G%geoLatBu(I-1,J-1)) )
+      G%sin_rot(i,j) = sin(angle) ! angle is the clockwise angle from lat/lon to ocean
+      G%cos_rot(i,j) = cos(angle) ! grid (e.g. angle of ocean "north" from true north)
+    enddo ; enddo
+
+    call pass_vector(G%cos_rot, G%sin_rot, G%Domain, stagger=AGRID)
+  endif
 
 end subroutine initialize_grid_rotation_angle
 
 ! -----------------------------------------------------------------------------
-subroutine reset_face_lengths_named(G, param_file, name)
-  type(dyn_horgrid_type), intent(inout) :: G
-  type(param_file_type), intent(in)    :: param_file
-  character(len=*),      intent(in)    :: name
-!   This subroutine sets the open face lengths at selected points to restrict
-! passages to their observed widths.
+!> Return the modulo value of x in an interval [xc-(Lx/2) xc+(Lx/2)]
+!! If Lx<=0, then it returns x without applying modulo arithmetic.
+function modulo_around_point(x, xc, Lx) result(x_mod)
+  real, intent(in) :: x  !< Value to which to apply modulo arithmetic
+  real, intent(in) :: xc !< Center of modulo range
+  real, intent(in) :: Lx !< Modulo range width
+  real :: x_mod          !< x shifted by an integer multiple of Lx to be close to xc.
 
-! Arguments: G - The ocean's grid structure.
-!  (in)      param_file - A structure indicating the open file to parse for
-!                         model parameter values.
-!  (in)      name - The name for the set of face lengths.
+  if (Lx > 0.0) then
+    x_mod = modulo(x - (xc - 0.5*Lx), Lx) + (xc - 0.5*Lx)
+  else
+    x_mod = x
+  endif
+end function modulo_around_point
+
+! -----------------------------------------------------------------------------
+!>   This subroutine sets the open face lengths at selected points to restrict
+!! passages to their observed widths based on a named set of sizes.
+subroutine reset_face_lengths_named(G, param_file, name, US)
+  type(dyn_horgrid_type), intent(inout) :: G  !< The dynamic horizontal grid
+  type(param_file_type),  intent(in)    :: param_file !< A structure to parse for run-time parameters
+  character(len=*),       intent(in)    :: name !< The name for the set of face lengths. Only "global_1deg"
+                                                !! is currently implemented.
+  type(unit_scale_type), optional, intent(in) :: US !< A dimensional unit scaling type
+
+  ! Local variables
   character(len=256) :: mesg    ! Message for error messages.
   real    :: dx_2 = -1.0, dy_2 = -1.0
   real    :: pi_180
@@ -671,16 +736,15 @@ end subroutine reset_face_lengths_named
 ! -----------------------------------------------------------------------------
 
 ! -----------------------------------------------------------------------------
-subroutine reset_face_lengths_file(G, param_file)
-  type(dyn_horgrid_type), intent(inout) :: G
-  type(param_file_type), intent(in)    :: param_file
-!   This subroutine sets the open face lengths at selected points to restrict
-! passages to their observed widths.
+!> This subroutine sets the open face lengths at selected points to restrict
+!! passages to their observed widths from a arrays read from a file.
+subroutine reset_face_lengths_file(G, param_file, US)
+  type(dyn_horgrid_type), intent(inout) :: G  !< The dynamic horizontal grid
+  type(param_file_type),  intent(in)    :: param_file !< A structure to parse for run-time parameters
+  type(unit_scale_type), optional, intent(in) :: US !< A dimensional unit scaling type
 
-! Arguments: G - The ocean's grid structure.
-!  (in)      param_file - A structure indicating the open file to parse for
-!                         model parameter values.
-  character(len=40)  :: mod = "reset_face_lengths_file" ! This subroutine's name.
+  ! Local variables
+  character(len=40)  :: mdl = "reset_face_lengths_file" ! This subroutine's name.
   character(len=256) :: mesg    ! Message for error messages.
   character(len=200) :: filename, chan_file, inputdir ! Strings for file/path
   integer :: i, j, isd, ied, jsd, jed, IsdB, IedB, JsdB, JedB
@@ -688,23 +752,22 @@ subroutine reset_face_lengths_file(G, param_file)
   IsdB = G%IsdB ; IedB = G%IedB ; JsdB = G%JsdB ; JedB = G%JedB
   ! These checks apply regardless of the chosen option.
 
-  call callTree_enter(trim(mod)//"(), MOM_shared_initialization.F90")
+  call callTree_enter(trim(mdl)//"(), MOM_shared_initialization.F90")
 
-  call get_param(param_file, mod, "CHANNEL_WIDTH_FILE", chan_file, &
+  call get_param(param_file, mdl, "CHANNEL_WIDTH_FILE", chan_file, &
                  "The file from which the list of narrowed channels is read.", &
                  default="ocean_geometry.nc")
-  call get_param(param_file,  mod, "INPUTDIR", inputdir, default=".")
+  call get_param(param_file,  mdl, "INPUTDIR", inputdir, default=".")
   inputdir = slasher(inputdir)
   filename = trim(inputdir)//trim(chan_file)
-  call log_param(param_file, mod, "INPUTDIR/CHANNEL_WIDTH_FILE", filename)
+  call log_param(param_file, mdl, "INPUTDIR/CHANNEL_WIDTH_FILE", filename)
 
   if (is_root_pe()) then ; if (.not.file_exists(filename)) &
     call MOM_error(FATAL," reset_face_lengths_file: Unable to open "//&
                            trim(filename))
   endif
 
-  call read_data(filename,"dyCuo",G%dy_Cu,domain=G%Domain%mpp_domain)
-  call read_data(filename,"dxCvo",G%dx_Cv,domain=G%Domain%mpp_domain)
+  call MOM_read_vector(filename, "dyCuo", "dxCvo", G%dy_Cu, G%dx_Cv, G%Domain)
   call pass_vector(G%dy_Cu, G%dx_Cv, G%Domain, To_All+SCALAR_PAIR, CGRID_NE)
 
   do j=jsd,jed ; do I=IsdB,IedB
@@ -734,29 +797,30 @@ subroutine reset_face_lengths_file(G, param_file)
     if (G%areaCv(i,J) > 0.0) G%IareaCv(i,J) = G%mask2dCv(i,J) / G%areaCv(i,J)
   enddo ; enddo
 
-  call callTree_leave(trim(mod)//'()')
+  call callTree_leave(trim(mdl)//'()')
 end subroutine reset_face_lengths_file
 ! -----------------------------------------------------------------------------
 
 ! -----------------------------------------------------------------------------
-subroutine reset_face_lengths_list(G, param_file)
-  type(dyn_horgrid_type), intent(inout) :: G
-  type(param_file_type),  intent(in)    :: param_file
-!   This subroutine sets the open face lengths at selected points to restrict
-! passages to their observed widths.
+!> This subroutine sets the open face lengths at selected points to restrict
+!! passages to their observed widths from a list read from a file.
+subroutine reset_face_lengths_list(G, param_file, US)
+  type(dyn_horgrid_type), intent(inout) :: G  !< The dynamic horizontal grid
+  type(param_file_type),  intent(in)    :: param_file !< A structure to parse for run-time parameters
+  type(unit_scale_type), optional, intent(in)  :: US !< A dimensional unit scaling type
 
-! Arguments: G - The ocean's grid structure.
-!  (in)      param_file - A structure indicating the open file to parse for
-!                         model parameter values.
+  ! Local variables
   character(len=120), pointer, dimension(:) :: lines => NULL()
   character(len=120) :: line
-  character(len=200) :: filename, chan_file, inputdir ! Strings for file/path
-  character(len=40)  :: mod = "reset_face_lengths_list" ! This subroutine's name.
+  character(len=200) :: filename, chan_file, inputdir, mesg ! Strings for file/path
+  character(len=40)  :: mdl = "reset_face_lengths_list" ! This subroutine's name.
   real, pointer, dimension(:,:) :: &
     u_lat => NULL(), u_lon => NULL(), v_lat => NULL(), v_lon => NULL()
   real, pointer, dimension(:) :: &
     u_width => NULL(), v_width => NULL()
   real    :: lat, lon     ! The latitude and longitude of a point.
+  real    :: len_lon      ! The periodic range of longitudes, usually 360 degrees.
+  real    :: len_lat      ! The range of latitudes, usually 180 degrees.
   real    :: lon_p, lon_m ! The longitude of a point shifted by 360 degrees.
   logical :: check_360    ! If true, check for longitudes that are shifted by
                           ! +/- 360 degrees from the specified range of values.
@@ -768,16 +832,16 @@ subroutine reset_face_lengths_list(G, param_file)
   isd = G%isd ; ied = G%ied ; jsd = G%jsd ; jed = G%jed
   IsdB = G%IsdB ; IedB = G%IedB ; JsdB = G%JsdB ; JedB = G%JedB
 
-  call callTree_enter(trim(mod)//"(), MOM_shared_initialization.F90")
+  call callTree_enter(trim(mdl)//"(), MOM_shared_initialization.F90")
 
-  call get_param(param_file, mod, "CHANNEL_LIST_FILE", chan_file, &
+  call get_param(param_file, mdl, "CHANNEL_LIST_FILE", chan_file, &
                  "The file from which the list of narrowed channels is read.", &
                  default="MOM_channel_list")
-  call get_param(param_file, mod, "INPUTDIR", inputdir, default=".")
+  call get_param(param_file, mdl, "INPUTDIR", inputdir, default=".")
   inputdir = slasher(inputdir)
   filename = trim(inputdir)//trim(chan_file)
-  call log_param(param_file, mod, "INPUTDIR/CHANNEL_LIST_FILE", filename)
-  call get_param(param_file, mod, "CHANNEL_LIST_360_LON_CHECK", check_360, &
+  call log_param(param_file, mdl, "INPUTDIR/CHANNEL_LIST_FILE", filename)
+  call get_param(param_file, mdl, "CHANNEL_LIST_360_LON_CHECK", check_360, &
                  "If true, the channel configuration list works for any \n"//&
                  "longitudes in the range of -360 to 360.", default=.true.)
 
@@ -803,6 +867,8 @@ subroutine reset_face_lengths_list(G, param_file)
     call read_face_length_list(iounit, filename, num_lines, lines)
   endif
 
+  len_lon = 360.0 ; if (G%len_lon > 0.0) len_lon = G%len_lon
+  len_lat = 180.0 ; if (G%len_lat > 0.0) len_lat = G%len_lat
   ! Broadcast the number of lines and allocate the required space.
   call broadcast(num_lines, root_PE())
   u_pt = 0 ; v_pt = 0
@@ -844,11 +910,11 @@ subroutine reset_face_lengths_list(G, param_file)
         read(line(isu+8:),*) u_lon(1:2,u_pt), u_lat(1:2,u_pt), u_width(u_pt)
         if (is_root_PE()) then
           if (check_360) then
-            if ((abs(u_lon(1,u_pt)) > 360.0) .or. (abs(u_lon(2,u_pt)) > 360.0)) &
+            if ((abs(u_lon(1,u_pt)) > len_lon) .or. (abs(u_lon(2,u_pt)) > len_lon)) &
               call MOM_error(WARNING, "reset_face_lengths_list : Out-of-bounds "//&
                  "u-longitude found when reading line "//trim(line)//" from file "//&
                  trim(filename))
-            if ((abs(u_lat(1,u_pt)) > 180.0) .or. (abs(u_lat(2,u_pt)) > 180.0)) &
+            if ((abs(u_lat(1,u_pt)) > len_lat) .or. (abs(u_lat(2,u_pt)) > len_lat)) &
               call MOM_error(WARNING, "reset_face_lengths_list : Out-of-bounds "//&
                  "u-latitude found when reading line "//trim(line)//" from file "//&
                  trim(filename))
@@ -871,11 +937,11 @@ subroutine reset_face_lengths_list(G, param_file)
         read(line(isv+8:),*) v_lon(1:2,v_pt), v_lat(1:2,v_pt), v_width(v_pt)
         if (is_root_PE()) then
           if (check_360) then
-            if ((abs(v_lon(1,v_pt)) > 360.0) .or. (abs(v_lon(2,v_pt)) > 360.0)) &
+            if ((abs(v_lon(1,v_pt)) > len_lon) .or. (abs(v_lon(2,v_pt)) > len_lon)) &
               call MOM_error(WARNING, "reset_face_lengths_list : Out-of-bounds "//&
                  "v-longitude found when reading line "//trim(line)//" from file "//&
                  trim(filename))
-            if ((abs(v_lat(1,v_pt)) > 180.0) .or. (abs(v_lat(2,v_pt)) > 180.0)) &
+            if ((abs(v_lat(1,v_pt)) > len_lat) .or. (abs(v_lat(2,v_pt)) > len_lat)) &
               call MOM_error(WARNING, "reset_face_lengths_list : Out-of-bounds "//&
                  "v-latitude found when reading line "//trim(line)//" from file "//&
                  trim(filename))
@@ -901,16 +967,27 @@ subroutine reset_face_lengths_list(G, param_file)
 
   do j=jsd,jed ; do I=IsdB,IedB
     lat = G%geoLatCu(I,j) ; lon = G%geoLonCu(I,j)
-    if (check_360) then ; lon_p = lon+360.0 ; lon_m = lon-360.0
+    if (check_360) then ; lon_p = lon+len_lon ; lon_m = lon-len_lon
     else ; lon_p = lon ; lon_m = lon ; endif
 
     do npt=1,u_pt
       if (((lat >= u_lat(1,npt)) .and. (lat <= u_lat(2,npt))) .and. &
           (((lon >= u_lon(1,npt)) .and. (lon <= u_lon(2,npt))) .or. &
            ((lon_p >= u_lon(1,npt)) .and. (lon_p <= u_lon(2,npt))) .or. &
-           ((lon_m >= u_lon(1,npt)) .and. (lon_m <= u_lon(2,npt)))) ) &
+           ((lon_m >= u_lon(1,npt)) .and. (lon_m <= u_lon(2,npt)))) ) then
 
-      G%dy_Cu(I,j) = G%mask2dCu(I,j) * min(G%dyCu(I,j), max(u_width(npt), 0.0))
+        G%dy_Cu(I,j) = G%mask2dCu(I,j) * min(G%dyCu(I,j), max(u_width(npt), 0.0))
+        if (j>=G%jsc .and. j<=G%jec .and. I>=G%isc .and. I<=G%iec) then ! Limit messages/checking to compute domain
+          if ( G%mask2dCu(I,j) == 0.0 )  then
+            write(*,'(A,2F8.2,A,4F8.2,A)') "read_face_lengths_list : G%mask2dCu=0 at ",lat,lon," (",&
+                u_lat(1,npt), u_lat(2,npt), u_lon(1,npt), u_lon(2,npt),") so grid metric is unmodified."
+          else
+            write(*,'(A,2F8.2,A,4F8.2,A5,F9.2,A1)') &
+                  "read_face_lengths_list : Modifying dy_Cu gridpoint at ",lat,lon," (",&
+                  u_lat(1,npt), u_lat(2,npt), u_lon(1,npt), u_lon(2,npt),") to ",G%dy_Cu(I,j),"m"
+          endif
+        endif
+      endif
     enddo
 
     G%areaCu(I,j) = G%dxCu(I,j)*G%dy_Cu(I,j)
@@ -920,15 +997,26 @@ subroutine reset_face_lengths_list(G, param_file)
 
   do J=JsdB,JedB ; do i=isd,ied
     lat = G%geoLatCv(i,J) ; lon = G%geoLonCv(i,J)
-    if (check_360) then ; lon_p = lon+360.0 ; lon_m = lon-360.0
+    if (check_360) then ; lon_p = lon+len_lon ; lon_m = lon-len_lon
     else ; lon_p = lon ; lon_m = lon ; endif
 
     do npt=1,v_pt
       if (((lat >= v_lat(1,npt)) .and. (lat <= v_lat(2,npt))) .and. &
           (((lon >= v_lon(1,npt)) .and. (lon <= v_lon(2,npt))) .or. &
            ((lon_p >= v_lon(1,npt)) .and. (lon_p <= v_lon(2,npt))) .or. &
-           ((lon_m >= v_lon(1,npt)) .and. (lon_m <= v_lon(2,npt)))) ) &
+           ((lon_m >= v_lon(1,npt)) .and. (lon_m <= v_lon(2,npt)))) ) then
         G%dx_Cv(i,J) = G%mask2dCv(i,J) * min(G%dxCv(i,J), max(v_width(npt), 0.0))
+        if (i>=G%isc .and. i<=G%iec .and. J>=G%jsc .and. J<=G%jec) then ! Limit messages/checking to compute domain
+          if ( G%mask2dCv(i,J) == 0.0 )  then
+            write(*,'(A,2F8.2,A,4F8.2,A)') "read_face_lengths_list : G%mask2dCv=0 at ",lat,lon," (",&
+                  v_lat(1,npt), v_lat(2,npt), v_lon(1,npt), v_lon(2,npt),") so grid metric is unmodified."
+          else
+            write(*,'(A,2F8.2,A,4F8.2,A5,F9.2,A1)') &
+                  "read_face_lengths_list : Modifying dx_Cv gridpoint at ",lat,lon," (",&
+                  v_lat(1,npt), v_lat(2,npt), v_lon(1,npt), v_lon(2,npt),") to ",G%dx_Cv(I,j),"m"
+          endif
+        endif
+      endif
     enddo
 
     G%areaCv(i,J) = G%dyCv(i,J)*G%dx_Cv(i,J)
@@ -941,16 +1029,17 @@ subroutine reset_face_lengths_list(G, param_file)
     deallocate(v_lat) ; deallocate(v_lon) ; deallocate(v_width)
   endif
 
-  call callTree_leave(trim(mod)//'()')
+  call callTree_leave(trim(mdl)//'()')
 end subroutine reset_face_lengths_list
 ! -----------------------------------------------------------------------------
 
 ! -----------------------------------------------------------------------------
+!>   This subroutine reads and counts the non-blank lines in the face length list file, after removing comments.
 subroutine read_face_length_list(iounit, filename, num_lines, lines)
-  integer,                          intent(in)  :: iounit
-  character(len=*),                 intent(in)  :: filename
-  integer,                          intent(out) :: num_lines
-  character(len=120), dimension(:), pointer     :: lines
+  integer,                          intent(in)  :: iounit    !< An open I/O unit number for the file
+  character(len=*),                 intent(in)  :: filename  !< The name of the face-length file to read
+  integer,                          intent(out) :: num_lines !< The number of non-blank lines in the file
+  character(len=120), dimension(:), pointer     :: lines  !< The non-blank lines, after removing comments
 
   !   This subroutine reads and counts the non-blank lines in the face length
   ! list file, after removing comments.
@@ -1042,15 +1131,17 @@ end subroutine set_velocity_depth_min
 !! later use in reporting diagnostics
 subroutine compute_global_grid_integrals(G)
   type(dyn_horgrid_type), intent(inout) :: G  !< The dynamic horizontal grid
-  ! Subroutine to pre-compute global integrals of grid quantities for
-  ! later use in reporting diagnostics
+
+  ! Local variables
+  real, dimension(G%isc:G%iec, G%jsc:G%jec) :: tmpForSumming
   integer :: i,j
 
+  tmpForSumming(:,:) = 0.
   G%areaT_global = 0.0 ; G%IareaT_global = 0.0
   do j=G%jsc,G%jec ; do i=G%isc,G%iec
-    G%areaT_global = G%areaT_global + ( G%areaT(i,j) * G%mask2dT(i,j) )
+    tmpForSumming(i,j) = G%areaT(i,j) * G%mask2dT(i,j)
   enddo ; enddo
-  call sum_across_PEs( G%areaT_global )
+  G%areaT_global = reproducing_sum(tmpForSumming)
 
   if (G%areaT_global == 0.0) &
     call MOM_error(FATAL, "compute_global_grid_integrals: "//&
@@ -1063,23 +1154,22 @@ end subroutine compute_global_grid_integrals
 ! -----------------------------------------------------------------------------
 !> Write out a file describing the topography, Coriolis parameter, grid locations
 !! and various other fixed fields from the grid.
-subroutine write_ocean_geometry_file(G, param_file, directory, geom_file)
-  type(dyn_horgrid_type),     intent(inout) :: G         !< The dynamic horizontal grid
-  type(param_file_type),      intent(in)    :: param_file !< Parameter file structure
-  character(len=*),           intent(in)    :: directory !< The directory into which to place the geometry file.
-  character(len=*), optional, intent(in)    :: geom_file !< If present, the name of the geometry file
-                                                         !! (otherwise the file is "ocean_geometry")
-!   This subroutine writes out a file containing all of the ocean geometry
-! and grid data uses by the MOM ocean model.
-! Arguments: G - The ocean's grid structure.  Effectively intent in.
-!  (in)      param_file - A structure indicating the open file to parse for
-!                         model parameter values.
-!  (in)      directory - The directory into which to place the file.
+subroutine write_ocean_geometry_file(G, param_file, directory, geom_file, US)
+  type(dyn_horgrid_type),       intent(inout) :: G         !< The dynamic horizontal grid
+  type(param_file_type),        intent(in)    :: param_file !< Parameter file structure
+  character(len=*),             intent(in)    :: directory !< The directory into which to place the geometry file.
+  character(len=*),   optional, intent(in)    :: geom_file !< If present, the name of the geometry file
+                                                           !! (otherwise the file is "ocean_geometry")
+  type(unit_scale_type), optional, intent(in) :: US        !< A dimensional unit scaling type
+
+  ! Local variables.
   character(len=240) :: filepath
-  character(len=40)  :: mod = "write_ocean_geometry_file"
+  character(len=40)  :: mdl = "write_ocean_geometry_file"
   integer, parameter :: nFlds=23
   type(vardesc) :: vars(nFlds)
   type(fieldtype) :: fields(nFlds)
+  real :: Z_to_m_scale ! A unit conversion factor from Z to m.
+  real :: s_to_T_scale ! A unit conversion factor from T-1 to s-1.
   integer :: unit
   integer :: file_threading
   integer :: nFlds_used
@@ -1095,6 +1185,9 @@ subroutine write_ocean_geometry_file(G, param_file, directory, geom_file)
   Isq = G%IscB ; Ieq = G%IecB ; Jsq = G%JscB ; Jeq = G%JecB
   isd = G%isd ; ied = G%ied ; jsd = G%jsd ; jed = G%jed
   IsdB = G%IsdB ; IedB = G%IedB ; JsdB = G%JsdB ; JedB = G%JedB
+
+  Z_to_m_scale = 1.0 ; if (present(US)) Z_to_m_scale = US%Z_to_m
+  s_to_T_scale = 1.0 ; if (present(US)) s_to_T_scale = US%s_to_T
 
 !   vardesc is a structure defined in MOM_io.F90.  The elements of
 ! this structure, in order, are:
@@ -1112,7 +1205,7 @@ subroutine write_ocean_geometry_file(G, param_file, directory, geom_file)
   vars(3) = var_desc("geolat","degree", "latitude at tracer (T) points", 'h','1','1')
   vars(4) = var_desc("geolon","degree","longitude at tracer (T) points",'h','1','1')
   vars(5) = var_desc("D","meter","Basin Depth",'h','1','1')
-  vars(6) = var_desc("f","second-1","Coriolis Parameter",'q','1','1')
+  vars(6) = var_desc("f","s-1","Coriolis Parameter",'q','1','1')
   vars(7) = var_desc("dxCv","m","Zonal grid spacing at v points",'v','1','1')
   vars(8) = var_desc("dyCu","m","Meridional grid spacing at u points",'u','1','1')
   vars(9) = var_desc("dxCu","m","Zonal grid spacing at u points",'u','1','1')
@@ -1126,12 +1219,13 @@ subroutine write_ocean_geometry_file(G, param_file, directory, geom_file)
 
   vars(17)= var_desc("dxCvo","m","Open zonal grid spacing at v points",'v','1','1')
   vars(18)= var_desc("dyCuo","m","Open meridional grid spacing at u points",'u','1','1')
-  vars(19)= var_desc("wet", "none", "land or ocean?", 'h','1','1')
+  vars(19)= var_desc("wet", "nondim", "land or ocean?", 'h','1','1')
 
-  vars(20) = var_desc("Dblock_u","meter","Blocked depth at u points",'u','1','1')
-  vars(21) = var_desc("Dopen_u","meter","Open depth at u points",'u','1','1')
-  vars(22) = var_desc("Dblock_v","meter","Blocked depth at v points",'v','1','1')
-  vars(23) = var_desc("Dopen_v","meter","Open depth at v points",'v','1','1')
+  vars(20) = var_desc("Dblock_u","m","Blocked depth at u points",'u','1','1')
+  vars(21) = var_desc("Dopen_u","m","Open depth at u points",'u','1','1')
+  vars(22) = var_desc("Dblock_v","m","Blocked depth at v points",'v','1','1')
+  vars(23) = var_desc("Dopen_v","m","Open depth at v points",'v','1','1')
+
 
   nFlds_used = 19 ; if (G%bathymetry_at_vel) nFlds_used = 23
 
@@ -1146,7 +1240,7 @@ subroutine write_ocean_geometry_file(G, param_file, directory, geom_file)
   out_v(:,:) = 0.0
   out_q(:,:) = 0.0
 
-  call get_param(param_file, mod, "PARALLEL_RESTARTFILES", multiple_files, &
+  call get_param(param_file, mdl, "PARALLEL_RESTARTFILES", multiple_files, &
                  "If true, each processor writes its own restart file, \n"//&
                  "otherwise a single restart file is generated", &
                  default=.false.)
@@ -1156,15 +1250,17 @@ subroutine write_ocean_geometry_file(G, param_file, directory, geom_file)
   call create_file(unit, trim(filepath), vars, nFlds_used, fields, &
                    file_threading, dG=G)
 
-  do J=Jsq,Jeq; do I=Isq,Ieq; out_q(I,J) = G%geoLatBu(I,J); enddo; enddo
+  do J=Jsq,Jeq; do I=Isq,Ieq; out_q(I,J) = G%geoLatBu(I,J); enddo ; enddo
   call write_field(unit, fields(1), G%Domain%mpp_domain, out_q)
-  do J=Jsq,Jeq; do I=Isq,Ieq; out_q(I,J) = G%geoLonBu(I,J); enddo; enddo
+  do J=Jsq,Jeq; do I=Isq,Ieq; out_q(I,J) = G%geoLonBu(I,J); enddo ; enddo
   call write_field(unit, fields(2), G%Domain%mpp_domain, out_q)
   call write_field(unit, fields(3), G%Domain%mpp_domain, G%geoLatT)
   call write_field(unit, fields(4), G%Domain%mpp_domain, G%geoLonT)
 
-  call write_field(unit, fields(5), G%Domain%mpp_domain, G%bathyT)
-  call write_field(unit, fields(6), G%Domain%mpp_domain, G%CoriolisBu)
+  do j=js,je ; do i=is,ie ; out_h(i,j) = Z_to_m_scale*G%bathyT(i,j) ; enddo ; enddo
+  call write_field(unit, fields(5), G%Domain%mpp_domain, out_h)
+  do J=Jsq,Jeq ; do I=Isq,Ieq ; out_q(i,J) = s_to_T_scale*G%CoriolisBu(I,J) ; enddo ; enddo
+  call write_field(unit, fields(6), G%Domain%mpp_domain, out_q)
 
   !   I think that all of these copies are holdovers from a much earlier
   ! ancestor code in which many of the metrics were macros that could have
@@ -1179,7 +1275,7 @@ subroutine write_ocean_geometry_file(G, param_file, directory, geom_file)
   do J=Jsq,Jeq ; do i=is,ie ; out_v(i,J) = G%dyCv(i,J) ; enddo ; enddo
   call write_field(unit, fields(10), G%Domain%mpp_domain, out_v)
 
-  do j=js,je ; do i=is,ie ; out_h(i,j) = G%dxT(i,j); enddo; enddo
+  do j=js,je ; do i=is,ie ; out_h(i,j) = G%dxT(i,j); enddo ; enddo
   call write_field(unit, fields(11), G%Domain%mpp_domain, out_h)
   do j=js,je ; do i=is,ie ; out_h(i,j) = G%dyT(i,j) ; enddo ; enddo
   call write_field(unit, fields(12), G%Domain%mpp_domain, out_h)
@@ -1199,10 +1295,14 @@ subroutine write_ocean_geometry_file(G, param_file, directory, geom_file)
   call write_field(unit, fields(19), G%Domain%mpp_domain, G%mask2dT)
 
   if (G%bathymetry_at_vel) then
-    call write_field(unit, fields(20), G%Domain%mpp_domain, G%Dblock_u)
-    call write_field(unit, fields(21), G%Domain%mpp_domain, G%Dopen_u)
-    call write_field(unit, fields(22), G%Domain%mpp_domain, G%Dblock_v)
-    call write_field(unit, fields(23), G%Domain%mpp_domain, G%Dopen_v)
+    do j=js,je ; do I=Isq,Ieq ; out_u(I,j) = Z_to_m_scale*G%Dblock_u(I,j) ; enddo ; enddo
+    call write_field(unit, fields(20), G%Domain%mpp_domain, out_u)
+    do j=js,je ; do I=Isq,Ieq ; out_u(I,j) = Z_to_m_scale*G%Dopen_u(I,j) ; enddo ; enddo
+    call write_field(unit, fields(21), G%Domain%mpp_domain, out_u)
+    do J=Jsq,Jeq ; do i=is,ie ; out_v(i,J) = Z_to_m_scale*G%Dblock_v(i,J) ; enddo ; enddo
+    call write_field(unit, fields(22), G%Domain%mpp_domain, out_v)
+    do J=Jsq,Jeq ; do i=is,ie ; out_v(i,J) = Z_to_m_scale*G%Dopen_v(i,J) ; enddo ; enddo
+    call write_field(unit, fields(23), G%Domain%mpp_domain, out_v)
   endif
 
   call close_file(unit)

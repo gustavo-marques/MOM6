@@ -3,16 +3,11 @@
 API Reference
 =============
 
+This API reference is a partial image of the complete API documentation.
+The pages you find here are linkable - the url for the page is static.
+The complete API documentation is generated with doxygen and can be found at http://noaa-gfdl.github.io/MOM6/APIs/.
+
 .. toctree::
   :maxdepth: 1
 
-  api_modules
-  api_annotated
-  api_pages
-  api_files
-  api_classes
-  api_globals
-  api_globals_defs
-  api_globals_func
-  api_globals_vars
-  api_todo
+  api/modules

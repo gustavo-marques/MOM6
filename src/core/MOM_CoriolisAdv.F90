@@ -10,8 +10,10 @@ use MOM_diag_mediator, only : register_diag_field, safe_alloc_ptr, time_type
 use MOM_error_handler, only : MOM_error, MOM_mesg, FATAL, WARNING
 use MOM_file_parser,   only : get_param, log_version, param_file_type
 use MOM_grid,          only : ocean_grid_type
-use MOM_open_boundary, only : ocean_OBC_type
+use MOM_open_boundary, only : ocean_OBC_type, OBC_DIRECTION_E, OBC_DIRECTION_W
+use MOM_open_boundary, only : OBC_DIRECTION_N, OBC_DIRECTION_S
 use MOM_string_functions, only : uppercase
+use MOM_unit_scaling,  only : unit_scale_type
 use MOM_variables,     only : accel_diag_ptrs
 use MOM_verticalGrid,  only : verticalGrid_type
 
@@ -69,11 +71,12 @@ type, public :: CoriolisAdv_CS ; private
                              !! SADOURNY75_ENERGY.
   type(time_type), pointer :: Time !< A pointer to the ocean model's clock.
   type(diag_ctrl), pointer :: diag !< A structure that is used to regulate the timing of diagnostic output.
+  !>@{ Diagnostic IDs
   integer :: id_rv = -1, id_PV = -1, id_gKEu = -1, id_gKEv = -1
-  integer :: id_rvxu = -1, id_rvxv = -1
+  integer :: id_rvxu = -1, id_rvxv = -1   !!@}
 end type CoriolisAdv_CS
 
-! Enumeration values for Coriolis_Scheme
+!>@{ Enumeration values for Coriolis_Scheme
 integer, parameter :: SADOURNY75_ENERGY = 1
 integer, parameter :: ARAKAWA_HSU90     = 2
 integer, parameter :: ROBUST_ENSTRO     = 3
@@ -86,100 +89,109 @@ character*(20), parameter :: ROBUST_ENSTRO_STRING = "ROBUST_ENSTRO"
 character*(20), parameter :: SADOURNY75_ENSTRO_STRING = "SADOURNY75_ENSTRO"
 character*(20), parameter :: ARAKAWA_LAMB_STRING = "ARAKAWA_LAMB81"
 character*(20), parameter :: AL_BLEND_STRING = "ARAKAWA_LAMB_BLEND"
-! Enumeration values for KE_Scheme
+!!@}
+!>@{ Enumeration values for KE_Scheme
 integer, parameter :: KE_ARAKAWA        = 10
 integer, parameter :: KE_SIMPLE_GUDONOV = 11
 integer, parameter :: KE_GUDONOV        = 12
 character*(20), parameter :: KE_ARAKAWA_STRING = "KE_ARAKAWA"
 character*(20), parameter :: KE_SIMPLE_GUDONOV_STRING = "KE_SIMPLE_GUDONOV"
 character*(20), parameter :: KE_GUDONOV_STRING = "KE_GUDONOV"
-! Enumeration values for PV_Adv_Scheme
+!!@}
+!>@{ Enumeration values for PV_Adv_Scheme
 integer, parameter :: PV_ADV_CENTERED   = 21
 integer, parameter :: PV_ADV_UPWIND1    = 22
 character*(20), parameter :: PV_ADV_CENTERED_STRING = "PV_ADV_CENTERED"
 character*(20), parameter :: PV_ADV_UPWIND1_STRING = "PV_ADV_UPWIND1"
+!!@}
 
 contains
 
 !> Calculates the Coriolis and momentum advection contributions to the acceleration.
-subroutine CorAdCalc(u, v, h, uh, vh, CAu, CAv, OBC, AD, G, GV, CS)
-  type(ocean_grid_type),                     intent(in)    :: G !< Ocen grid structure
+subroutine CorAdCalc(u, v, h, uh, vh, CAu, CAv, OBC, AD, G, GV, US, CS)
+  type(ocean_grid_type),                     intent(in)    :: G  !< Ocen grid structure
   type(verticalGrid_type),                   intent(in)    :: GV !< Vertical grid structure
-  real, dimension(SZIB_(G),SZJ_(G),SZK_(G)), intent(in)    :: u !< Zonal velocity (m/s)
-  real, dimension(SZI_(G),SZJB_(G),SZK_(G)), intent(in)    :: v !< Meridional velocity (m/s)
-  real, dimension(SZI_(G),SZJ_(G),SZK_(G)),  intent(in)    :: h !< Layer thickness (m or kg/m2)
-  real, dimension(SZIB_(G),SZJ_(G),SZK_(G)), intent(in)    :: uh !< Zonal transport u*h*dy (m3/s or kg/s)
-  real, dimension(SZI_(G),SZJB_(G),SZK_(G)), intent(in)    :: vh !< Meridional transport v*h*dx (m3/s or kg/s)
+  real, dimension(SZIB_(G),SZJ_(G),SZK_(G)), intent(in)    :: u  !< Zonal velocity [m s-1]
+  real, dimension(SZI_(G),SZJB_(G),SZK_(G)), intent(in)    :: v  !< Meridional velocity [m s-1]
+  real, dimension(SZI_(G),SZJ_(G),SZK_(G)),  intent(in)    :: h  !< Layer thickness [H ~> m or kg m-2]
+  real, dimension(SZIB_(G),SZJ_(G),SZK_(G)), intent(in)    :: uh !< Zonal transport u*h*dy
+                                                                 !! [H m2 s-1 ~> m3 s-1 or kg s-1]
+  real, dimension(SZI_(G),SZJB_(G),SZK_(G)), intent(in)    :: vh !< Meridional transport v*h*dx
+                                                                 !! [H m2 s-1 ~> m3 s-1 or kg s-1]
   real, dimension(SZIB_(G),SZJ_(G),SZK_(G)), intent(out)   :: CAu !< Zonal acceleration due to Coriolis
-                                                                  !! and momentum advection, in m/s2.
+                                                                  !! and momentum advection [m s-2].
   real, dimension(SZI_(G),SZJB_(G),SZK_(G)), intent(out)   :: CAv !< Meridional acceleration due to Coriolis
-                                                                  !! and momentum advection, in m/s2.
+                                                                  !! and momentum advection [m s-2].
   type(ocean_OBC_type),                      pointer       :: OBC !< Open boundary control structure
-  type(accel_diag_ptrs),                     intent(inout) :: AD !< Storage for acceleration diagnostics
-  type(CoriolisAdv_CS),                      pointer       :: CS !< Control structure for MOM_CoriolisAdv
-  ! Local variables
+  type(accel_diag_ptrs),                     intent(inout) :: AD  !< Storage for acceleration diagnostics
+  type(unit_scale_type),                     intent(in)    :: US  !< A dimensional unit scaling type
+  type(CoriolisAdv_CS),                      pointer       :: CS  !< Control structure for MOM_CoriolisAdv
 
+  ! Local variables
   real, dimension(SZIB_(G),SZJB_(G)) :: &
-    q, &        ! Layer potential vorticity, in m-1 s-1.
-    Ih_q, &     ! The inverse of thickness interpolated to q pointes, in
-                ! units of m-1 or m2 kg-1.
-    Area_q      ! The sum of the ocean areas at the 4 adjacent thickness
-                ! points, in m2.
+    q, &        ! Layer potential vorticity [m-1 s-1].
+    Ih_q, &     ! The inverse of thickness interpolated to q points [H-1 ~> m-1 or m2 kg-1].
+    Area_q      ! The sum of the ocean areas at the 4 adjacent thickness points [m2].
 
   real, dimension(SZIB_(G),SZJ_(G)) :: &
     a, b, c, d  ! a, b, c, & d are combinations of the potential vorticities
                 ! surrounding an h grid point.  At small scales, a = q/4,
-                ! b = q/4, etc.  All are in units of m-1 s-1 or m2 kg-1 s-1,
+                ! b = q/4, etc.  All are in [H-1 s-1 ~> m-1 s-1 or m2 kg-1 s-1],
                 ! and use the indexing of the corresponding u point.
 
   real, dimension(SZI_(G),SZJ_(G)) :: &
-    Area_h, &   ! The ocean area at h points, in m2.  Area_h is used to find the
+    Area_h, &   ! The ocean area at h points [m2].  Area_h is used to find the
                 ! average thickness in the denominator of q.  0 for land points.
-    KE          ! Kinetic energy per unit mass, KE = (u^2 + v^2)/2, in m2 s-2.
+    KE          ! Kinetic energy per unit mass [m2 s-2], KE = (u^2 + v^2)/2.
   real, dimension(SZIB_(G),SZJ_(G)) :: &
-    KEx         ! The zonal gradient of Kinetic energy per unit mass,
-                ! KEx = d/dx KE, in m s-2.
+    hArea_u, &  ! The cell area weighted thickness interpolated to u points
+                ! times the effective areas [H m2 ~> m3 or kg].
+    KEx, &      ! The zonal gradient of Kinetic energy per unit mass [m s-2],
+                ! KEx = d/dx KE.
+    uh_center   ! Transport based on arithmetic mean h at u-points [H m2 s-1 ~> m3 s-1 or kg s-1]
   real, dimension(SZI_(G),SZJB_(G)) :: &
-    KEy         ! The meridonal gradient of Kinetic energy per unit mass,
-                ! KEy = d/dy KE, in m s-2.
+    hArea_v, &  ! The cell area weighted thickness interpolated to v points
+                ! times the effective areas [H m2 ~> m3 or kg].
+    KEy, &      ! The meridonal gradient of Kinetic energy per unit mass [m s-2],
+                ! KEy = d/dy KE.
+    vh_center   ! Transport based on arithmetic mean h at v-points [H m2 s-1 ~> m3 s-1 or kg s-1]
   real, dimension(SZI_(G),SZJ_(G)) :: &
     uh_min, uh_max, &   ! The smallest and largest estimates of the volume
-    vh_min, vh_max, &   ! fluxes through the faces (i.e. u*h*dy & v*h*dx),
-                        ! in m3 s-1 or kg s-1.
+    vh_min, vh_max, &   ! fluxes through the faces (i.e. u*h*dy & v*h*dx)
+                        ! [H m2 s-1 ~> m3 s-1 or kg s-1].
     ep_u, ep_v  ! Additional pseudo-Coriolis terms in the Arakawa and Lamb
-                ! discretization, in m-1 s-1 or m2 kg-1 s-1.
+                ! discretization [H-1 s-1 ~> m-1 s-1 or m2 kg-1 s-1].
   real, dimension(SZIB_(G),SZJB_(G)) :: &
-    dvdx,dudy, &! Contributions to the circulation around q-points (m2 s-1)
-    abs_vort, & ! Absolute vorticity at q-points, in s-1.
-    q2, &       ! Relative vorticity over thickness.
+    dvdx,dudy, &! Contributions to the circulation around q-points [m2 s-1]
+    abs_vort, & ! Absolute vorticity at q-points [s-1].
+    q2, &       ! Relative vorticity over thickness [H-1 s-1 ~> m-1 s-1 or m2 kg-1 s-1].
     max_fvq, &  ! The maximum or minimum of the
     min_fvq, &  ! adjacent values of (-u) or v times
-    max_fuq, &  ! the absolute vorticity, in m s-2.
+    max_fuq, &  ! the absolute vorticity [m s-2].
     min_fuq     ! All are defined at q points.
   real, dimension(SZIB_(G),SZJB_(G),SZK_(G)) :: &
-    PV, &       ! A diagnostic array of the potential vorticities, in m-1 s-1.
-    RV          ! A diagnostic array of the relative vorticities, in s-1.
-  real :: fv1, fv2, fu1, fu2   ! (f+rv)*v or (f+rv)*u in m s-2.
-  real :: max_fv, max_fu       ! The maximum or minimum of the neighbor-
-  real :: min_fv, min_fu       ! max(min)_fu(v)q, in m s-2.
+    PV, &       ! A diagnostic array of the potential vorticities [m-1 s-1].
+    RV          ! A diagnostic array of the relative vorticities [s-1].
+  real :: fv1, fv2, fu1, fu2   ! (f+rv)*v or (f+rv)*u [m s-2].
+  real :: max_fv, max_fu       ! The maximum or minimum of the neighboring Coriolis
+  real :: min_fv, min_fu       ! accelerations [m s-2], i.e. max(min)_fu(v)q.
 
   real, parameter :: C1_12=1.0/12.0 ! C1_12 = 1/12
   real, parameter :: C1_24=1.0/24.0 ! C1_24 = 1/24
-  real :: absolute_vorticity     ! Absolute vorticity, in s-1.
-  real :: relative_vorticity     ! Relative vorticity, in s-1.
-  real :: Ih                     ! Inverse of thickness, m-1 or m2 kg-1.
-  real :: max_Ihq, min_Ihq       ! The maximum and minimum of the nearby Ihq.
+  real :: absolute_vorticity     ! Absolute vorticity [s-1].
+  real :: relative_vorticity     ! Relative vorticity [s-1].
+  real :: Ih                     ! Inverse of thickness [H-1 ~> m-1 or m2 kg-1].
+  real :: max_Ihq, min_Ihq       ! The maximum and minimum of the nearby Ihq [H-1 ~> m-1 or m2 kg-1].
   real :: hArea_q                ! The sum of area times thickness of the cells
-                                 ! surrounding a q point, in m3 or kg.
+                                 ! surrounding a q point [H m2 ~> m3 or kg].
   real :: h_neglect              ! A thickness that is so small it is usually
-                                 ! lost in roundoff and can be neglected, in m.
-  real :: temp1, temp2           ! Temporary variables, in m2 s-2.
-  real, parameter :: eps_vel=1.0e-10 ! A tiny, positive velocity, in m s-1.
+                                 ! lost in roundoff and can be neglected [H ~> m or kg m-2].
+  real :: temp1, temp2           ! Temporary variables [m2 s-2].
+  real, parameter :: eps_vel=1.0e-10 ! A tiny, positive velocity [m s-1].
 
-  real :: uhc, vhc               ! Centered estimates of uh and vh in m3 s-1 or kg s-1.
-  real :: uhm, vhm               ! The input estimates of uh and vh in m3 s-1 or kg s-1.
-  real :: c1, c2, c3, slope      ! Nondimensional parameters for the Coriolis
-                                 ! limiter scheme.
+  real :: uhc, vhc               ! Centered estimates of uh and vh [H m2 s-1 ~> m3 s-1 or kg s-1].
+  real :: uhm, vhm               ! The input estimates of uh and vh [H m2 s-1 ~> m3 s-1 or kg s-1].
+  real :: c1, c2, c3, slope      ! Nondimensional parameters for the Coriolis limiter scheme.
 
   real :: Fe_m2         ! Nondimensional temporary variables asssociated with
   real :: rat_lin       ! the ARAKAWA_LAMB_BLEND scheme.
@@ -191,48 +203,58 @@ subroutine CorAdCalc(u, v, h, uh, vh, CAu, CAv, OBC, AD, G, GV, CS)
                         ! the other two with the ARAKAWA_LAMB_BLEND scheme,
                         ! nondimensional between 0 and 1.
 
-  real :: Heff1, Heff2  ! Temporary effective H at U or V points in m or kg m-2.
-  real :: Heff3, Heff4  ! Temporary effective H at U or V points in m or kg m-2.
-  real :: h_tiny        ! A very small thickness, in m or kg m-2.
-  real :: UHeff, VHeff  ! More temporary variables, in m3 s-1 or kg s-1.
-  real :: QUHeff,QVHeff ! More temporary variables, in m3 s-2 or kg s-2.
+  real :: Heff1, Heff2  ! Temporary effective H at U or V points [H ~> m or kg m-2].
+  real :: Heff3, Heff4  ! Temporary effective H at U or V points [H ~> m or kg m-2].
+  real :: h_tiny        ! A very small thickness [H ~> m or kg m-2].
+  real :: UHeff, VHeff  ! More temporary variables [H m2 s-1 ~> m3 s-1 or kg s-1].
+  real :: QUHeff,QVHeff ! More temporary variables [H m2 s-1 ~> m3 s-1 or kg s-1].
   integer :: i, j, k, n, is, ie, js, je, Isq, Ieq, Jsq, Jeq, nz
 
 ! To work, the following fields must be set outside of the usual
 ! is to ie range before this subroutine is called:
-!  v[is-1,ie+1,ie+2], u[is-1,ie+1], vh[ie+1], uh[is-1], and
-!  h[is-1,ie+1,ie+2].
-! In the y-direction, the following fields must be set:
-!  v[js-1,je+1], u[js-1,je+1,je+2], vh[js-1], uh[je+1], and
-!  h[js-1,je+1,je+2].
+!   v(is-1:ie+2,js-1:je+1), u(is-1:ie+1,js-1:je+2), h(is-1:ie+2,js-1:je+2),
+!   uh(is-1,ie,js:je+1) and vh(is:ie+1,js-1:je).
 
   if (.not.associated(CS)) call MOM_error(FATAL, &
          "MOM_CoriolisAdv: Module must be initialized before it is used.")
   is = G%isc ; ie = G%iec ; js = G%jsc ; je = G%jec
   Isq = G%IscB ; Ieq = G%IecB ; Jsq = G%JscB ; Jeq = G%JecB ; nz = G%ke
   h_neglect = GV%H_subroundoff
-  h_tiny = GV%Angstrom  ! Perhaps this should be set to h_neglect instead.
+  h_tiny = GV%Angstrom_H  ! Perhaps this should be set to h_neglect instead.
 
-!$OMP parallel default(none) shared(u,v,h,uh,vh,CAu,CAv,G,CS,AD,Area_h,Area_q,nz,RV,PV, &
-!$OMP                               is,ie,js,je,Isq,Ieq,Jsq,Jeq,h_neglect,h_tiny,dvdx,dudy,OBC) &
-!$OMP                       private(relative_vorticity,absolute_vorticity,Ih,hArea_q,q, &
-!$OMP                               abs_vort,Ih_q,fv1,fv2,fu1,fu2,max_fvq,max_fuq,      &
-!$OMP                               min_fvq,min_fuq,q2,a,b,c,d,ep_u,ep_v,Fe_m2,rat_lin, &
-!$OMP                               min_Ihq,max_Ihq,rat_m1,AL_wt,Sad_wt,c1,c2,c3,slope, &
-!$OMP                               uhc,uhm,uh_min,uh_max,vhc,vhm,vh_min,vh_max,KE,KEx, &
-!$OMP                               KEy,temp1,temp2,Heff1,Heff2,Heff3,Heff4,VHeff,      &
-!$OMP                               QVHeff,max_fv,min_fv,UHeff,QUHeff,max_fu,min_fu)
-!$OMP do
+  !$OMP parallel do default(private) shared(Isq,Ieq,Jsq,Jeq,G,Area_h)
   do j=Jsq-1,Jeq+2 ; do I=Isq-1,Ieq+2
     Area_h(i,j) = G%mask2dT(i,j) * G%areaT(i,j)
   enddo ; enddo
-!$OMP do
+  if (associated(OBC)) then ; do n=1,OBC%number_of_segments
+    if (.not. OBC%segment(n)%on_pe) cycle
+    I = OBC%segment(n)%HI%IsdB ; J = OBC%segment(n)%HI%JsdB
+    if (OBC%segment(n)%is_N_or_S .and. (J >= Jsq-1) .and. (J <= Jeq+1)) then
+      do i = max(Isq-1,OBC%segment(n)%HI%isd), min(Ieq+2,OBC%segment(n)%HI%ied)
+        if (OBC%segment(n)%direction == OBC_DIRECTION_N) then
+          Area_h(i,j+1) = Area_h(i,j)
+        else ! (OBC%segment(n)%direction == OBC_DIRECTION_S)
+          Area_h(i,j) = Area_h(i,j+1)
+        endif
+      enddo
+    elseif (OBC%segment(n)%is_E_or_W .and. (I >= Isq-1) .and. (I <= Ieq+1)) then
+      do j = max(Jsq-1,OBC%segment(n)%HI%jsd), min(Jeq+2,OBC%segment(n)%HI%jed)
+        if (OBC%segment(n)%direction == OBC_DIRECTION_E) then
+          Area_h(i+1,j) = Area_h(i,j)
+        else ! (OBC%segment(n)%direction == OBC_DIRECTION_W)
+          Area_h(i,j) = Area_h(i+1,j)
+        endif
+      enddo
+    endif
+  enddo ; endif
+  !$OMP parallel do default(private) shared(Isq,Ieq,Jsq,Jeq,G,Area_h,Area_q)
   do J=Jsq-1,Jeq+1 ; do I=Isq-1,Ieq+1
     Area_q(i,j) = (Area_h(i,j) + Area_h(i+1,j+1)) + &
                   (Area_h(i+1,j) + Area_h(i,j+1))
   enddo ; enddo
 
-!$OMP do
+  !$OMP parallel do default(private) shared(u,v,h,uh,vh,CAu,CAv,G,CS,AD,Area_h,Area_q,&
+  !$OMP                        RV,PV,is,ie,js,je,Isq,Ieq,Jsq,Jeq,nz,h_neglect,h_tiny,OBC)
   do k=1,nz
     ! Here the second order accurate layer potential vorticities, q,
     ! are calculated.  hq is  second order accurate in space.  Relative
@@ -243,45 +265,157 @@ subroutine CorAdCalc(u, v, h, uh, vh, CAu, CAv, OBC, AD, G, GV, CS)
       dvdx(I,J) = v(i+1,J,k)*G%dyCv(i+1,J) - v(i,J,k)*G%dyCv(i,J)
       dudy(I,J) = u(I,j+1,k)*G%dxCu(I,j+1) - u(I,j,k)*G%dxCu(I,j)
     enddo ; enddo
-    ! Adjust circulation components to relative vorticity on open boundaries.
-    if (associated(OBC)) then ; if (OBC%zero_vorticity .or. OBC%freeslip_vorticity) then
-      do n=1,OBC%number_of_segments
-        if (OBC%segment(n)%is_N_or_S) then
-          J = OBC%segment(n)%HI%JsdB
-          do I=OBC%segment(n)%HI%IsdB,OBC%segment(n)%HI%IedB
-            if (OBC%zero_vorticity) then
-              dvdx(I,J) = 0.
-              dudy(I,J) = 0.
-            elseif (OBC%freeslip_vorticity) then
-              dudy(I,J) = 0.
-            endif
-          enddo
-        elseif (OBC%segment(n)%is_E_or_W) then
-          I = OBC%segment(n)%HI%IsdB
-          do J=OBC%segment(n)%HI%JsdB,OBC%segment(n)%HI%JedB
-            if (OBC%zero_vorticity) then
-              dvdx(I,J) = 0.
-              dudy(I,J) = 0.
-            elseif (OBC%freeslip_vorticity) then
-              dvdx(I,J) = 0.
+    do J=Jsq-1,Jeq+1 ; do i=Isq-1,Ieq+2
+      hArea_v(i,J) = 0.5*(Area_h(i,j) * h(i,j,k) + Area_h(i,j+1) * h(i,j+1,k))
+    enddo ; enddo
+    do j=Jsq-1,Jeq+2 ; do I=Isq-1,Ieq+1
+      hArea_u(I,j) = 0.5*(Area_h(i,j) * h(i,j,k) + Area_h(i+1,j) * h(i+1,j,k))
+    enddo ; enddo
+    if (CS%Coriolis_En_Dis) then
+      do j=Jsq,Jeq+1 ; do I=is-1,ie
+        uh_center(I,j) = 0.5 * (G%dy_Cu(I,j) * u(I,j,k)) * (h(i,j,k) + h(i+1,j,k))
+      enddo ; enddo
+      do J=js-1,je ; do i=Isq,Ieq+1
+        vh_center(i,J) = 0.5 * (G%dx_Cv(i,J) * v(i,J,k)) * (h(i,j,k) + h(i,j+1,k))
+      enddo ; enddo
+    endif
+
+    ! Adjust circulation components to relative vorticity and thickness projected onto
+    ! velocity points on open boundaries.
+    if (associated(OBC)) then ; do n=1,OBC%number_of_segments
+      if (.not. OBC%segment(n)%on_pe) cycle
+      I = OBC%segment(n)%HI%IsdB ; J = OBC%segment(n)%HI%JsdB
+      if (OBC%segment(n)%is_N_or_S .and. (J >= Jsq-1) .and. (J <= Jeq+1)) then
+        if (OBC%zero_vorticity) then ; do I=OBC%segment(n)%HI%IsdB,OBC%segment(n)%HI%IedB
+          dvdx(I,J) = 0. ; dudy(I,J) = 0.
+        enddo ; endif
+        if (OBC%freeslip_vorticity) then ; do I=OBC%segment(n)%HI%IsdB,OBC%segment(n)%HI%IedB
+          dudy(I,J) = 0.
+        enddo ; endif
+        if (OBC%computed_vorticity) then ; do I=OBC%segment(n)%HI%IsdB,OBC%segment(n)%HI%IedB
+          if (OBC%segment(n)%direction == OBC_DIRECTION_N) then
+            dudy(I,J) = 2.0*(OBC%segment(n)%tangential_vel(I,J,k) - u(I,j,k))*G%dxCu(I,j)
+          else ! (OBC%segment(n)%direction == OBC_DIRECTION_S)
+            dudy(I,J) = 2.0*(u(I,j+1,k) - OBC%segment(n)%tangential_vel(I,J,k))*G%dxCu(I,j+1)
+          endif
+        enddo ; endif
+        if (OBC%specified_vorticity) then ; do I=OBC%segment(n)%HI%IsdB,OBC%segment(n)%HI%IedB
+          if (OBC%segment(n)%direction == OBC_DIRECTION_N) then
+            dudy(I,J) = OBC%segment(n)%tangential_grad(I,J,k)*G%dxCu(I,j)*G%dyBu(I,J)
+          else ! (OBC%segment(n)%direction == OBC_DIRECTION_S)
+            dudy(I,J) = OBC%segment(n)%tangential_grad(I,J,k)*G%dxCu(I,j+1)*G%dyBu(I,J)
+          endif
+        enddo ; endif
+
+        ! Project thicknesses across OBC points with a no-gradient condition.
+        do i = max(Isq-1,OBC%segment(n)%HI%isd), min(Ieq+2,OBC%segment(n)%HI%ied)
+          if (OBC%segment(n)%direction == OBC_DIRECTION_N) then
+            hArea_v(i,J) = 0.5 * (Area_h(i,j) + Area_h(i,j+1)) * h(i,j,k)
+          else ! (OBC%segment(n)%direction == OBC_DIRECTION_S)
+            hArea_v(i,J) = 0.5 * (Area_h(i,j) + Area_h(i,j+1)) * h(i,j+1,k)
+          endif
+        enddo
+
+        if (CS%Coriolis_En_Dis) then
+          do i = max(Isq-1,OBC%segment(n)%HI%isd), min(Ieq+2,OBC%segment(n)%HI%ied)
+            if (OBC%segment(n)%direction == OBC_DIRECTION_N) then
+              vh_center(i,J) = G%dx_Cv(i,J) * v(i,J,k) * h(i,j,k)
+            else ! (OBC%segment(n)%direction == OBC_DIRECTION_S)
+              vh_center(i,J) = G%dx_Cv(i,J) * v(i,J,k) * h(i,j+1,k)
             endif
           enddo
         endif
-      enddo
-    endif ; endif
+      elseif (OBC%segment(n)%is_E_or_W .and. (I >= Isq-1) .and. (I <= Ieq+1)) then
+        if (OBC%zero_vorticity) then ; do J=OBC%segment(n)%HI%JsdB,OBC%segment(n)%HI%JedB
+          dvdx(I,J) = 0. ; dudy(I,J) = 0.
+        enddo ; endif
+        if (OBC%freeslip_vorticity) then ; do J=OBC%segment(n)%HI%JsdB,OBC%segment(n)%HI%JedB
+          dvdx(I,J) = 0.
+        enddo ; endif
+        if (OBC%computed_vorticity) then ; do J=OBC%segment(n)%HI%JsdB,OBC%segment(n)%HI%JedB
+          if (OBC%segment(n)%direction == OBC_DIRECTION_E) then
+            dvdx(I,J) = 2.0*(OBC%segment(n)%tangential_vel(I,J,k) - v(i,J,k))*G%dyCv(i,J)
+          else ! (OBC%segment(n)%direction == OBC_DIRECTION_W)
+            dvdx(I,J) = 2.0*(v(i+1,J,k) - OBC%segment(n)%tangential_vel(I,J,k))*G%dyCv(i+1,J)
+          endif
+        enddo ; endif
+        if (OBC%specified_vorticity) then ; do J=OBC%segment(n)%HI%JsdB,OBC%segment(n)%HI%JedB
+          if (OBC%segment(n)%direction == OBC_DIRECTION_E) then
+            dvdx(I,J) = OBC%segment(n)%tangential_grad(I,J,k)*G%dyCv(i,J)*G%dxBu(I,J)
+          else ! (OBC%segment(n)%direction == OBC_DIRECTION_W)
+            dvdx(I,J) = OBC%segment(n)%tangential_grad(I,J,k)*G%dyCv(i+1,J)*G%dxBu(I,J)
+          endif
+        enddo ; endif
+
+        ! Project thicknesses across OBC points with a no-gradient condition.
+        do j = max(Jsq-1,OBC%segment(n)%HI%jsd), min(Jeq+2,OBC%segment(n)%HI%jed)
+          if (OBC%segment(n)%direction == OBC_DIRECTION_E) then
+            hArea_u(I,j) = 0.5*(Area_h(i,j) + Area_h(i+1,j)) * h(i,j,k)
+          else ! (OBC%segment(n)%direction == OBC_DIRECTION_W)
+            hArea_u(I,j) = 0.5*(Area_h(i,j) + Area_h(i+1,j)) * h(i+1,j,k)
+          endif
+        enddo
+        if (CS%Coriolis_En_Dis) then
+          do j = max(Jsq-1,OBC%segment(n)%HI%jsd), min(Jeq+2,OBC%segment(n)%HI%jed)
+            if (OBC%segment(n)%direction == OBC_DIRECTION_E) then
+              uh_center(I,j) = G%dy_Cu(I,j) * u(I,j,k) * h(i,j,k)
+            else ! (OBC%segment(n)%direction == OBC_DIRECTION_W)
+              uh_center(I,j) = G%dy_Cu(I,j) * u(I,j,k) * h(i+1,j,k)
+            endif
+          enddo
+        endif
+      endif
+    enddo ; endif
+
+    if (associated(OBC)) then ; do n=1,OBC%number_of_segments
+      if (.not. OBC%segment(n)%on_pe) cycle
+      ! Now project thicknesses across cell-corner points in the OBCs.  The two
+      ! projections have to occur in sequence and can not be combined easily.
+      I = OBC%segment(n)%HI%IsdB ; J = OBC%segment(n)%HI%JsdB
+      if (OBC%segment(n)%is_N_or_S .and. (J >= Jsq-1) .and. (J <= Jeq+1)) then
+        do I = max(Isq-1,OBC%segment(n)%HI%IsdB), min(Ieq+1,OBC%segment(n)%HI%IedB)
+          if (OBC%segment(n)%direction == OBC_DIRECTION_N) then
+            if (Area_h(i,j) + Area_h(i+1,j) > 0.0) then
+              hArea_u(I,j+1) = hArea_u(I,j) * ((Area_h(i,j+1) + Area_h(i+1,j+1)) / &
+                                               (Area_h(i,j) + Area_h(i+1,j)))
+            else ; hArea_u(I,j+1) = 0.0 ; endif
+          else ! (OBC%segment(n)%direction == OBC_DIRECTION_S)
+            if (Area_h(i,j+1) + Area_h(i+1,j+1) > 0.0) then
+              hArea_u(I,j) = hArea_u(I,j+1) * ((Area_h(i,j) + Area_h(i+1,j)) / &
+                                               (Area_h(i,j+1) + Area_h(i+1,j+1)))
+            else ; hArea_u(I,j) = 0.0 ; endif
+          endif
+        enddo
+      elseif (OBC%segment(n)%is_E_or_W .and. (I >= Isq-1) .and. (I <= Ieq+1)) then
+        do J = max(Jsq-1,OBC%segment(n)%HI%JsdB), min(Jeq+1,OBC%segment(n)%HI%JedB)
+          if (OBC%segment(n)%direction == OBC_DIRECTION_E) then
+            if (Area_h(i,j) + Area_h(i,j+1) > 0.0) then
+              hArea_v(i+1,J) = hArea_v(i,J) * ((Area_h(i+1,j) + Area_h(i+1,j+1)) / &
+                                               (Area_h(i,j) + Area_h(i,j+1)))
+            else ; hArea_v(i+1,J) = 0.0 ; endif
+          else ! (OBC%segment(n)%direction == OBC_DIRECTION_W)
+            hArea_v(i,J) = 0.5 * (Area_h(i,j) + Area_h(i,j+1)) * h(i,j+1,k)
+            if (Area_h(i+1,j) + Area_h(i+1,j+1) > 0.0) then
+              hArea_v(i,J) = hArea_v(i+1,J) * ((Area_h(i,j) + Area_h(i,j+1)) / &
+                                               (Area_h(i+1,j) + Area_h(i+1,j+1)))
+            else ; hArea_v(i,J) = 0.0 ; endif
+          endif
+        enddo
+      endif
+    enddo ; endif
+
     do J=Jsq-1,Jeq+1 ; do I=Isq-1,Ieq+1
       if (CS%no_slip ) then
         relative_vorticity = (2.0-G%mask2dBu(I,J)) * (dvdx(I,J) - dudy(I,J)) * &
-            (G%IdxBu(I,J) * G%IdyBu(I,J)) ! ### Using G%IareaBu(I,J) changes answers.
+                             G%IareaBu(I,J)
       else
         relative_vorticity = G%mask2dBu(I,J) * (dvdx(I,J) - dudy(I,J)) * &
-            (G%IdxBu(I,J) * G%IdyBu(I,J)) ! ### Using G%IareaBu(I,J) changes answers.
+                             G%IareaBu(I,J)
       endif
-      absolute_vorticity = G%CoriolisBu(I,J) + relative_vorticity
+      absolute_vorticity = US%s_to_T*G%CoriolisBu(I,J) + relative_vorticity
       Ih = 0.0
       if (Area_q(i,j) > 0.0) then
-        hArea_q = ((Area_h(i,j) * h(i,j,k) + Area_h(i+1,j+1) * h(i+1,j+1,k)) + &
-                   (Area_h(i,j+1) * h(i,j+1,k) + Area_h(i+1,j) * h(i+1,j,k)))
+        hArea_q = (hArea_u(I,j) + hArea_u(I,j+1)) + (hArea_v(i,J) + hArea_v(i+1,J))
         Ih = Area_q(i,j) / (hArea_q + h_neglect*Area_q(i,j))
       endif
       q(I,J) = absolute_vorticity * Ih
@@ -307,7 +441,7 @@ subroutine CorAdCalc(u, v, h, uh, vh, CAu, CAv, OBC, AD, G, GV, CS)
 
       if (CS%id_rv > 0) RV(I,J,k) = relative_vorticity
       if (CS%id_PV > 0) PV(I,J,k) = q(I,J)
-      if (ASSOCIATED(AD%rv_x_v) .or. ASSOCIATED(AD%rv_x_u)) &
+      if (associated(AD%rv_x_v) .or. associated(AD%rv_x_u)) &
         q2(I,J) = relative_vorticity * Ih
     enddo ; enddo
 
@@ -386,8 +520,8 @@ subroutine CorAdCalc(u, v, h, uh, vh, CAu, CAv, OBC, AD, G, GV, CS)
     !  c1 = 1.0-1.5*RANGE ; c2 = 1.0-RANGE ; c3 = 2.0 ; slope = 0.5
       c1 = 1.0-1.5*0.5 ; c2 = 1.0-0.5 ; c3 = 2.0 ; slope = 0.5
 
-      do J=Jsq,Jeq+1 ; do i=is-1,ie
-        uhc = 0.5 * (G%dy_Cu(I,j) * u(I,j,k)) * (h(i,j,k) + h(i+1,j,k))
+      do j=Jsq,Jeq+1 ; do I=is-1,ie
+        uhc = uh_center(I,j)
         uhm = uh(I,j,k)
         ! This sometimes matters with some types of open boundary conditions.
         if (G%dy_Cu(I,j) == 0.0) uhc = uhm
@@ -402,13 +536,13 @@ subroutine CorAdCalc(u, v, h, uh, vh, CAu, CAv, OBC, AD, G, GV, CS)
         endif
 
         if (uhc > uhm) then
-          uh_min(i,j) = uhm ; uh_max(i,j) = uhc
+          uh_min(I,j) = uhm ; uh_max(I,j) = uhc
         else
-          uh_max(i,j) = uhm ; uh_min(i,j) = uhc
+          uh_max(I,j) = uhm ; uh_min(I,j) = uhc
         endif
       enddo ; enddo
-      do j=js-1,je ; do I=Isq,Ieq+1
-        vhc = 0.5 * (G%dx_Cv(i,J) * v(i,J,k)) * (h(i,j,k) + h(i,j+1,k))
+      do J=js-1,je ; do i=Isq,Ieq+1
+        vhc = vh_center(i,J)
         vhm = vh(i,J,k)
         ! This sometimes matters with some types of open boundary conditions.
         if (G%dx_Cv(i,J) == 0.0) vhc = vhm
@@ -417,21 +551,21 @@ subroutine CorAdCalc(u, v, h, uh, vh, CAu, CAv, OBC, AD, G, GV, CS)
           vhm = 10.0*vhc
         elseif (abs(vhc) > c1*abs(vhm)) then
           if (abs(vhc) < c2*abs(vhm)) then ; vhc = (3.0*vhc+(1.0-c2*3.0)*vhm)
-          else if (abs(vhc) <= c3*abs(vhm)) then ; vhc = vhm
+          elseif (abs(vhc) <= c3*abs(vhm)) then ; vhc = vhm
           else ; vhc = slope*vhc+(1.0-c3*slope)*vhm
           endif
         endif
 
         if (vhc > vhm) then
-          vh_min(i,j) = vhm ; vh_max(i,j) = vhc
+          vh_min(i,J) = vhm ; vh_max(i,J) = vhc
         else
-          vh_max(i,j) = vhm ; vh_min(i,j) = vhc
+          vh_max(i,J) = vhm ; vh_min(i,J) = vhc
         endif
       enddo ; enddo
     endif
 
     ! Calculate KE and the gradient of KE
-    call gradKE(u, v, h, uh, vh, KE, KEx, KEy, k, OBC, G, CS)
+    call gradKE(u, v, h, KE, KEx, KEy, k, OBC, G, CS)
 
     ! Calculate the tendencies of zonal velocity due to the Coriolis
     ! force and momentum advection.  On a Cartesian grid, this is
@@ -538,7 +672,7 @@ subroutine CorAdCalc(u, v, h, uh, vh, CAu, CAv, OBC, AD, G, GV, CS)
     ! Term - d(KE)/dx.
     do j=js,je ; do I=Isq,Ieq
       CAu(I,j,k) = CAu(I,j,k) - KEx(I,j)
-      if (ASSOCIATED(AD%gradKEu)) AD%gradKEu(I,j,k) = -KEx(I,j)
+      if (associated(AD%gradKEu)) AD%gradKEu(I,j,k) = -KEx(I,j)
     enddo ; enddo
 
 
@@ -644,13 +778,13 @@ subroutine CorAdCalc(u, v, h, uh, vh, CAu, CAv, OBC, AD, G, GV, CS)
     ! Term - d(KE)/dy.
     do J=Jsq,Jeq ; do i=is,ie
       CAv(i,J,k) = CAv(i,J,k) - KEy(i,J)
-      if (ASSOCIATED(AD%gradKEv)) AD%gradKEv(i,J,k) = -KEy(i,J)
+      if (associated(AD%gradKEv)) AD%gradKEv(i,J,k) = -KEy(i,J)
     enddo ; enddo
 
-    if (ASSOCIATED(AD%rv_x_u) .or. ASSOCIATED(AD%rv_x_v)) then
+    if (associated(AD%rv_x_u) .or. associated(AD%rv_x_v)) then
       ! Calculate the Coriolis-like acceleration due to relative vorticity.
       if (CS%Coriolis_Scheme == SADOURNY75_ENERGY) then
-        if (ASSOCIATED(AD%rv_x_u)) then
+        if (associated(AD%rv_x_u)) then
           do J=Jsq,Jeq ; do i=is,ie
             AD%rv_x_u(i,J,k) = - 0.25* &
               (q2(I-1,j)*(uh(I-1,j,k) + uh(I-1,j+1,k)) + &
@@ -658,7 +792,7 @@ subroutine CorAdCalc(u, v, h, uh, vh, CAu, CAv, OBC, AD, G, GV, CS)
           enddo ; enddo
         endif
 
-        if (ASSOCIATED(AD%rv_x_v)) then
+        if (associated(AD%rv_x_v)) then
           do j=js,je ; do I=Isq,Ieq
             AD%rv_x_v(I,j,k) = 0.25 * &
               (q2(I,j) * (vh(i+1,J,k) + vh(i,J,k)) + &
@@ -666,7 +800,7 @@ subroutine CorAdCalc(u, v, h, uh, vh, CAu, CAv, OBC, AD, G, GV, CS)
           enddo ; enddo
         endif
       else
-        if (ASSOCIATED(AD%rv_x_u)) then
+        if (associated(AD%rv_x_u)) then
           do J=Jsq,Jeq ; do i=is,ie
             AD%rv_x_u(i,J,k) = -G%IdyCv(i,J) * C1_12 * &
               ((q2(I,J) + q2(I-1,J) + q2(I-1,J-1)) * uh(I-1,j,k) + &
@@ -676,7 +810,7 @@ subroutine CorAdCalc(u, v, h, uh, vh, CAu, CAv, OBC, AD, G, GV, CS)
           enddo ; enddo
         endif
 
-        if (ASSOCIATED(AD%rv_x_v)) then
+        if (associated(AD%rv_x_v)) then
           do j=js,je ; do I=Isq,Ieq
             AD%rv_x_v(I,j,k) = G%IdxCu(I,j) * C1_12 * &
               ((q2(I+1,J) + q2(I,J) + q2(I,J-1)) * vh(i+1,J,k) + &
@@ -689,7 +823,6 @@ subroutine CorAdCalc(u, v, h, uh, vh, CAu, CAv, OBC, AD, G, GV, CS)
     endif
 
   enddo ! k-loop.
-!$OMP end parallel
 
   ! Here the various Coriolis-related derived quantities are offered for averaging.
   if (query_averaging_enabled(CS%diag)) then
@@ -705,25 +838,23 @@ end subroutine CorAdCalc
 
 
 !> Calculates the acceleration due to the gradient of kinetic energy.
-subroutine gradKE(u, v, h, uh, vh, KE, KEx, KEy, k, OBC, G, CS)
+subroutine gradKE(u, v, h, KE, KEx, KEy, k, OBC, G, CS)
   type(ocean_grid_type),                      intent(in)  :: G !< Ocen grid structure
-  real, dimension(SZIB_(G),SZJ_(G),SZK_(G)),  intent(in)  :: u !< Zonal velocity (m/s)
-  real, dimension(SZI_(G),SZJB_(G),SZK_(G)),  intent(in)  :: v !< Meridional velocity (m/s)
-  real, dimension(SZI_(G),SZJ_(G),SZK_(G)),   intent(in)  :: h !< Layer thickness (m or kg/m2)
-  real, dimension(SZIB_(G),SZJ_(G),SZK_(G)),  intent(in)  :: uh !< Zonal transport u*h*dy (m3/s or kg/s)
-  real, dimension(SZI_(G),SZJB_(G),SZK_(G)),  intent(in)  :: vh !< Meridional transport v*h*dx (m3/s or kg/s)
-  real, dimension(SZI_(G) ,SZJ_(G) ),         intent(out) :: KE !< Kinetic energy (m2/s2)
+  real, dimension(SZIB_(G),SZJ_(G),SZK_(G)),  intent(in)  :: u !< Zonal velocity [m s-1]
+  real, dimension(SZI_(G),SZJB_(G),SZK_(G)),  intent(in)  :: v !< Meridional velocity [m s-1]
+  real, dimension(SZI_(G),SZJ_(G),SZK_(G)),   intent(in)  :: h !< Layer thickness [H ~> m or kg m-2]
+  real, dimension(SZI_(G) ,SZJ_(G) ),         intent(out) :: KE !< Kinetic energy [m2 s-2]
   real, dimension(SZIB_(G),SZJ_(G) ),         intent(out) :: KEx !< Zonal acceleration due to kinetic
-                                                                 !! energy gradient (m/s2)
+                                                                 !! energy gradient [m s-2]
   real, dimension(SZI_(G) ,SZJB_(G)),         intent(out) :: KEy !< Meridional acceleration due to kinetic
-                                                                 !! energy gradient (m/s2)
+                                                                 !! energy gradient [m s-2]
   integer,                                    intent(in)  :: k !< Layer number to calculate for
   type(ocean_OBC_type),                       pointer     :: OBC !< Open boundary control structure
   type(CoriolisAdv_CS),                       pointer     :: CS !< Control structure for MOM_CoriolisAdv
   ! Local variables
-  real :: um, up, vm, vp         ! Temporary variables with units of m s-1.
-  real :: um2, up2, vm2, vp2     ! Temporary variables with units of m2 s-2.
-  real :: um2a, up2a, vm2a, vp2a ! Temporary variables with units of m4 s-2.
+  real :: um, up, vm, vp         ! Temporary variables [m s-1].
+  real :: um2, up2, vm2, vp2     ! Temporary variables [m2 s-2].
+  real :: um2a, up2a, vm2a, vp2a ! Temporary variables [m4 s-2].
   integer :: i, j, is, ie, js, je, Isq, Ieq, Jsq, Jeq, nz, n
 
   is = G%isc ; ie = G%iec ; js = G%jsc ; je = G%jec ; nz = G%ke
@@ -731,7 +862,7 @@ subroutine gradKE(u, v, h, uh, vh, KE, KEx, KEy, k, OBC, G, CS)
 
 
   ! Calculate KE (Kinetic energy for use in the -grad(KE) acceleration term).
-  if (CS%KE_Scheme.eq.KE_ARAKAWA) then
+  if (CS%KE_Scheme == KE_ARAKAWA) then
     ! The following calculation of Kinetic energy includes the metric terms
     ! identified in Arakawa & Lamb 1982 as important for KE conservation.  It
     ! also includes the possibility of partially-blocked tracer cell faces.
@@ -742,7 +873,7 @@ subroutine gradKE(u, v, h, uh, vh, KE, KEx, KEy, k, OBC, G, CS)
                    +G%areaCv(i,J-1)*(v(i,J-1,k)*v(i,J-1,k)) ) &
                 )*0.25*G%IareaT(i,j)
     enddo ; enddo
-  elseif (CS%KE_Scheme.eq.KE_SIMPLE_GUDONOV) then
+  elseif (CS%KE_Scheme == KE_SIMPLE_GUDONOV) then
     ! The following discretization of KE is based on the one-dimensinal Gudonov
     ! scheme which does not take into account any geometric factors
     do j=Jsq,Jeq+1 ; do i=Isq,Ieq+1
@@ -752,7 +883,7 @@ subroutine gradKE(u, v, h, uh, vh, KE, KEx, KEy, k, OBC, G, CS)
       vm = 0.5*( v(i, J ,k) - ABS( v(i, J ,k) ) ) ; vm2 = vm*vm
       KE(i,j) = ( max(up2,um2) + max(vp2,vm2) ) *0.5
     enddo ; enddo
-  elseif (CS%KE_Scheme.eq.KE_GUDONOV) then
+  elseif (CS%KE_Scheme == KE_GUDONOV) then
     ! The following discretization of KE is based on the one-dimensinal Gudonov
     ! scheme but has been adapted to take horizontal grid factors into account
     do j=Jsq,Jeq+1 ; do i=Isq,Ieq+1
@@ -801,7 +932,7 @@ subroutine CoriolisAdv_init(Time, G, param_file, diag, AD, CS)
   ! Local variables
 ! This include declares and sets the variable "version".
 #include "version_variable.h"
-  character(len=40)  :: mod = "MOM_CoriolisAdv" ! This module's name.
+  character(len=40)  :: mdl = "MOM_CoriolisAdv" ! This module's name.
   character(len=20)  :: tmpstr
   character(len=400) :: mesg
   integer :: isd, ied, jsd, jed, IsdB, IedB, JsdB, JedB, nz
@@ -818,8 +949,8 @@ subroutine CoriolisAdv_init(Time, G, param_file, diag, AD, CS)
   CS%diag => diag ; CS%Time => Time
 
   ! Read all relevant parameters and write them to the model log.
-  call log_version(param_file, mod, version, "")
-  call get_param(param_file, mod, "NOSLIP", CS%no_slip, &
+  call log_version(param_file, mdl, version, "")
+  call get_param(param_file, mdl, "NOSLIP", CS%no_slip, &
                  "If true, no slip boundary conditions are used; otherwise \n"//&
                  "free slip boundary conditions are assumed. The \n"//&
                  "implementation of the free slip BCs on a C-grid is much \n"//&
@@ -827,7 +958,7 @@ subroutine CoriolisAdv_init(Time, G, param_file, diag, AD, CS)
                  "is strongly encouraged, and no slip BCs are not used with \n"//&
                  "the biharmonic viscosity.", default=.false.)
 
-  call get_param(param_file, mod, "CORIOLIS_EN_DIS", CS%Coriolis_En_Dis, &
+  call get_param(param_file, mdl, "CORIOLIS_EN_DIS", CS%Coriolis_En_Dis, &
                  "If true, two estimates of the thickness fluxes are used \n"//&
                  "to estimate the Coriolis term, and the one that \n"//&
                  "dissipates energy relative to the other one is used.", &
@@ -835,7 +966,7 @@ subroutine CoriolisAdv_init(Time, G, param_file, diag, AD, CS)
 
   ! Set %Coriolis_Scheme
   ! (Select the baseline discretization for the Coriolis term)
-  call get_param(param_file, mod, "CORIOLIS_SCHEME", tmpstr, &
+  call get_param(param_file, mdl, "CORIOLIS_SCHEME", tmpstr, &
                  "CORIOLIS_SCHEME selects the discretization for the \n"//&
                  "Coriolis terms. Valid values are: \n"//&
                  "\t SADOURNY75_ENERGY - Sadourny, 1975; energy cons. \n"//&
@@ -866,13 +997,13 @@ subroutine CoriolisAdv_init(Time, G, param_file, diag, AD, CS)
             "#define CORIOLIS_SCHEME "//trim(tmpstr)//" found in input file.")
   end select
   if (CS%Coriolis_Scheme == AL_BLEND) then
-    call get_param(param_file, mod, "CORIOLIS_BLEND_WT_LIN", CS%wt_lin_blend, &
+    call get_param(param_file, mdl, "CORIOLIS_BLEND_WT_LIN", CS%wt_lin_blend, &
                  "A weighting value for the ratio of inverse thicknesses, \n"//&
                  "beyond which the blending between Sadourny Energy and \n"//&
                  "Arakawa & Hsu goes linearly to 0 when CORIOLIS_SCHEME \n"//&
                  "is ARAWAKA_LAMB_BLEND. This must be between 1 and 1e-16.", &
                  units="nondim", default=0.125)
-    call get_param(param_file, mod, "CORIOLIS_BLEND_F_EFF_MAX", CS%F_eff_max_blend, &
+    call get_param(param_file, mdl, "CORIOLIS_BLEND_F_EFF_MAX", CS%F_eff_max_blend, &
                  "The factor by which the maximum effective Coriolis \n"//&
                  "acceleration from any point can be increased when \n"//&
                  "blending different discretizations with the \n"//&
@@ -896,13 +1027,13 @@ subroutine CoriolisAdv_init(Time, G, param_file, diag, AD, CS)
                  "have no effect on the SADOURNY Coriolis scheme if it \n"//&
                  "were possible to use centered difference thickness fluxes."
   endif
-  call get_param(param_file, mod, "BOUND_CORIOLIS", CS%bound_Coriolis, mesg, &
+  call get_param(param_file, mdl, "BOUND_CORIOLIS", CS%bound_Coriolis, mesg, &
                  default=.false.)
   if ((CS%Coriolis_En_Dis .and. (CS%Coriolis_Scheme == SADOURNY75_ENERGY)) .or. &
       (CS%Coriolis_Scheme == ROBUST_ENSTRO)) CS%bound_Coriolis = .false.
 
   ! Set KE_Scheme (selects discretization of KE)
-  call get_param(param_file, mod, "KE_SCHEME", tmpstr, &
+  call get_param(param_file, mdl, "KE_SCHEME", tmpstr, &
                  "KE_SCHEME selects the discretization for acceleration \n"//&
                  "due to the kinetic energy gradient. Valid values are: \n"//&
                  "\t KE_ARAKAWA, KE_SIMPLE_GUDONOV, KE_GUDONOV", &
@@ -919,7 +1050,7 @@ subroutine CoriolisAdv_init(Time, G, param_file, diag, AD, CS)
   end select
 
   ! Set PV_Adv_Scheme (selects discretization of PV advection)
-  call get_param(param_file, mod, "PV_ADV_SCHEME", tmpstr, &
+  call get_param(param_file, mdl, "PV_ADV_SCHEME", tmpstr, &
                  "PV_ADV_SCHEME selects the discretization for PV \n"//&
                  "advection. Valid values are: \n"//&
                  "\t PV_ADV_CENTERED - centered (aka Sadourny, 75) \n"//&
@@ -937,25 +1068,25 @@ subroutine CoriolisAdv_init(Time, G, param_file, diag, AD, CS)
   end select
 
   CS%id_rv = register_diag_field('ocean_model', 'RV', diag%axesBL, Time, &
-     'Relative Vorticity', 'second-1')
+     'Relative Vorticity', 's-1')
 
   CS%id_PV = register_diag_field('ocean_model', 'PV', diag%axesBL, Time, &
-     'Potential Vorticity', 'meter-1 second-1')
+     'Potential Vorticity', 'm-1 s-1')
 
   CS%id_gKEu = register_diag_field('ocean_model', 'gKEu', diag%axesCuL, Time, &
-     'Zonal Acceleration from Grad. Kinetic Energy', 'meter-1 second-2')
+     'Zonal Acceleration from Grad. Kinetic Energy', 'm-1 s-2')
   if (CS%id_gKEu > 0) call safe_alloc_ptr(AD%gradKEu,IsdB,IedB,jsd,jed,nz)
 
   CS%id_gKEv = register_diag_field('ocean_model', 'gKEv', diag%axesCvL, Time, &
-     'Meridional Acceleration from Grad. Kinetic Energy', 'meter-1 second-2')
+     'Meridional Acceleration from Grad. Kinetic Energy', 'm-1 s-2')
   if (CS%id_gKEv > 0) call safe_alloc_ptr(AD%gradKEv,isd,ied,JsdB,JedB,nz)
 
   CS%id_rvxu = register_diag_field('ocean_model', 'rvxu', diag%axesCvL, Time, &
-     'Meridional Acceleration from Relative Vorticity', 'meter-1 second-2')
+     'Meridional Acceleration from Relative Vorticity', 'm-1 s-2')
   if (CS%id_rvxu > 0) call safe_alloc_ptr(AD%rv_x_u,isd,ied,JsdB,JedB,nz)
 
   CS%id_rvxv = register_diag_field('ocean_model', 'rvxv', diag%axesCuL, Time, &
-     'Zonal Acceleration from Relative Vorticity', 'meter-1 second-2')
+     'Zonal Acceleration from Relative Vorticity', 'm-1 s-2')
   if (CS%id_rvxv > 0) call safe_alloc_ptr(AD%rv_x_v,IsdB,IedB,jsd,jed,nz)
 
 end subroutine CoriolisAdv_init

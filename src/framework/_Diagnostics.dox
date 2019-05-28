@@ -152,8 +152,8 @@ The run-time parameter `NUM_DIAG_COORDS` controls how many diagnostic coordinate
 
 The run-time parameter `DIAG_COORDS` defines the mapping between each coordinate, the name of the module in the diag_table and run-time parameter names that define the coordinate.
 A list of string tuples, separated by commas, with each tuple in the form of MODULE_SUFFIX PARAMETER_SUFFIX COORDINATE_NAME.
-`MODULE_SUFFIX` is the string appended to "ocean_model_" to create a module in the diag_table.
-`PARAMETER_SUFFIX` is the string appended to "DiAG_COORD_DEF_", and other paramaters, used to control the generation of the named coordinate.
+`MODULE_SUFFIX` is the string appended to "ocean_model" to create a module in the diag_table.
+`PARAMETER_SUFFIX` is the string appended to "DiAG_COORD_DEF", and other parameters, used to control the generation of the named coordinate.
 `COORDINATE_NAME` is a name understood by the MOM6 regridding module. Valid examples are "ZSTAR", "SIGMA", "RHO", etc.
 
 By default, `NUM_DIAG_COORDS=1` and `DIAG_COORDS="z Z ZSTAR"`, meaning the module "ocean_model_z" provides diagnostics in "z*" coordinates and uses the parameter `DIAG_COORD_DEF_Z`.
@@ -224,5 +224,12 @@ The data is made available to the diag_manager via a call to post_data() which i
 ```
 call post_data(diag_id, data, diag_control)
 ```
+
+\subsection diag_post_frequency Artifacts of posting frequency for diagnostics
+
+Variables area "posted" for i/o or averaging to the diag_manager (via MOM6's diag_mediator) at different frequencies relative to each other.
+This is because the MOM6 algorithm takes the form of nested sub-cycles with different time-steps in each loop (e.g. barotropic solver with dynamics).
+A consequence of this is that a time average of a related quantities may appear to be inconsistent since the diagnostic posted with higher frequency may not vary linearly between the end-points seen on the longer time-step.
+The differences are usually small, but if you see large differences it might indicate you should re-examine the time-steps used for the various sub-cycles.
 
 */

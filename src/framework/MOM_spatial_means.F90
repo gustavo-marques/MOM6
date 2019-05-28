@@ -1,24 +1,7 @@
+!> Functions and routines to take area, volume, mass-weighted, layerwise, zonal or meridional means
 module MOM_spatial_means
 
-!***********************************************************************
-!*                   GNU General Public License                        *
-!* This file is a part of MOM.                                         *
-!*                                                                     *
-!* MOM is free software; you can redistribute it and/or modify it and  *
-!* are expected to follow the terms of the GNU General Public License  *
-!* as published by the Free Software Foundation; either version 2 of   *
-!* the License, or (at your option) any later version.                 *
-!*                                                                     *
-!* MOM is distributed in the hope that it will be useful, but WITHOUT  *
-!* ANY WARRANTY; without even the implied warranty of MERCHANTABILITY  *
-!* or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU General Public    *
-!* License for more details.                                           *
-!*                                                                     *
-!* For the full text of the GNU General Public License,                *
-!* write to: Free Software Foundation, Inc.,                           *
-!*           675 Mass Ave, Cambridge, MA 02139, USA.                   *
-!* or see:   http://www.gnu.org/licenses/gpl.html                      *
-!***********************************************************************
+! This file is part of MOM6. See LICENSE.md for the license.
 
 use MOM_coms, only : EFP_type, operator(+), operator(-), assignment(=)
 use MOM_coms, only : EFP_to_real, real_to_EFP, EFP_list_sum_across_PEs
@@ -36,14 +19,15 @@ implicit none ; private
 public :: global_i_mean, global_j_mean
 public :: global_area_mean, global_layer_mean
 public :: global_area_integral
-public :: global_volume_mean
+public :: global_volume_mean, global_mass_integral
 public :: adjust_area_mean_to_zero
 
 contains
 
+!> Return the global area mean of a variable. This uses reproducing sums.
 function global_area_mean(var,G)
-  type(ocean_grid_type),             intent(in)  :: G
-  real, dimension(SZI_(G), SZJ_(G)), intent(in)  :: var
+  type(ocean_grid_type),             intent(in)  :: G    !< The ocean's grid structure
+  real, dimension(SZI_(G), SZJ_(G)), intent(in)  :: var  !< The variable to average
   real, dimension(SZI_(G), SZJ_(G))              :: tmpForSumming
   real :: global_area_mean
 
@@ -58,9 +42,10 @@ function global_area_mean(var,G)
 
 end function global_area_mean
 
+!> Return the global area integral of a variable. This uses reproducing sums.
 function global_area_integral(var,G)
-  type(ocean_grid_type),             intent(in)  :: G
-  real, dimension(SZI_(G), SZJ_(G)), intent(in)  :: var
+  type(ocean_grid_type),             intent(in)  :: G    !< The ocean's grid structure
+  real, dimension(SZI_(G), SZJ_(G)), intent(in)  :: var  !< The variable to integrate
   real, dimension(SZI_(G), SZJ_(G))              :: tmpForSumming
   real :: global_area_integral
 
@@ -75,11 +60,12 @@ function global_area_integral(var,G)
 
 end function global_area_integral
 
+!> Return the layerwise global thickness-weighted mean of a variable. This uses reproducing sums.
 function global_layer_mean(var, h, G, GV)
-  type(ocean_grid_type),                     intent(in)  :: G
-  type(verticalGrid_type),                   intent(in)  :: GV
-  real, dimension(SZI_(G),SZJ_(G),SZK_(GV)), intent(in)  :: var
-  real, dimension(SZI_(G),SZJ_(G),SZK_(GV)), intent(in)  :: h
+  type(ocean_grid_type),                     intent(in)  :: G    !< The ocean's grid structure
+  type(verticalGrid_type),                   intent(in)  :: GV   !< The ocean's vertical grid structure
+  real, dimension(SZI_(G),SZJ_(G),SZK_(GV)), intent(in)  :: var  !< The variable to average
+  real, dimension(SZI_(G),SZJ_(G),SZK_(GV)), intent(in)  :: h    !< Layer thicknesses [H ~> m or kg m-2]
   real, dimension(SZK_(GV))                   :: global_layer_mean
 
   real, dimension(SZI_(G), SZJ_(G), SZK_(GV)) :: tmpForSumming, weight
@@ -91,7 +77,7 @@ function global_layer_mean(var, h, G, GV)
   tmpForSumming(:,:,:) = 0. ; weight(:,:,:) = 0.
 
   do k=1,nz ; do j=js,je ; do i=is,ie
-    weight(i,j,k)  =  h(i,j,k) * (G%areaT(i,j) * G%mask2dT(i,j))
+    weight(i,j,k)  =  (GV%H_to_m * h(i,j,k)) * (G%areaT(i,j) * G%mask2dT(i,j))
     tmpForSumming(i,j,k) =  var(i,j,k) * weight(i,j,k)
   enddo ; enddo ; enddo
 
@@ -104,12 +90,15 @@ function global_layer_mean(var, h, G, GV)
 
 end function global_layer_mean
 
+!> Find the global thickness-weighted mean of a variable. This uses reproducing sums.
 function global_volume_mean(var, h, G, GV)
-  type(ocean_grid_type),                     intent(in)  :: G
-  type(verticalGrid_type),                   intent(in)  :: GV
-  real, dimension(SZI_(G),SZJ_(G),SZK_(GV)), intent(in)  :: var
-  real, dimension(SZI_(G),SZJ_(G),SZK_(GV)), intent(in)  :: h
-  real :: global_volume_mean
+  type(ocean_grid_type),   intent(in)  :: G    !< The ocean's grid structure
+  type(verticalGrid_type), intent(in)  :: GV   !< The ocean's vertical grid structure
+  real, dimension(SZI_(G),SZJ_(G),SZK_(GV)), &
+                           intent(in)  :: var  !< The variable being averaged
+  real, dimension(SZI_(G),SZJ_(G),SZK_(GV)), &
+                           intent(in)  :: h    !< Layer thicknesses [H ~> m or kg m-2]
+  real :: global_volume_mean  !< The thickness-weighted average of var
 
   real :: weight_here
   real, dimension(SZI_(G), SZJ_(G)) :: tmpForSumming, sum_weight
@@ -119,7 +108,7 @@ function global_volume_mean(var, h, G, GV)
   tmpForSumming(:,:) = 0. ; sum_weight(:,:) = 0.
 
   do k=1,nz ; do j=js,je ; do i=is,ie
-    weight_here  =  h(i,j,k) * (G%areaT(i,j) * G%mask2dT(i,j))
+    weight_here  =  (GV%H_to_m * h(i,j,k)) * (G%areaT(i,j) * G%mask2dT(i,j))
     tmpForSumming(i,j) = tmpForSumming(i,j) + var(i,j,k) * weight_here
     sum_weight(i,j) = sum_weight(i,j) + weight_here
   enddo ; enddo ; enddo
@@ -129,20 +118,60 @@ function global_volume_mean(var, h, G, GV)
 end function global_volume_mean
 
 
+!> Find the global mass-weighted integral of a variable. This uses reproducing sums.
+function global_mass_integral(h, G, GV, var, on_PE_only)
+  type(ocean_grid_type),   intent(in)  :: G    !< The ocean's grid structure
+  type(verticalGrid_type), intent(in)  :: GV   !< The ocean's vertical grid structure
+  real, dimension(SZI_(G),SZJ_(G),SZK_(GV)), &
+                           intent(in)  :: h    !< Layer thicknesses [H ~> m or kg m-2]
+  real, dimension(SZI_(G),SZJ_(G),SZK_(GV)), &
+                 optional, intent(in)  :: var  !< The variable being integrated
+  logical,       optional, intent(in)  :: on_PE_only  !< If present and true, the sum is only
+                                !! done on the local PE, and it is _not_ order invariant.
+  real :: global_mass_integral  !< The mass-weighted integral of var (or 1) in
+                                !! kg times the units of var
+
+  real, dimension(SZI_(G), SZJ_(G)) :: tmpForSumming
+  logical :: global_sum
+  integer :: i, j, k, is, ie, js, je, nz
+  is = G%isc ; ie = G%iec ; js = G%jsc ; je = G%jec ; nz = GV%ke
+
+  tmpForSumming(:,:) = 0.0
+
+  if (present(var)) then
+    do k=1,nz ; do j=js,je ; do i=is,ie
+      tmpForSumming(i,j) = tmpForSumming(i,j) + var(i,j,k) * &
+                ((GV%H_to_kg_m2 * h(i,j,k)) * (G%areaT(i,j) * G%mask2dT(i,j)))
+    enddo ; enddo ; enddo
+  else
+    do k=1,nz ; do j=js,je ; do i=is,ie
+      tmpForSumming(i,j) = tmpForSumming(i,j) + &
+                ((GV%H_to_kg_m2 * h(i,j,k)) * (G%areaT(i,j) * G%mask2dT(i,j)))
+    enddo ; enddo ; enddo
+  endif
+  global_sum = .true. ; if (present(on_PE_only)) global_sum = .not.on_PE_only
+  if (global_sum) then
+    global_mass_integral = reproducing_sum(tmpForSumming)
+  else
+    global_mass_integral = 0.0
+    do j=js,je ; do i=is,ie
+      global_mass_integral = global_mass_integral + tmpForSumming(i,j)
+    enddo ; enddo
+  endif
+
+end function global_mass_integral
+
+
+!> Determine the global mean of a field along rows of constant i, returning it
+!! in a 1-d array using the local indexing. This uses reproducing sums.
 subroutine global_i_mean(array, i_mean, G, mask)
-  type(ocean_grid_type),            intent(inout) :: G
-  real, dimension(SZI_(G),SZJ_(G)), intent(in)    :: array
-  real, dimension(SZJ_(G)),         intent(out)   :: i_mean
-  real, dimension(SZI_(G),SZJ_(G)), optional, intent(in) :: mask
+  type(ocean_grid_type),            intent(inout) :: G    !< The ocean's grid structure
+  real, dimension(SZI_(G),SZJ_(G)), intent(in)    :: array  !< The variable being averaged
+  real, dimension(SZJ_(G)),         intent(out)   :: i_mean !< Global mean of array along its i-axis
+  real, dimension(SZI_(G),SZJ_(G)), &
+                          optional, intent(in)    :: mask !< An array used for weighting the i-mean
 
-!    This subroutine determines the global mean of a field along rows of
-!  constant i, returning it in a 1-d array using the local indexing.
-
-! Arguments: array - The 2-d array whose i-mean is to be taken.
-!  (out)     i_mean - Global mean of array along its i-axis.
-!  (in)      G - The ocean's grid structure.
-!  (in)      mask - An array used for weighting the i-mean.
-
+  ! Local variables
   type(EFP_type), allocatable, dimension(:) :: asum, mask_sum
   real :: mask_sum_r
   integer :: is, ie, js, je, idg_off, jdg_off
@@ -207,20 +236,16 @@ subroutine global_i_mean(array, i_mean, G, mask)
 
 end subroutine global_i_mean
 
+!> Determine the global mean of a field along rows of constant j, returning it
+!! in a 1-d array using the local indexing. This uses reproducing sums.
 subroutine global_j_mean(array, j_mean, G, mask)
-  type(ocean_grid_type),            intent(inout) :: G
-  real, dimension(SZI_(G),SZJ_(G)), intent(in)    :: array
-  real, dimension(SZI_(G)),         intent(out)   :: j_mean
-  real, dimension(SZI_(G),SZJ_(G)), optional, intent(in) :: mask
+  type(ocean_grid_type),            intent(inout) :: G    !< The ocean's grid structure
+  real, dimension(SZI_(G),SZJ_(G)), intent(in)    :: array  !< The variable being averaged
+  real, dimension(SZI_(G)),         intent(out)   :: j_mean !<  Global mean of array along its j-axis
+  real, dimension(SZI_(G),SZJ_(G)), &
+                          optional, intent(in)    :: mask !< An array used for weighting the j-mean
 
-!    This subroutine determines the global mean of a field along rows of
-!  constant j, returning it in a 1-d array using the local indexing.
-
-! Arguments: array - The 2-d array whose j-mean is to be taken.
-!  (out)     j_mean - Global mean of array along its j-axis.
-!  (in)      G - The ocean's grid structure.
-!  (in)      mask - An array used for weighting the j-mean.
-
+  ! Local variables
   type(EFP_type), allocatable, dimension(:) :: asum, mask_sum
   real :: mask_sum_r
   integer :: is, ie, js, je, idg_off, jdg_off
@@ -287,7 +312,7 @@ end subroutine global_j_mean
 
 !> Adjust 2d array such that area mean is zero without moving the zero contour
 subroutine adjust_area_mean_to_zero(array, G, scaling)
-  type(ocean_grid_type),            intent(inout) :: G       !< Grid structure
+  type(ocean_grid_type),            intent(in)    :: G       !< Grid structure
   real, dimension(SZI_(G),SZJ_(G)), intent(inout) :: array   !< 2D array to be adjusted
   real, optional,                   intent(out)   :: scaling !< The scaling factor used
   ! Local variables

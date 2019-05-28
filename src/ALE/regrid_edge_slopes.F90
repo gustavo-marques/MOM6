@@ -1,68 +1,58 @@
+!> Routines that estimate edge slopes to be used in
+!! high-order reconstruction schemes.
 module regrid_edge_slopes
-!==============================================================================
-!
-! This file is part of MOM.
-!
-! Date of creation: 2008.06.09
-! L. White
-!
-! This module contains routines that estimate edge slopes to be used in
-! high-order reconstruction schemes.
-!
-!==============================================================================
+
+! This file is part of MOM6. See LICENSE.md for the license.
+
 use regrid_solvers, only : solve_linear_system, solve_tridiagonal_system
 use polynomial_functions, only : evaluation_polynomial
 
-
 implicit none ; private
 
-! -----------------------------------------------------------------------------
-! The following routines are visible to the outside world
-! -----------------------------------------------------------------------------
 public edge_slopes_implicit_h3
 public edge_slopes_implicit_h5
 
-real, parameter :: h_neglect = 1.E-30
+! Specifying a dimensional parameter value, as is done here, is a terrible idea.
+real, parameter :: hNeglect_dflt = 1.E-30 !< Default negligible cell thickness
 
 contains
 
-
 !------------------------------------------------------------------------------
-! Compute ih4 edge slopes (implicit third order accurate)
-!------------------------------------------------------------------------------
-subroutine edge_slopes_implicit_h3( N, h, u, edge_slopes )
-! -----------------------------------------------------------------------------
-! Compute edge slopes based on third-order implicit estimates. Note that
-! the estimates are fourth-order accurate on uniform grids
-!
-! Third-order implicit estimates of edge slopes are based on a two-cell
-! stencil. A tridiagonal system is set up and is based on expressing the
-! edge slopes in terms of neighboring cell averages. The generic
-! relationship is
-!
-! \alpha u'_{i-1/2} + u'_{i+1/2} + \beta u'_{i+3/2} =
-! a \bar{u}_i + b \bar{u}_{i+1}
-!
-! and the stencil looks like this
-!
-!          i     i+1
-!   ..--o------o------o--..
-!     i-1/2  i+1/2  i+3/2
-!
-! In this routine, the coefficients \alpha, \beta, a and b are computed,
-! the tridiagonal system is built, boundary conditions are prescribed and
-! the system is solved to yield edge-slope estimates.
-!
-! There are N+1 unknowns and we are able to write N-1 equations. The
-! boundary conditions close the system.
-! -----------------------------------------------------------------------------
-
-  ! Arguments
-  integer,               intent(in)    :: N ! Number of cells
-  real, dimension(:),    intent(in)    :: h ! cell averages (size N)
-  real, dimension(:),    intent(in)    :: u ! cell averages (size N)
-  real, dimension(:,:),  intent(inout) :: edge_slopes
-
+!> Compute ih4 edge slopes (implicit third order accurate)
+!! in the same units as h.
+!!
+!! Compute edge slopes based on third-order implicit estimates. Note that
+!! the estimates are fourth-order accurate on uniform grids
+!!
+!! Third-order implicit estimates of edge slopes are based on a two-cell
+!! stencil. A tridiagonal system is set up and is based on expressing the
+!! edge slopes in terms of neighboring cell averages. The generic
+!! relationship is
+!!
+!! \f[
+!! \alpha u'_{i-1/2} + u'_{i+1/2} + \beta u'_{i+3/2} =
+!! a \bar{u}_i + b \bar{u}_{i+1}
+!! \f]
+!!
+!! and the stencil looks like this
+!!
+!!          i     i+1
+!!   ..--o------o------o--..
+!!     i-1/2  i+1/2  i+3/2
+!!
+!! In this routine, the coefficients \f$\alpha\f$, \f$\beta\f$, a and b are computed,
+!! the tridiagonal system is built, boundary conditions are prescribed and
+!! the system is solved to yield edge-slope estimates.
+!!
+!! There are N+1 unknowns and we are able to write N-1 equations. The
+!! boundary conditions close the system.
+subroutine edge_slopes_implicit_h3( N, h, u, edge_slopes, h_neglect )
+  integer,              intent(in)    :: N !< Number of cells
+  real, dimension(:),   intent(in)    :: h !< cell widths (size N)
+  real, dimension(:),   intent(in)    :: u !< cell average properties (size N)
+  real, dimension(:,:), intent(inout) :: edge_slopes !< Returned edge slopes, with the
+                                           !! same units as u divided by the units of h.
+  real, optional,       intent(in)    :: h_neglect !< A negligibly small width
   ! Local variables
   integer               :: i, j                 ! loop indexes
   real                  :: h0, h1               ! cell widths
@@ -80,6 +70,11 @@ subroutine edge_slopes_implicit_h3( N, h, u, edge_slopes )
                            tri_u, &             ! trid. system (upper diagonal)
                            tri_b, &             ! trid. system (unknowns vector)
                            tri_x                ! trid. system (rhs)
+  real      :: hNeglect ! A negligible thicness in the same units as h.
+  real      :: hNeglect3 ! hNeglect^3 in the same units as h^3.
+
+  hNeglect = hNeglect_dflt ; if (present(h_neglect))  hNeglect = h_neglect
+  hNeglect3 = hNeglect**3
 
   ! Loop on cells (except last one)
   do i = 1,N-1
@@ -98,9 +93,9 @@ subroutine edge_slopes_implicit_h3( N, h, u, edge_slopes )
     d = 4.0 * h0h1 * ( h0 + h1 ) + h1_3 + h0_3
 
     ! Coefficients
-    alpha = h1 * (h0_2 + h0h1 - h1_2) / ( d + h_neglect )
-    beta  = h0 * (h1_2 + h0h1 - h0_2) / ( d + h_neglect )
-    a = -12.0 * h0h1 / ( d + h_neglect )
+    alpha = h1 * (h0_2 + h0h1 - h1_2) / ( d + hNeglect3 )
+    beta  = h0 * (h1_2 + h0h1 - h0_2) / ( d + hNeglect3 )
+    a = -12.0 * h0h1 / ( d + hNeglect3 )
     b = -a
 
     tri_l(i+1) = alpha
@@ -109,23 +104,23 @@ subroutine edge_slopes_implicit_h3( N, h, u, edge_slopes )
 
     tri_b(i+1) = a * u(i) + b * u(i+1)
 
-  end do ! end loop on cells
+  enddo ! end loop on cells
 
   ! Boundary conditions: left boundary
   x(1) = 0.0
   do i = 2,5
     x(i) = x(i-1) + h(i-1)
-  end do
+  enddo
 
   do i = 1,4
 
     do j = 1,4
       Asys(i,j) = ( (x(i+1)**j) - (x(i)**j) ) / j
-    end do
+    enddo
 
     Bsys(i) = u(i) * ( h(i) )
 
-  end do
+  enddo
 
   call solve_linear_system( Asys, Bsys, Csys, 4 )
 
@@ -141,17 +136,17 @@ subroutine edge_slopes_implicit_h3( N, h, u, edge_slopes )
   x(1) = 0.0
   do i = 2,5
     x(i) = x(i-1) + h(N-5+i)
-  end do
+  enddo
 
   do i = 1,4
 
     do j = 1,4
       Asys(i,j) = ( (x(i+1)**j) - (x(i)**j) ) / j
-    end do
+    enddo
 
     Bsys(i) = u(N-4+i) * ( h(N-4+i) )
 
-  end do
+  enddo
 
   call solve_linear_system( Asys, Bsys, Csys, 4 )
 
@@ -169,7 +164,7 @@ subroutine edge_slopes_implicit_h3( N, h, u, edge_slopes )
   do i = 2,N
     edge_slopes(i,1)   = tri_x(i)
     edge_slopes(i-1,2) = tri_x(i)
-  end do
+  enddo
   edge_slopes(1,1) = tri_x(1)
   edge_slopes(N,2) = tri_x(N+1)
 
@@ -177,9 +172,15 @@ end subroutine edge_slopes_implicit_h3
 
 
 !------------------------------------------------------------------------------
-! Compute ih5 edge values (implicit fifth order accurate)
-!------------------------------------------------------------------------------
-subroutine edge_slopes_implicit_h5( N, h, u, edge_slopes )
+!> Compute ih5 edge values (implicit fifth order accurate)
+subroutine edge_slopes_implicit_h5( N, h, u, edge_slopes, h_neglect )
+  integer,              intent(in)    :: N !< Number of cells
+  real, dimension(:),   intent(in)    :: h !< cell widths (size N)
+  real, dimension(:),   intent(in)    :: u !< cell average properties (size N)
+  real, dimension(:,:), intent(inout) :: edge_slopes !< Returned edge slopes, with the
+                                           !! same units as u divided by the units of h.
+  real, optional,       intent(in)    :: h_neglect !< A negligibly small width
+                                           !! in the same units as h.
 ! -----------------------------------------------------------------------------
 ! Fifth-order implicit estimates of edge values are based on a four-cell,
 ! three-edge stencil. A tridiagonal system is set up and is based on
@@ -213,12 +214,6 @@ subroutine edge_slopes_implicit_h5( N, h, u, edge_slopes )
 !          on nonuniform meshes turned out to be intractable.
 ! -----------------------------------------------------------------------------
 
-  ! Arguments
-  integer,               intent(in)    :: N ! Number of cells
-  real, dimension(:),    intent(in)    :: h ! cell averages (size N)
-  real, dimension(:),    intent(in)    :: u ! cell averages (size N)
-  real, dimension(:,:),  intent(inout) :: edge_slopes
-
   ! Local variables
   integer               :: i, j, k              ! loop indexes
   real                  :: h0, h1, h2, h3       ! cell widths
@@ -246,6 +241,9 @@ subroutine edge_slopes_implicit_h5( N, h, u, edge_slopes )
                            tri_u, &             ! trid. system (upper diagonal)
                            tri_b, &             ! trid. system (unknowns vector)
                            tri_x                ! trid. system (rhs)
+  real      :: hNeglect ! A negligible thicness in the same units as h.
+
+  hNeglect = hNeglect_dflt ; if (present(h_neglect)) hNeglect = h_neglect
 
   ! Loop on cells (except last one)
   do k = 2,N-2
@@ -276,11 +274,11 @@ subroutine edge_slopes_implicit_h5( N, h, u, edge_slopes )
     g_5 = g_4 * g
     g_6 = g_3 * g_3
 
-    d2 = ( h1_2 - g_2 ) / ( h0 + h_neglect )
-    d3 = ( h1_3 - g_3 ) / ( h0 + h_neglect )
-    d4 = ( h1_4 - g_4 ) / ( h0 + h_neglect )
-    d5 = ( h1_5 - g_5 ) / ( h0 + h_neglect )
-    d6 = ( h1_6 - g_6 ) / ( h0 + h_neglect )
+    d2 = ( h1_2 - g_2 ) / ( h0 + hNeglect )
+    d3 = ( h1_3 - g_3 ) / ( h0 + hNeglect )
+    d4 = ( h1_4 - g_4 ) / ( h0 + hNeglect )
+    d5 = ( h1_5 - g_5 ) / ( h0 + hNeglect )
+    d6 = ( h1_6 - g_6 ) / ( h0 + hNeglect )
 
     g   = h2 + h3
     g_2 = g * g
@@ -289,11 +287,11 @@ subroutine edge_slopes_implicit_h5( N, h, u, edge_slopes )
     g_5 = g_4 * g
     g_6 = g_3 * g_3
 
-    n2 = ( g_2 - h2_2 ) / ( h3 + h_neglect )
-    n3 = ( g_3 - h2_3 ) / ( h3 + h_neglect )
-    n4 = ( g_4 - h2_4 ) / ( h3 + h_neglect )
-    n5 = ( g_5 - h2_5 ) / ( h3 + h_neglect )
-    n6 = ( g_6 - h2_6 ) / ( h3 + h_neglect )
+    n2 = ( g_2 - h2_2 ) / ( h3 + hNeglect )
+    n3 = ( g_3 - h2_3 ) / ( h3 + hNeglect )
+    n4 = ( g_4 - h2_4 ) / ( h3 + hNeglect )
+    n5 = ( g_5 - h2_5 ) / ( h3 + hNeglect )
+    n6 = ( g_6 - h2_6 ) / ( h3 + hNeglect )
 
     ! Compute matrix entries
     Asys(1,1) = 0.0
@@ -354,7 +352,7 @@ subroutine edge_slopes_implicit_h5( N, h, u, edge_slopes )
     tri_u(k+1) = beta
     tri_b(k+1) = a * u(k-1) + b * u(k) + c * u(k+1) + d * u(k+2)
 
-  end do ! end loop on cells
+  enddo ! end loop on cells
 
   ! Use a right-biased stencil for the second row
 
@@ -389,11 +387,11 @@ subroutine edge_slopes_implicit_h5( N, h, u, edge_slopes )
   h0ph1_3 = h0ph1_2 * h0ph1
   h0ph1_4 = h0ph1_2 * h0ph1_2
 
-  d2 = ( h1_2 - g_2 ) / ( h0 + h_neglect )
-  d3 = ( h1_3 - g_3 ) / ( h0 + h_neglect )
-  d4 = ( h1_4 - g_4 ) / ( h0 + h_neglect )
-  d5 = ( h1_5 - g_5 ) / ( h0 + h_neglect )
-  d6 = ( h1_6 - g_6 ) / ( h0 + h_neglect )
+  d2 = ( h1_2 - g_2 ) / ( h0 + hNeglect )
+  d3 = ( h1_3 - g_3 ) / ( h0 + hNeglect )
+  d4 = ( h1_4 - g_4 ) / ( h0 + hNeglect )
+  d5 = ( h1_5 - g_5 ) / ( h0 + hNeglect )
+  d6 = ( h1_6 - g_6 ) / ( h0 + hNeglect )
 
   g   = h2 + h3
   g_2 = g * g
@@ -402,11 +400,11 @@ subroutine edge_slopes_implicit_h5( N, h, u, edge_slopes )
   g_5 = g_4 * g
   g_6 = g_3 * g_3
 
-  n2 = ( g_2 - h2_2 ) / ( h3 + h_neglect )
-  n3 = ( g_3 - h2_3 ) / ( h3 + h_neglect )
-  n4 = ( g_4 - h2_4 ) / ( h3 + h_neglect )
-  n5 = ( g_5 - h2_5 ) / ( h3 + h_neglect )
-  n6 = ( g_6 - h2_6 ) / ( h3 + h_neglect )
+  n2 = ( g_2 - h2_2 ) / ( h3 + hNeglect )
+  n3 = ( g_3 - h2_3 ) / ( h3 + hNeglect )
+  n4 = ( g_4 - h2_4 ) / ( h3 + hNeglect )
+  n5 = ( g_5 - h2_5 ) / ( h3 + hNeglect )
+  n6 = ( g_6 - h2_6 ) / ( h3 + hNeglect )
 
   ! Compute matrix entries
   Asys(1,1) = 0.0
@@ -471,17 +469,17 @@ subroutine edge_slopes_implicit_h5( N, h, u, edge_slopes )
   x(1) = 0.0
   do i = 2,7
     x(i) = x(i-1) + h(i-1)
-  end do
+  enddo
 
   do i = 1,6
 
     do j = 1,6
       Asys(i,j) = ( (x(i+1)**j) - (x(i)**j) ) / j
-    end do
+    enddo
 
     Bsys(i) = u(i) * h(i)
 
-  end do
+  enddo
 
   call solve_linear_system( Asys, Bsys, Csys, 6 )
 
@@ -529,11 +527,11 @@ subroutine edge_slopes_implicit_h5( N, h, u, edge_slopes )
   h2ph3_3 = h2ph3_2 * h2ph3
   h2ph3_4 = h2ph3_2 * h2ph3_2
 
-  d2 = ( h1_2 - g_2 ) / ( h0 + h_neglect )
-  d3 = ( h1_3 - g_3 ) / ( h0 + h_neglect )
-  d4 = ( h1_4 - g_4 ) / ( h0 + h_neglect )
-  d5 = ( h1_5 - g_5 ) / ( h0 + h_neglect )
-  d6 = ( h1_6 - g_6 ) / ( h0 + h_neglect )
+  d2 = ( h1_2 - g_2 ) / ( h0 + hNeglect )
+  d3 = ( h1_3 - g_3 ) / ( h0 + hNeglect )
+  d4 = ( h1_4 - g_4 ) / ( h0 + hNeglect )
+  d5 = ( h1_5 - g_5 ) / ( h0 + hNeglect )
+  d6 = ( h1_6 - g_6 ) / ( h0 + hNeglect )
 
   g   = h2 + h3
   g_2 = g * g
@@ -542,11 +540,11 @@ subroutine edge_slopes_implicit_h5( N, h, u, edge_slopes )
   g_5 = g_4 * g
   g_6 = g_3 * g_3
 
-  n2 = ( g_2 - h2_2 ) / ( h3 + h_neglect )
-  n3 = ( g_3 - h2_3 ) / ( h3 + h_neglect )
-  n4 = ( g_4 - h2_4 ) / ( h3 + h_neglect )
-  n5 = ( g_5 - h2_5 ) / ( h3 + h_neglect )
-  n6 = ( g_6 - h2_6 ) / ( h3 + h_neglect )
+  n2 = ( g_2 - h2_2 ) / ( h3 + hNeglect )
+  n3 = ( g_3 - h2_3 ) / ( h3 + hNeglect )
+  n4 = ( g_4 - h2_4 ) / ( h3 + hNeglect )
+  n5 = ( g_5 - h2_5 ) / ( h3 + hNeglect )
+  n6 = ( g_6 - h2_6 ) / ( h3 + hNeglect )
 
   ! Compute matrix entries
   Asys(1,1) = 0.0
@@ -611,17 +609,17 @@ subroutine edge_slopes_implicit_h5( N, h, u, edge_slopes )
   x(1) = 0.0
   do i = 2,7
     x(i) = x(i-1) + h(N-7+i)
-  end do
+  enddo
 
   do i = 1,6
 
     do j = 1,6
       Asys(i,j) = ( (x(i+1)**j) - (x(i)**j) ) / j
-    end do
+    enddo
 
     Bsys(i) = u(N-6+i) * h(N-6+i)
 
-  end do
+  enddo
 
   call solve_linear_system( Asys, Bsys, Csys, 6 )
 
@@ -642,7 +640,7 @@ subroutine edge_slopes_implicit_h5( N, h, u, edge_slopes )
   do i = 2,N
     edge_slopes(i,1)   = tri_x(i)
     edge_slopes(i-1,2) = tri_x(i)
-  end do
+  enddo
   edge_slopes(1,1) = tri_x(1)
   edge_slopes(N,2) = tri_x(N+1)
 
