@@ -87,7 +87,7 @@ contains
 !! This subroutine warms any water that is colder than the (currently
 !! surface) freezing point up to the freezing point and accumulates
 !! the required heat (in J m-2) in tv%frazil.
-subroutine make_frazil(h, tv, G, GV, CS, p_surf, halo,,frac_shelf_h)
+subroutine make_frazil(h, tv, G, GV, CS, p_surf, halo, frac_shelf_h)
   type(ocean_grid_type),   intent(in)    :: G  !< The ocean's grid structure
   type(verticalGrid_type), intent(in)    :: GV !< The ocean's vertical grid structure
   real, dimension(SZI_(G),SZJ_(G),SZK_(G)), &
@@ -211,7 +211,7 @@ subroutine make_frazil(h, tv, G, GV, CS, p_surf, halo,,frac_shelf_h)
             endif
 
             hc = (tv%C_p*GV%H_to_kg_m2) * h(i,j,k)
-            if (h(i,j,k) <= 10.0*GV%Angstrom) then
+            if (h(i,j,k) <= 10.0*GV%Angstrom_H) then
               ! Very thin layers should not be cooled by the frazil flux.
               if (tv%T(i,j,k) < T_freeze(i)) then
                 fraz_col(i) = fraz_col(i) + hc * (T_freeze(i) - tv%T(i,j,k))

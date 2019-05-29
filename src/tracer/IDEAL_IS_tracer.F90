@@ -24,12 +24,12 @@ use MOM_forcing_type, only : forcing
 use MOM_hor_index, only : hor_index_type
 use MOM_grid, only : ocean_grid_type
 use MOM_io, only : file_exists, read_data, slasher, vardesc, var_desc, query_vardesc
-use MOM_restart, only : register_restart_field, MOM_restart_CS
+use MOM_restart, only : MOM_restart_CS
 use MOM_ALE_sponge, only : set_up_ALE_sponge_field, ALE_sponge_CS
 use MOM_sponge, only : set_up_sponge_field, sponge_CS
 use MOM_time_manager, only : time_type, get_time
 use MOM_tracer_registry, only : register_tracer, tracer_registry_type
-use MOM_tracer_registry, only : add_tracer_diagnostics, add_tracer_OBC_values
+!use MOM_tracer_registry, only : add_tracer_diagnostics, add_tracer_OBC_values
 use MOM_tracer_diabatic, only : tracer_vertdiff, applyTracerBoundaryFluxesInOut
 use MOM_variables, only : surface
 use MOM_open_boundary, only : ocean_OBC_type
@@ -110,6 +110,8 @@ function register_IDEAL_IS_tracer(HI, GV, param_file, CS, tr_Reg, &
 ! This include declares and sets the variable "version".
 #include "version_variable.h"
   character(len=40)  :: mod = "IDEAL_IS_tracer" ! This module's name.
+  character(len=48) :: flux_units ! The units for tracer fluxes, usually
+                            ! kg(tracer) kg(water)-1 m3 s-1 or kg(tracer) s-1.
   character(len=200) :: inputdir
   real, pointer :: tr_ptr(:,:,:) => NULL()
   logical :: register_IDEAL_IS_tracer
@@ -173,17 +175,21 @@ function register_IDEAL_IS_tracer(HI, GV, param_file, CS, tr_Reg, &
   do m=1,NTR
     if (m < 10) then ; write(name,'("tr_D",I1.1)') m
     else ; write(name,'("tr_D",I2.2)') m ; endif
-    write(longname,'("Concentration of IDEAL_IS Tracer ",I2.2)') m
+    write(longname,'("Concentration of DOME Tracer ",I2.2)') m
     CS%tr_desc(m) = var_desc(name, units="kg kg-1", longname=longname, caller=mod)
+    if (GV%Boussinesq) then ; flux_units = "kg kg-1 m3 s-1"
+    else ; flux_units = "kg s-1" ; endif
 
     ! This is needed to force the compiler not to do a copy in the registration
     ! calls.  Curses on the designers and implementers of Fortran90.
     tr_ptr => CS%tr(:,:,:,m)
     ! Register the tracer for the restart file.
-    call register_restart_field(tr_ptr, CS%tr_desc(m), .true., restart_CS)
+    !call register_restart_field(tr_ptr, CS%tr_desc(m), .true., restart_CS)
     ! Register the tracer for horizontal advection & diffusion.
-    call register_tracer(tr_ptr, CS%tr_desc(m), param_file, HI, GV, tr_Reg, &
-                         tr_desc_ptr=CS%tr_desc(m))
+    call register_tracer(tr_ptr, tr_Reg, param_file, HI, GV,  &
+                         name=name, longname=longname, units="kg kg-1", &
+                         registry_diags=.true., flux_units=flux_units, &
+                         restart_CS=restart_CS)
 
     !   Set coupled_tracers to be true (hard-coded above) to provide the surface
     ! values to the coupler (if any).  This is meta-code and its arguments will
@@ -291,10 +297,10 @@ subroutine initialize_IDEAL_IS_tracer(restart, day, G, GV, h, diag, OBC, CS, &
     if (CS%id_tr_dfy(m) > 0) call safe_alloc_ptr(CS%tr_dfy(m)%p,isd,ied,JsdB,JedB,nz)
 
 !    Register the tracer for horizontal advection & diffusion.
-    if ((CS%id_tr_adx(m) > 0) .or. (CS%id_tr_ady(m) > 0) .or. &
-        (CS%id_tr_dfx(m) > 0) .or. (CS%id_tr_dfy(m) > 0)) &
-      call add_tracer_diagnostics(name, CS%tr_Reg, CS%tr_adx(m)%p, &
-                                  CS%tr_ady(m)%p, CS%tr_dfx(m)%p, CS%tr_dfy(m)%p)
+!    if ((CS%id_tr_adx(m) > 0) .or. (CS%id_tr_ady(m) > 0) .or. &
+!        (CS%id_tr_dfx(m) > 0) .or. (CS%id_tr_dfy(m) > 0)) &
+!      call add_tracer_diagnostics(name, CS%tr_Reg, CS%tr_adx(m)%p, &
+!                                  CS%tr_ady(m)%p, CS%tr_dfx(m)%p, CS%tr_dfy(m)%p)
 
     call register_Z_tracer(CS%tr(:,:,:,m), trim(name), longname, units, &
                            day, G, diag_to_Z_CSp)
@@ -471,7 +477,7 @@ subroutine IDEAL_IS_tracer_column_physics(h_old, h_new,  ea,  eb, fluxes, dt, G,
   if (CS%mask_tracers) then
     do m = 1,NTR ; if (CS%id_tracer(m) > 0) then
       do k=1,nz ; do j=js,je ; do i=is,ie
-        if (h_new(i,j,k) < 1.1*GV%Angstrom) then
+        if (h_new(i,j,k) < 1.1*GV%Angstrom_H) then
           CS%tr_aux(i,j,k,m) = CS%land_val(m)
         else
           CS%tr_aux(i,j,k,m) = CS%tr(i,j,k,m)

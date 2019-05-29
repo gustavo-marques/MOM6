@@ -1341,13 +1341,13 @@ subroutine legacy_diabatic(u, v, h, tv, Hml, fluxes, visc, ADp, CDp, dt, Time_en
 
     if (ASSOCIATED(fluxes%frac_shelf_h)) then
       if (ASSOCIATED(fluxes%p_surf_full)) then
-        call make_frazil(h, tv, G, GV, CS%diabatic_aux_CSp, fluxes%p_surf_full, halo=CS%halo_TS_diff, frac_shelf_h=fluxes%frac_shelf_h)
+        call make_frazil(h, tv, G, GV, CS%diabatic_aux_CSp, p_surf=fluxes%p_surf_full, halo=CS%halo_TS_diff, frac_shelf_h=fluxes%frac_shelf_h)
       else
         call make_frazil(h, tv, G, GV, CS%diabatic_aux_CSp, halo=CS%halo_TS_diff, frac_shelf_h=fluxes%frac_shelf_h)
       endif
     else
       if (ASSOCIATED(fluxes%p_surf_full)) then
-        call make_frazil(h, tv, G, GV, CS%diabatic_aux_CSp, fluxes%p_surf_full, halo=CS%halo_TS_diff)
+        call make_frazil(h, tv, G, GV, CS%diabatic_aux_CSp, p_surf=fluxes%p_surf_full, halo=CS%halo_TS_diff)
       else
         call make_frazil(h, tv, G, GV, CS%diabatic_aux_CSp, halo=CS%halo_TS_diff)
       endif
@@ -2378,21 +2378,24 @@ subroutine legacy_diabatic(u, v, h, tv, Hml, fluxes, visc, ADp, CDp, dt, Time_en
 
     if (ASSOCIATED(fluxes%frac_shelf_h)) then
       if (ASSOCIATED(fluxes%p_surf_full)) then
-        call make_frazil(h, tv, G, GV, CS%diabatic_aux_CSp, fluxes%p_surf_full, fluxes%frac_shelf_h)
+        call make_frazil(h, tv, G, GV, CS%diabatic_aux_CSp, p_surf=fluxes%p_surf_full, &
+                        halo=CS%halo_TS_diff, frac_shelf_h=fluxes%frac_shelf_h)
       else
-        call make_frazil(h, tv, G, GV, CS%diabatic_aux_CSp,frac_shelf_h=fluxes%frac_shelf_h)
+        call make_frazil(h, tv, G, GV, CS%diabatic_aux_CSp, halo=CS%halo_TS_diff, &
+                        frac_shelf_h=fluxes%frac_shelf_h)
       endif
     else
       if (ASSOCIATED(fluxes%p_surf_full)) then
-        call make_frazil(h, tv, G, GV, CS%diabatic_aux_CSp, fluxes%p_surf_full)
+        call make_frazil(h, tv, G, GV, CS%diabatic_aux_CSp, p_surf=fluxes%p_surf_full, &
+                         halo=CS%halo_TS_diff)
       else
-        call make_frazil(h, tv, G, GV, CS%diabatic_aux_CSp)
+        call make_frazil(h, tv, G, GV, CS%diabatic_aux_CSp, halo=CS%halo_TS_diff)
       endif
     endif
 
     if (CS%frazil_tendency_diag) then
       if (ASSOCIATED(fluxes%frac_shelf_h)) then
-        call diagnose_frazil_tendency(tv, h, temp_diag, 0.5*dt, G, GV, CS fluxes%frac_shelf_h)
+        call diagnose_frazil_tendency(tv, h, temp_diag, 0.5*dt, G, GV, CS, fluxes%frac_shelf_h)
       else
         call diagnose_frazil_tendency(tv, h, temp_diag, 0.5*dt, G, GV, CS)
       endif
@@ -2750,7 +2753,7 @@ subroutine diagnose_frazil_tendency(tv, h, temp_old, dt, G, GV, CS, frac_shelf_h
       endif
 
      enddo ; enddo ; enddo
-    if(CS%id_frazil_heat_tend  > 0 .and. ncall == 2) then
+    if(CS%id_frazil_heat_tend  > 0) then
       call post_data(CS%id_frazil_heat_tend, CS%frazil_heat_diag(:,:,:), CS%diag)
     endif
 
