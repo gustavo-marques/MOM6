@@ -2823,7 +2823,7 @@ subroutine extract_surface_state(CS, sfc_state)
           sfc_state%sfc_density(i,j) = sfc_state%sfc_density(i,j) / depth(i)
         endif
         !### Verify that this is no longer needed.
-        ! sfc_state%Hml(i,j) = US%Z_to_m * depth(i)
+        sfc_state%Hml(i,j) = depth(i)
       enddo
     enddo ! end of j loop
 
