@@ -274,27 +274,27 @@ subroutine initialize_IDEAL_IS_tracer(restart, day, G, GV, h, diag, OBC, CS, &
   else ; flux_units = "kg s-1" ; endif
 
   do m=1,NTR
-    ! Register the tracer for the restart file.
-    call query_vardesc(CS%tr_desc(m), name, units=units, longname=longname, &
-                       caller="initialize_IDEAL_IS_tracer")
-    CS%id_tracer(m) = register_diag_field("ocean_model", trim(name), CS%diag%axesTL, &
-        day, trim(longname) , trim(units))
-    CS%id_tr_adx(m) = register_diag_field("ocean_model", trim(name)//"_adx", &
-        CS%diag%axesCuL, day, trim(longname)//" advective zonal flux" , &
-        trim(flux_units))
-    CS%id_tr_ady(m) = register_diag_field("ocean_model", trim(name)//"_ady", &
-        CS%diag%axesCvL, day, trim(longname)//" advective meridional flux" , &
-        trim(flux_units))
-    CS%id_tr_dfx(m) = register_diag_field("ocean_model", trim(name)//"_dfx", &
-        CS%diag%axesCuL, day, trim(longname)//" diffusive zonal flux" , &
-        trim(flux_units))
-    CS%id_tr_dfy(m) = register_diag_field("ocean_model", trim(name)//"_dfy", &
-        CS%diag%axesCvL, day, trim(longname)//" diffusive zonal flux" , &
-        trim(flux_units))
-    if (CS%id_tr_adx(m) > 0) call safe_alloc_ptr(CS%tr_adx(m)%p,IsdB,IedB,jsd,jed,nz)
-    if (CS%id_tr_ady(m) > 0) call safe_alloc_ptr(CS%tr_ady(m)%p,isd,ied,JsdB,JedB,nz)
-    if (CS%id_tr_dfx(m) > 0) call safe_alloc_ptr(CS%tr_dfx(m)%p,IsdB,IedB,jsd,jed,nz)
-    if (CS%id_tr_dfy(m) > 0) call safe_alloc_ptr(CS%tr_dfy(m)%p,isd,ied,JsdB,JedB,nz)
+!    ! Register the tracer for the restart file.
+!    call query_vardesc(CS%tr_desc(m), name, units=units, longname=longname, &
+!                       caller="initialize_IDEAL_IS_tracer")
+!    CS%id_tracer(m) = register_diag_field("ocean_model", trim(name), CS%diag%axesTL, &
+!        day, trim(longname) , trim(units))
+!    CS%id_tr_adx(m) = register_diag_field("ocean_model", trim(name)//"_adx", &
+!        CS%diag%axesCuL, day, trim(longname)//" advective zonal flux" , &
+!        trim(flux_units))
+!    CS%id_tr_ady(m) = register_diag_field("ocean_model", trim(name)//"_ady", &
+!        CS%diag%axesCvL, day, trim(longname)//" advective meridional flux" , &
+!        trim(flux_units))
+!    CS%id_tr_dfx(m) = register_diag_field("ocean_model", trim(name)//"_dfx", &
+!        CS%diag%axesCuL, day, trim(longname)//" diffusive zonal flux" , &
+!        trim(flux_units))
+!    CS%id_tr_dfy(m) = register_diag_field("ocean_model", trim(name)//"_dfy", &
+!        CS%diag%axesCvL, day, trim(longname)//" diffusive zonal flux" , &
+!        trim(flux_units))
+!    if (CS%id_tr_adx(m) > 0) call safe_alloc_ptr(CS%tr_adx(m)%p,IsdB,IedB,jsd,jed,nz)
+!    if (CS%id_tr_ady(m) > 0) call safe_alloc_ptr(CS%tr_ady(m)%p,isd,ied,JsdB,JedB,nz)
+!    if (CS%id_tr_dfx(m) > 0) call safe_alloc_ptr(CS%tr_dfx(m)%p,IsdB,IedB,jsd,jed,nz)
+!    if (CS%id_tr_dfy(m) > 0) call safe_alloc_ptr(CS%tr_dfy(m)%p,isd,ied,JsdB,JedB,nz)
 
 !    Register the tracer for horizontal advection & diffusion.
 !    if ((CS%id_tr_adx(m) > 0) .or. (CS%id_tr_ady(m) > 0) .or. &
