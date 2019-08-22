@@ -106,6 +106,7 @@ type, public :: diagnostics_CS ; private
     KE_dia     => NULL()    !< KE source from diapycnal diffusion [m3 s-3]
 
   !>@{ Diagnostic IDs
+  integer :: id_u2 = -1,   id_v2 = -1
   integer :: id_u = -1,   id_v = -1, id_h = -1
   integer :: id_e              = -1, id_e_D            = -1
   integer :: id_du_dt          = -1, id_dv_dt          = -1
@@ -284,8 +285,10 @@ subroutine calculate_diagnostic_fields(u, v, h, uh, vh, tv, ADp, CDp, p_surf, &
   call calculate_derivs(dt, G, CS)
 
   if (CS%id_u > 0) call post_data(CS%id_u, u, CS%diag)
+  if (CS%id_u2 > 0) call post_data(CS%id_u2, u*u, CS%diag)
 
   if (CS%id_v > 0) call post_data(CS%id_v, v, CS%diag)
+  if (CS%id_v2 > 0) call post_data(CS%id_v2, v*v, CS%diag)
 
   if (CS%id_h > 0) call post_data(CS%id_h, h, CS%diag)
 
@@ -1525,9 +1528,17 @@ subroutine MOM_diagnostics_init(MIS, ADp, CDp, Time, G, GV, US, param_file, diag
   CS%id_u = register_diag_field('ocean_model', 'u', diag%axesCuL, Time,              &
       'Zonal velocity', 'm s-1', cmor_field_name='uo', &
       cmor_standard_name='sea_water_x_velocity', cmor_long_name='Sea Water X Velocity')
+
+  CS%id_u2 = register_diag_field('ocean_model', 'u2', diag%axesCuL, Time,              &
+      'Zonal velocity squared', 'm2 s-2')
+
   CS%id_v = register_diag_field('ocean_model', 'v', diag%axesCvL, Time,                  &
       'Meridional velocity', 'm s-1', cmor_field_name='vo', &
       cmor_standard_name='sea_water_y_velocity', cmor_long_name='Sea Water Y Velocity')
+  
+  CS%id_v2 = register_diag_field('ocean_model', 'v2', diag%axesCvL, Time,                  &
+      'Meridional velocity squared', 'm2 s-2')
+
   CS%id_h = register_diag_field('ocean_model', 'h', diag%axesTL, Time, &
       'Layer Thickness', thickness_units, v_extensive=.true., conversion=convert_H)
 
