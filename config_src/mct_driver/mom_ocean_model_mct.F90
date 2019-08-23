@@ -56,6 +56,7 @@ use coupler_types_mod,       only : coupler_type_initialized, coupler_type_copy_
 use coupler_types_mod,       only : coupler_type_set_diags, coupler_type_send_data
 use mpp_domains_mod,         only : domain2d, mpp_get_layout, mpp_get_global_domain
 use mpp_domains_mod,         only : mpp_define_domains, mpp_get_compute_domain, mpp_get_data_domain
+use time_interp_external_mod,only : time_interp_external_init
 use atmos_ocean_fluxes_mod,  only : aof_set_coupler_flux
 use fms_mod,                 only : stdout
 use mpp_mod,                 only : mpp_chksum
@@ -273,6 +274,8 @@ subroutine ocean_model_init(Ocean_sfc, OS, Time_init, Time_in, gas_fields_ocn, i
 
   OS%is_ocean_pe = Ocean_sfc%is_ocean_pe
   if (.not.OS%is_ocean_pe) return
+
+  call time_interp_external_init
 
   OS%Time = Time_in
   call initialize_MOM(OS%Time, Time_init, param_file, OS%dirs, OS%MOM_CSp, &
