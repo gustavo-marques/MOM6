@@ -1041,9 +1041,9 @@ subroutine add_shelf_flux(G, US, CS, sfc_state, fluxes)
 
     ! average total melt flux over sponge area
     do j=js,je ; do i=is,ie
-      if ((G%mask2dT(i,j) > 0.0) .AND. (ISS%area_shelf_h(i,j) * G%IareaT(i,j) < 1.0)) then
+      if ((G%mask2dT(i,j) > 0.0) .AND. (ISS%area_shelf_h(i,j) * G%IareaT(i,j) < 1.0) & !then
          ! Uncomment this for some ISOMIP cases:
-         !  .AND. (G%geoLonT(i,j) >= 790.0) .AND. (G%geoLonT(i,j) <= 800.0)) then
+          .AND. (G%geoLonT(i,j) >= 790.0) .AND. (G%geoLonT(i,j) <= 800.0)) then
         bal_frac(i,j) = max(1.0 - ISS%area_shelf_h(i,j) * G%IareaT(i,j), 0.0)
       else
         bal_frac(i,j) = 0.0
@@ -1573,7 +1573,7 @@ subroutine initialize_ice_shelf(param_file, ocn_grid, Time, CS, diag, forces, fl
     ISS%water_flux(:,:) = 0.0
   endif
 
-  if (shelf_mass_is_dynamic) &
+  if (shelf_mass_is_dynamic .and. .not. CS%override_shelf_movement) &
     call initialize_ice_shelf_dyn(param_file, Time, ISS, CS%dCS, G, US, diag, new_sim, solo_ice_sheet_in)
 
   call fix_restart_unit_scaling(US)
