@@ -19,6 +19,7 @@ use MOM_unit_scaling,     only : unit_scale_type
 use MOM_variables,        only : thermo_var_ptrs, vertvisc_type, p3d
 use MOM_verticalGrid,     only : verticalGrid_type
 use MOM_EOS,              only : calculate_density, calculate_density_derivs, EOS_domain
+use MOM_diag_to_Z, only : diag_to_Z_CS, register_Zint_diag, calc_Zint_diags
 
 implicit none ; private
 

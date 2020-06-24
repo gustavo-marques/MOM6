@@ -3,6 +3,7 @@ module MOM_tracer_Z_init
 
 ! This file is part of MOM6. See LICENSE.md for the license.
 
+use MOM_diag_to_Z, only : find_overlap, find_limited_slope
 use MOM_error_handler, only : MOM_error, FATAL, WARNING, MOM_mesg, is_root_pe
 ! use MOM_file_parser, only : get_param, log_version, param_file_type
 use MOM_grid, only : ocean_grid_type

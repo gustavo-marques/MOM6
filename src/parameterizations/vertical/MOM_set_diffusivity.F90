@@ -9,6 +9,7 @@ use MOM_diag_mediator,       only : diag_ctrl, time_type
 use MOM_diag_mediator,       only : post_data, register_diag_field
 use MOM_debugging,           only : hchksum, uvchksum, Bchksum, hchksum_pair
 use MOM_EOS,                 only : calculate_density, calculate_density_derivs, EOS_domain
+use MOM_diag_to_Z,           only : diag_to_Z_CS, register_Zint_diag, calc_Zint_diags
 use MOM_error_handler,       only : MOM_error, is_root_pe, FATAL, WARNING, NOTE
 use MOM_error_handler,       only : callTree_showQuery
 use MOM_error_handler,       only : callTree_enter, callTree_leave, callTree_waypoint
@@ -21,7 +22,7 @@ use MOM_isopycnal_slopes,    only : vert_fill_TS
 use MOM_tidal_mixing,        only : tidal_mixing_CS, calculate_tidal_mixing
 use MOM_tidal_mixing,        only : setup_tidal_diagnostics, post_tidal_diagnostics
 use MOM_intrinsic_functions, only : invcosh
-use MOM_io,                  only : slasher, MOM_read_data
+use MOM_io,                  only : slasher, vardesc, var_desc, MOM_read_data
 use MOM_kappa_shear,         only : calculate_kappa_shear, kappa_shear_init, Kappa_shear_CS
 use MOM_kappa_shear,         only : calc_kappa_shear_vertex, kappa_shear_at_vertex
 use MOM_CVMix_shear,         only : calculate_CVMix_shear, CVMix_shear_init, CVMix_shear_cs
@@ -152,6 +153,7 @@ type, public :: set_diffusivity_CS ; private
 
   character(len=200) :: inputdir !< The directory in which input files are found
   type(user_change_diff_CS), pointer :: user_change_diff_CSp => NULL() !< Control structure for a child module
+  type(diag_to_Z_CS),        pointer :: diag_to_Z_CSp        => NULL() !< Control structure for a child module
   type(Kappa_shear_CS),      pointer :: kappaShear_CSp       => NULL() !< Control structure for a child module
   type(CVMix_shear_cs),      pointer :: CVMix_shear_csp      => NULL() !< Control structure for a child module
   type(CVMix_ddiff_cs),      pointer :: CVMix_ddiff_csp      => NULL() !< Control structure for a child module
@@ -161,9 +163,11 @@ type, public :: set_diffusivity_CS ; private
 
   !>@{ Diagnostic IDs
   integer :: id_maxTKE     = -1, id_TKE_to_Kd   = -1, id_Kd_user    = -1
-  integer :: id_Kd_layer   = -1, id_Kd_BBL      = -1, id_N2         = -1
+  integer :: id_Kd_layer   = -1, id_Kd_BBL      = -1, id_Kd_BBL_z   = -1
+  integer :: id_Kd_user_z  = -1, id_N2          = -1, id_N2_z       = -1
   integer :: id_Kd_Work    = -1, id_KT_extra    = -1, id_KS_extra   = -1
-  !>@}
+  integer :: id_KT_extra_z = -1, id_KS_extra_z  = -1
+  !!@}
 
 end type set_diffusivity_CS
 
@@ -259,8 +263,11 @@ subroutine set_diffusivity(u, v, h, u_h, v_h, tv, fluxes, optics, visc, dt, &
   real :: Omega2        ! squared absolute rotation rate [T-2 ~> s-2]
 
   logical   :: use_EOS      ! If true, compute density from T/S using equation of state.
+  type(p3d) :: z_ptrs(6)    ! pointers to diagns to be interpolated into depth space
   integer   :: kb(SZI_(G))  ! The index of the lightest layer denser than the
                             ! buffer layer, or -1 without a bulk mixed layer.
+  integer   :: num_z_diags  ! number of diagns to be interpolated to depth space
+  integer   :: z_ids(6)     ! id numbers of diagns to be interpolated to depth space
   logical   :: showCallTree ! If true, show the call tree.
 
   integer :: i, j, k, is, ie, js, je, nz
@@ -299,10 +306,10 @@ subroutine set_diffusivity(u, v, h, u_h, v_h, tv, fluxes, optics, visc, dt, &
 
   ! Set up arrays for diagnostics.
 
-  if (CS%id_N2 > 0) then
+  if ((CS%id_N2 > 0) .or. (CS%id_N2_z > 0)) then
     allocate(dd%N2_3d(isd:ied,jsd:jed,nz+1)) ; dd%N2_3d(:,:,:) = 0.0
   endif
-  if (CS%id_Kd_user > 0) then
+  if ((CS%id_Kd_user > 0) .or. (CS%id_Kd_user_z > 0)) then
     allocate(dd%Kd_user(isd:ied,jsd:jed,nz+1)) ; dd%Kd_user(:,:,:) = 0.0
   endif
   if (CS%id_Kd_work > 0) then
@@ -314,13 +321,13 @@ subroutine set_diffusivity(u, v, h, u_h, v_h, tv, fluxes, optics, visc, dt, &
   if (CS%id_TKE_to_Kd > 0) then
     allocate(dd%TKE_to_Kd(isd:ied,jsd:jed,nz)) ; dd%TKE_to_Kd(:,:,:) = 0.0
   endif
-  if (CS%id_KT_extra > 0) then
+  if ((CS%id_KT_extra > 0) .or. (CS%id_KT_extra_z > 0)) then
     allocate(dd%KT_extra(isd:ied,jsd:jed,nz+1)) ; dd%KT_extra(:,:,:) = 0.0
   endif
-  if (CS%id_KS_extra > 0) then
+  if ((CS%id_KS_extra > 0) .or. (CS%id_KS_extra_z > 0)) then
     allocate(dd%KS_extra(isd:ied,jsd:jed,nz+1)) ; dd%KS_extra(:,:,:) = 0.0
   endif
-  if (CS%id_Kd_BBL > 0) then
+  if ((CS%id_Kd_BBL > 0) .or. (CS%id_Kd_BBL_z > 0)) then
     allocate(dd%Kd_BBL(isd:ied,jsd:jed,nz+1)) ; dd%Kd_BBL(:,:,:) = 0.0
   endif
 
@@ -593,6 +600,7 @@ subroutine set_diffusivity(u, v, h, u_h, v_h, tv, fluxes, optics, visc, dt, &
   ! tidal mixing
   call post_tidal_diagnostics(G,GV,h,CS%tm_csp)
 
+  num_z_diags = 0
   if (CS%tm_csp%Int_tide_dissipation .or. CS%tm_csp%Lee_wave_dissipation .or. &
       CS%tm_csp%Lowmode_itidal_dissipation) then
 
@@ -601,11 +609,45 @@ subroutine set_diffusivity(u, v, h, u_h, v_h, tv, fluxes, optics, visc, dt, &
     if (CS%id_Kd_Work > 0)    call post_data(CS%id_Kd_Work,   dd%Kd_Work,   CS%diag)
     if (CS%id_maxTKE > 0)     call post_data(CS%id_maxTKE,    dd%maxTKE,    CS%diag)
     if (CS%id_TKE_to_Kd > 0)  call post_data(CS%id_TKE_to_Kd, dd%TKE_to_Kd, CS%diag)
+
+    if (CS%id_N2_z > 0) then
+      num_z_diags = num_z_diags + 1
+      z_ids(num_z_diags) = CS%id_N2_z
+      z_ptrs(num_z_diags)%p => dd%N2_3d
+    endif
+
+    if (CS%id_Kd_user_z > 0) then
+      num_z_diags        = num_z_diags + 1
+      z_ids(num_z_diags) = CS%id_Kd_user_z
+      z_ptrs(num_z_diags)%p => dd%Kd_user
+    endif
+
   endif
 
   if (CS%id_KT_extra > 0) call post_data(CS%id_KT_extra, dd%KT_extra, CS%diag)
   if (CS%id_KS_extra > 0) call post_data(CS%id_KS_extra, dd%KS_extra, CS%diag)
   if (CS%id_Kd_BBL > 0)   call post_data(CS%id_Kd_BBL, dd%Kd_BBL, CS%diag)
+
+  if (CS%id_KT_extra_z > 0) then
+    num_z_diags = num_z_diags + 1
+    z_ids(num_z_diags) = CS%id_KT_extra_z
+    z_ptrs(num_z_diags)%p => dd%KT_extra
+  endif
+
+  if (CS%id_KS_extra_z > 0) then
+    num_z_diags = num_z_diags + 1
+    z_ids(num_z_diags) = CS%id_KS_extra_z
+    z_ptrs(num_z_diags)%p => dd%KS_extra
+  endif
+
+  if (CS%id_Kd_BBL_z > 0) then
+    num_z_diags = num_z_diags + 1
+    z_ids(num_z_diags) = CS%id_Kd_BBL_z
+    z_ptrs(num_z_diags)%p => dd%Kd_BBL
+  endif
+
+  if (num_z_diags > 0) &
+    call calc_Zint_diags(h, z_ptrs, z_ids, num_z_diags, G, GV, CS%diag_to_Z_CSp)
 
   if (associated(dd%N2_3d)) deallocate(dd%N2_3d)
   if (associated(dd%Kd_work)) deallocate(dd%Kd_work)
@@ -1879,7 +1921,7 @@ subroutine set_density_ratios(h, tv, kb, G, GV, US, CS, j, ds_dsp1, rho_0)
 
 end subroutine set_density_ratios
 
-subroutine set_diffusivity_init(Time, G, GV, US, param_file, diag, CS, int_tide_CSp, &
+subroutine set_diffusivity_init(Time, G, GV, US, param_file, diag, CS, diag_to_Z_CSp, int_tide_CSp, &
                                 tm_CSp, halo_TS)
   type(time_type),          intent(in)    :: Time !< The current model time
   type(ocean_grid_type),    intent(inout) :: G    !< The ocean's grid structure.
@@ -1890,6 +1932,8 @@ subroutine set_diffusivity_init(Time, G, GV, US, param_file, diag, CS, int_tide_
   type(diag_ctrl), target,  intent(inout) :: diag !< A structure used to regulate diagnostic output.
   type(set_diffusivity_CS), pointer       :: CS   !< pointer set to point to the module control
                                                   !! structure.
+  type(diag_to_Z_CS),       pointer       :: diag_to_Z_CSp !< pointer to the Z-diagnostics control
+                                                  !! structure.
   type(int_tide_CS),        pointer       :: int_tide_CSp  !< pointer to the internal tides control
                                                   !! structure (BDM)
   type(tidal_mixing_cs),    pointer       :: tm_csp  !< pointer to tidal mixing control
@@ -1899,6 +1943,7 @@ subroutine set_diffusivity_init(Time, G, GV, US, param_file, diag, CS, int_tide_
 
   ! Local variables
   real :: decay_length
+  type(vardesc) :: vd
   logical :: ML_use_omega
   logical :: default_2018_answers
   ! This include declares and sets the variable "version".
@@ -1921,6 +1966,7 @@ subroutine set_diffusivity_init(Time, G, GV, US, param_file, diag, CS, int_tide_
   CS%diag => diag
   if (associated(int_tide_CSp))  CS%int_tide_CSp  => int_tide_CSp
   if (associated(tm_csp))        CS%tm_csp  => tm_csp
+  if (associated(diag_to_Z_CSp)) CS%diag_to_Z_CSp => diag_to_Z_CSp
 
   ! These default values always need to be set.
   CS%BBL_mixing_as_max = .true.
@@ -2135,6 +2181,14 @@ subroutine set_diffusivity_init(Time, G, GV, US, param_file, diag, CS, int_tide_
     if (CS%user_change_diff) &
       CS%id_Kd_user = register_diag_field('ocean_model', 'Kd_user', diag%axesTi, Time, &
            'User-specified Extra Diffusivity', 'm2 s-1', conversion=US%Z2_T_to_m2_s)
+
+    if (associated(diag_to_Z_CSp)) then
+      vd = var_desc("N2", "s-2", &
+                    "Buoyancy frequency, interpolated to z", z_grid='z')
+      CS%id_N2_z = register_Zint_diag(vd, CS%diag_to_Z_CSp, Time, conversion=US%s_to_T**2)
+      if (CS%user_change_diff) &
+        CS%id_Kd_user_z = register_Zint_diag(vd, CS%diag_to_Z_CSp, Time, conversion=US%Z2_T_to_m2_s)
+    endif
   endif
 
   call get_param(param_file, mdl, "DOUBLE_DIFFUSION", CS%double_diffusion, &
@@ -2158,7 +2212,25 @@ subroutine set_diffusivity_init(Time, G, GV, US, param_file, diag, CS, int_tide_
          'Double-diffusive diffusivity for temperature', 'm2 s-1', conversion=US%Z2_T_to_m2_s)
 
     CS%id_KS_extra = register_diag_field('ocean_model', 'KS_extra', diag%axesTi, Time, &
-         'Double-diffusive diffusivity for salinity', 'm2 s-1', conversion=US%Z2_T_to_m2_s)
+         'Double-diffusive diffusivity for salinity', 'm2 s-1', &
+         conversion=US%Z2_T_to_m2_s)
+
+    if (associated(diag_to_Z_CSp)) then
+      vd = var_desc("KT_extra", "m2 s-1", &
+                    "Double-Diffusive Temperature Diffusivity, interpolated to z", &
+                    z_grid='z')
+      CS%id_KT_extra_z = register_Zint_diag(vd, CS%diag_to_Z_CSp, Time, &
+                    conversion=US%Z2_T_to_m2_s)
+      vd = var_desc("KS_extra", "m2 s-1", &
+                    "Double-Diffusive Salinity Diffusivity, interpolated to z", &
+                    z_grid='z')
+      CS%id_KS_extra_z = register_Zint_diag(vd, CS%diag_to_Z_CSp, Time, &
+                    conversion=US%Z2_T_to_m2_s)
+      vd = var_desc("Kd_BBL", "m2 s-1", &
+                    "Bottom Boundary Layer Diffusivity", z_grid='z')
+      CS%id_Kd_BBL_z = register_Zint_diag(vd, CS%diag_to_Z_CSp, Time, &
+                    conversion=US%Z2_T_to_m2_s)
+    endif
   endif ! old double-diffusion
 
   if (CS%user_change_diff) then

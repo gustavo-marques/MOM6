@@ -213,8 +213,6 @@ subroutine find_obsolete_params(param_file)
   call obsolete_logical(param_file, "MSTAR_FIXED", hint="Instead use MSTAR_MODE.")
   call obsolete_logical(param_file, "USE_VISBECK_SLOPE_BUG", .false.)
 
-  call obsolete_real(param_file, "MIN_Z_DIAG_INTERVAL")
-
   ! Write the file version number to the model log.
   call log_version(param_file, mdl, version)
 

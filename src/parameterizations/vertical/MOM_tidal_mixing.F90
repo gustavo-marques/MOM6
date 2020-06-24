@@ -5,13 +5,15 @@ module MOM_tidal_mixing
 
 use MOM_diag_mediator,      only : diag_ctrl, time_type, register_diag_field
 use MOM_diag_mediator,      only : safe_alloc_ptr, post_data
+use MOM_diag_to_Z,          only : diag_to_Z_CS, register_Zint_diag
+use MOM_diag_to_Z,          only : calc_Zint_diags
 use MOM_debugging,          only : hchksum
 use MOM_EOS,                only : calculate_density
 use MOM_error_handler,      only : MOM_error, is_root_pe, FATAL, WARNING, NOTE
 use MOM_file_parser,        only : openParameterBlock, closeParameterBlock
 use MOM_file_parser,        only : get_param, log_param, log_version, param_file_type
 use MOM_grid,               only : ocean_grid_type
-use MOM_io,                 only : slasher, MOM_read_data, field_size
+use MOM_io,                 only : slasher, MOM_read_data, vardesc, var_desc, field_size
 use MOM_remapping,          only : remapping_CS, initialize_remapping, remapping_core_h
 use MOM_string_functions,   only : uppercase, lowercase
 use MOM_unit_scaling,       only : unit_scale_type
@@ -168,6 +170,8 @@ type, public :: tidal_mixing_cs
 
   ! Diagnostics
   type(diag_ctrl),          pointer :: diag => NULL() !< structure to regulate diagnostic output timing
+  type(diag_to_Z_CS),       pointer :: diag_to_Z_CSp => NULL() !< A pointer to the control structure
+                                                      !! for remapping diagnostics into Z-space
   type(tidal_mixing_diags), pointer :: dd => NULL() !< A pointer to a structure of diagnostic arrays
 
   !>@{ Diagnostic identifiers
@@ -176,6 +180,9 @@ type, public :: tidal_mixing_cs
   integer :: id_Kd_itidal                 = -1
   integer :: id_Kd_Niku                   = -1
   integer :: id_Kd_lowmode                = -1
+  integer :: id_Kd_itidal_z               = -1
+  integer :: id_Kd_Niku_z                 = -1
+  integer :: id_Kd_lowmode_z              = -1
   integer :: id_Kd_Itidal_Work            = -1
   integer :: id_Kd_Niku_Work              = -1
   integer :: id_Kd_Lowmode_Work           = -1
@@ -209,13 +216,14 @@ integer,        parameter :: SCHMITTNER   = 2
 contains
 
 !> Initializes internal tidal dissipation scheme for diapycnal mixing
-logical function tidal_mixing_init(Time, G, GV, US, param_file, diag, CS)
+logical function tidal_mixing_init(Time, G, GV, US, param_file, diag, diag_to_Z_CSp, CS)
   type(time_type),          intent(in)    :: Time       !< The current time.
   type(ocean_grid_type),    intent(in)    :: G          !< Grid structure.
   type(verticalGrid_type),  intent(in)    :: GV         !< Vertical grid structure.
   type(unit_scale_type),    intent(in)    :: US         !< A dimensional unit scaling type
   type(param_file_type),    intent(in)    :: param_file !< Run-time parameter file handle
   type(diag_ctrl), target,  intent(inout) :: diag       !< Diagnostics control structure.
+  type(diag_to_Z_CS),       pointer       :: diag_to_Z_CSp !< pointer to the Z-diagnostics control
   type(tidal_mixing_cs),    pointer       :: CS         !< This module's control structure.
 
   ! Local variables
@@ -226,6 +234,7 @@ logical function tidal_mixing_init(Time, G, GV, US, param_file, diag, CS)
   character(len=200) :: filename, h2_file, Niku_TKE_input_file
   character(len=200) :: tidal_energy_file, tideamp_file
   real :: utide, hamp, prandtl_tidal, max_frac_rough
+  type(vardesc) :: vd
   real :: Niku_scale ! local variable for scaling the Nikurashin TKE flux data
   integer :: i, j, is, ie, js, je
   integer :: isd, ied, jsd, jed
@@ -247,6 +256,7 @@ logical function tidal_mixing_init(Time, G, GV, US, param_file, diag, CS)
   isd = G%isd ; ied = G%ied ; jsd = G%jsd ; jed = G%jed
 
   CS%diag => diag
+  if (associated(diag_to_Z_CSp)) CS%diag_to_Z_CSp => diag_to_Z_CSp
 
   ! Read parameters
   call log_version(param_file, mdl, version, &
@@ -654,6 +664,24 @@ logical function tidal_mixing_init(Time, G, GV, US, param_file, diag, CS)
             'Lee Wave Driven Diffusivity', 'm2 s-1', conversion=US%Z2_T_to_m2_s)
       endif
     endif ! S%use_CVMix_tidal
+
+    if (associated(CS%diag_to_Z_CSp)) then
+      vd = var_desc("Kd_itides","m2 s-1", &
+                    "Internal Tide Driven Diffusivity, interpolated to z", z_grid='z')
+      CS%id_Kd_itidal_z = register_Zint_diag(vd, CS%diag_to_Z_CSp, Time, conversion=US%Z_to_m**2)
+      if (CS%Lee_wave_dissipation) then
+         vd = var_desc("Kd_Nikurashin", "m2 s-1", &
+                       "Lee Wave Driven Diffusivity, interpolated to z", z_grid='z')
+         CS%id_Kd_Niku_z = register_Zint_diag(vd, CS%diag_to_Z_CSp, Time, conversion=US%Z_to_m**2)
+      endif
+      if (CS%Lowmode_itidal_dissipation) then
+        vd = var_desc("Kd_lowmode","m2 s-1", &
+                  "Internal Tide Driven Diffusivity (from low modes), interpolated to z",&
+                  z_grid='z')
+        CS%id_Kd_lowmode_z = register_Zint_diag(vd, CS%diag_to_Z_CSp, Time, conversion=US%Z_to_m**2)
+      endif
+    endif
+
   endif
 
 end function tidal_mixing_init
@@ -1408,10 +1436,12 @@ subroutine setup_tidal_diagnostics(G,CS)
   isd = G%isd; ied = G%ied; jsd = G%jsd; jed = G%jed; nz = G%ke
   dd => CS%dd
 
-  if ((CS%id_Kd_itidal > 0) .or. (CS%id_Kd_Itidal_work > 0)) then
+  if ((CS%id_Kd_itidal > 0) .or. (CS%id_Kd_itidal_z > 0) .or. &
+      (CS%id_Kd_Itidal_work > 0)) then
     allocate(dd%Kd_itidal(isd:ied,jsd:jed,nz+1)) ; dd%Kd_itidal(:,:,:) = 0.0
   endif
-  if ((CS%id_Kd_lowmode > 0) .or. (CS%id_Kd_lowmode_work > 0)) then
+  if ((CS%id_Kd_lowmode > 0) .or. (CS%id_Kd_lowmode_z > 0) .or. &
+      (CS%id_Kd_lowmode_work > 0)) then
     allocate(dd%Kd_lowmode(isd:ied,jsd:jed,nz+1)) ; dd%Kd_lowmode(:,:,:) = 0.0
   endif
   if ( (CS%id_Fl_itidal > 0) ) then
@@ -1434,7 +1464,8 @@ subroutine setup_tidal_diagnostics(G,CS)
     allocate(dd%Polzin_decay_scale_scaled(isd:ied,jsd:jed))
     dd%Polzin_decay_scale_scaled(:,:) = 0.0
   endif
-  if ((CS%id_Kd_Niku > 0) .or. (CS%id_Kd_Niku_work > 0)) then
+  if ((CS%id_Kd_Niku > 0) .or. (CS%id_Kd_Niku_z > 0) .or. &
+      (CS%id_Kd_Niku_work > 0)) then
     allocate(dd%Kd_Niku(isd:ied,jsd:jed,nz+1)) ; dd%Kd_Niku(:,:,:) = 0.0
   endif
   if (CS%id_Kd_Niku_work > 0) then
@@ -1490,8 +1521,12 @@ subroutine post_tidal_diagnostics(G, GV, h ,CS)
   type(tidal_mixing_cs),    pointer      :: CS  !< The control structure for this module
 
   ! local
+  integer :: num_z_diags
+  integer   :: z_ids(6)     ! id numbers of diagns to be interpolated to depth space
+  type(p3d) :: z_ptrs(6)    ! pointers to diagns to be interpolated into depth space
   type(tidal_mixing_diags), pointer :: dd => NULL()
 
+  num_z_diags = 0
   dd => CS%dd
 
   if (CS%Int_tide_dissipation .or. CS%Lee_wave_dissipation .or. CS%Lowmode_itidal_dissipation) then
@@ -1523,7 +1558,29 @@ subroutine post_tidal_diagnostics(G, GV, h ,CS)
       call post_data(CS%id_Polzin_decay_scale, dd%Polzin_decay_scale, CS%diag)
     if (CS%id_Polzin_decay_scale_scaled > 0 ) &
       call post_data(CS%id_Polzin_decay_scale_scaled, dd%Polzin_decay_scale_scaled, CS%diag)
+
+    if (CS%id_Kd_itidal_z > 0) then
+      num_z_diags        = num_z_diags + 1
+      z_ids(num_z_diags) = CS%id_Kd_itidal_z
+      z_ptrs(num_z_diags)%p => dd%Kd_itidal
+    endif
+
+    if (CS%id_Kd_Niku_z > 0) then
+      num_z_diags        = num_z_diags + 1
+      z_ids(num_z_diags) = CS%id_Kd_Niku_z
+      z_ptrs(num_z_diags)%p => dd%Kd_Niku
+    endif
+
+    if (CS%id_Kd_lowmode_z > 0) then
+      num_z_diags        = num_z_diags + 1
+      z_ids(num_z_diags) = CS%id_Kd_lowmode_z
+      z_ptrs(num_z_diags)%p => dd%Kd_lowmode
+    endif
+
   endif
+
+  if (num_z_diags > 0) &
+    call calc_Zint_diags(h, z_ptrs, z_ids, num_z_diags, G, GV, CS%diag_to_Z_CSp)
 
   if (associated(dd%Kd_itidal)) deallocate(dd%Kd_itidal)
   if (associated(dd%Kd_lowmode)) deallocate(dd%Kd_lowmode)
