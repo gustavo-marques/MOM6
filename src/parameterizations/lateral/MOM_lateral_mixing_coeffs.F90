@@ -108,6 +108,7 @@ type, public :: VarMix_CS
     KH_v_QG               !< QG Leith GM coefficient at v-points [L2 T-1 ~> m2 s-1]
 
   ! Parameters
+  logical :: use_dm07     !< Use Danabasoglu and Marshall 2007 formulation for thickness diffusivity
   logical :: use_Visbeck  !< Use Visbeck formulation for thickness diffusivity
   integer :: VarMix_Ktop  !< Top layer to start downward integrals
   real :: Visbeck_L_scale !< Fixed length scale in Visbeck formula
@@ -127,6 +128,8 @@ type, public :: VarMix_CS
                                !! positive integer power may be used, but even powers
                                !! and especially 2 are coded to be more efficient.
   real :: Visbeck_S_max   !< Upper bound on slope used in Eady growth rate [nondim].
+  real :: dm07_kappa_ref  !< Reference diffusivity in the Danabasoglu and Marshall 2007 formulation [L2 T-1 ~> m2 s-1].
+  real :: dm07_min_ratio  !< Minimum ratio (N2/N2_ref) to be in the Danabasoglu and Marshall 2007 formulation [nondim].
 
   ! Leith parameters
   logical :: use_QG_Leith_GM      !< If true, uses the QG Leith viscosity as the GM coefficient
@@ -476,6 +479,70 @@ subroutine calc_slope_functions(h, tv, dt, G, GV, US, CS, OBC)
   endif
 
 end subroutine calc_slope_functions
+
+!> Calculates diffusivities using the scheme from Danabasoglu and Marshall, 2007.
+subroutine calc_dm07(khth_u, khth_v, N2_u, N2_v, G, GV, US, CS)
+  type(ocean_grid_type),                        intent(inout) :: G  !< Ocean grid structure
+  type(verticalGrid_type),                      intent(in)    :: GV !< Vertical grid structure
+  real, dimension(SZIB_(G),SZJ_(G),SZK_(GV)+1), intent(inout) :: khth_u  !< Thickness diffusivity at
+                                                                    !! u-points [L2 T-1 ~> m2 s-1]
+  real, dimension(SZI_(G),SZJB_(G),SZK_(GV)+1), intent(inout) :: khth_v  !< Thickness diffusivity at
+                                                                    !! v-points [L2 T-1 ~> m2 s-1]
+  real, dimension(SZIB_(G),SZJ_(G),SZK_(GV)+1), intent(in)    :: N2_u    !< Buoyancy (Brunt-Vaisala) frequency
+                                                                         !! at u-points [T-2 ~> s-2]
+  real, dimension(SZI_(G),SZJB_(G),SZK_(GV)+1), intent(in)    :: N2_v    !< Buoyancy (Brunt-Vaisala) frequency
+                                                                         !! at v-points [T-2 ~> s-2]
+  type(unit_scale_type),                        intent(in)    :: US !< A dimensional unit scaling type
+  type(VarMix_CS),                              pointer       :: CS !< Variable mixing coefficients
+
+  ! Local variables
+  real :: N2_max        ! Maximum N2 [T-1 ~> s-1]
+  integer :: is, ie, js, je, nz
+  integer :: i, j, k
+
+  is = G%isc ; ie = G%iec ; js = G%jsc ; je = G%jec ; nz = GV%ke
+
+  ! TODO: fix OMP calls
+
+  !$OMP parallel do default(shared) private(S2,H_u,Hdn,Hup,H_geom,N2,wNE,wSE,wSW,wNW)
+  ! khth_u
+  do j = js,je
+    do I=is-1,ie
+      N2_max = 0.0
+      N2_max = MAXVAL(N2_max, N2_u(I,j,:))
+      do K=1,nz+1
+        khth_u(I,j,K) = MAXVAL((N2_u(I,j,K)/N2_max),CS%dm07_min_ratio) * CS%dm07_kappa_ref
+      enddo
+    enddo
+  enddo
+
+  !$OMP parallel do default(shared) private(S2,H_v,Hdn,Hup,H_geom,N2,wNE,wSE,wSW,wNW)
+  ! khth_v
+  do J = js-1,je
+    do i=is,ie
+      N2_max = 0.0
+      N2_max = MAXVAL(N2_max, N2_v(i,J,:))
+      do K=1,nz+1
+        khth_v(i,J,K) = MAXVAL((N2_v(i,J,K)/N2_max),CS%dm07_min_ratio) * CS%dm07_kappa_ref
+      enddo
+    enddo
+  enddo
+
+! Offer diagnostic fields for averaging.
+!  if (query_averaging_enabled(CS%diag)) then
+!    if (CS%id_S2_u > 0) call post_data(CS%id_S2_u, S2_u, CS%diag)
+!    if (CS%id_S2_v > 0) call post_data(CS%id_S2_v, S2_v, CS%diag)
+!  endif
+!
+!  if (CS%debug) then
+!    call uvchksum("calc_Visbeck_coeffs slope_[xy]", slope_x, slope_y, G%HI, haloshift=1)
+!    call uvchksum("calc_Visbeck_coeffs N2_u, N2_v", N2_u, N2_v, G%HI, &
+!                  scale=US%s_to_T**2, scalar_pair=.true.)
+!    call uvchksum("calc_Visbeck_coeffs SN_[uv]", CS%SN_u, CS%SN_v, G%HI, &
+!                  scale=US%s_to_T, scalar_pair=.true.)
+!  endif
+
+end subroutine calc_dm07
 
 !> Calculates factors used when setting diffusivity coefficients similar to Visbeck et al.
 subroutine calc_Visbeck_coeffs(h, slope_x, slope_y, N2_u, N2_v, G, GV, US, CS, OBC)
@@ -990,6 +1057,18 @@ subroutine VarMix_init(Time, G, GV, US, param_file, diag, CS)
                  "not used.  If KHTR_SLOPE_CFF>0 or  KhTh_Slope_Cff>0, "//&
                  "this is set to true regardless of what is in the "//&
                  "parameter file.", default=.false.)
+  call get_param(param_file, mdl, "USE_DANABASOGLU_MARSHALL", CS%use_dm07,&
+                 "If true, use the Danabasoglu and Marshall (2007) formulation for \n"//&
+                 "thickness diffusivity based on N^2.", default=.false.)
+  if (CS%use_dm07) then
+    call get_param(param_file, mdl, "DM07_KAPPA_REF", CS%dm07_kappa_ref,&
+                 "Reference diffusivity to be used in the Danabasoglu and Marshall (2007) \n"//&
+                 "formula.", default=800.0, units="m2 s-1", //&
+                 scale=US%m_to_Z**2*US%T_to_s)
+    call get_param(param_file, mdl, "DM07_MIN_RATIO", CS%dm07_min_ratio,&
+                 "Minimum ratio (N^2/N_ref) to be used in the Danabasoglu and Marshall (2007) \n"//&
+                 "formula.", default=0.1, units="nondim")
+  endif
   call get_param(param_file, mdl, "USE_VISBECK", CS%use_Visbeck,&
                  "If true, use the Visbeck et al. (1997) formulation for \n"//&
                  "thickness diffusivity.", default=.false.)
@@ -1019,6 +1098,12 @@ subroutine VarMix_init(Time, G, GV, US, param_file, diag, CS)
                  "If true, uses the equivalent barotropic structure "//&
                  "as the vertical structure of thickness diffusivity.",&
                  default=.false.)
+  if (CS%khth_use_ebt_struct .and. CS%use_dm07) then
+    call MOM_error(FATAL, &
+           "MOM_lateral_mixing_coeffs.F90, VarMix_init:"//&
+           "Cannot set both KHTH_USE_EBT_STRUCT and USE_DANABASOGLU_MARSHALL equal True.")
+  endif
+
   call get_param(param_file, mdl, "KHTH_SLOPE_CFF", KhTh_Slope_Cff, &
                  "The nondimensional coefficient in the Visbeck formula "//&
                  "for the interface depth diffusivity", units="nondim", &
