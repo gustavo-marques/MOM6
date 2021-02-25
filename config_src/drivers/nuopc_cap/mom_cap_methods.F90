@@ -20,6 +20,7 @@ use MOM_ocean_model_nuopc,     only: ocean_public_type, ocean_state_type
 use MOM_surface_forcing_nuopc, only: ice_ocean_boundary_type
 use MOM_grid,                  only: ocean_grid_type
 use MOM_domains,               only: pass_var
+use MOM_error_handler,         only: MOM_error, FATAL, is_root_pe
 use mpp_domains_mod,           only: mpp_get_compute_domain
 
 ! By default make data private
@@ -104,6 +105,7 @@ subroutine mom_import(ocean_public, ocean_grid, importState, ice_ocean_boundary,
   !----
   ! near-IR, direct shortwave  (W/m2)
   !----
+
   call state_getimport(importState, 'mean_net_sw_ir_dir_flx', &
        isc, iec, jsc, jec, ice_ocean_boundary%sw_flux_nir_dir, areacor=med2mod_areacor, rc=rc)
   if (ChkErr(rc,__LINE__,u_FILE_u)) return
@@ -661,7 +663,14 @@ subroutine State_GetImport(state, fldname, isc, iec, jsc, jec, output, do_sum, a
         call state_getfldptr(state, trim(fldname), dataptr1d, rc)
         if (ChkErr(rc,__LINE__,u_FILE_u)) return
 
-        ! determine output array and apply area correction if present
+        ! option to apply area correction
+        if (present(areacor)) then
+           do n = 1,size(dataPtr1d)
+              dataPtr1d(n) = dataPtr1d(n) * areacor(n)
+           end do
+        end if
+
+        ! determine output array
         n = 0
         do j = jsc,jec
            do i = isc,iec
