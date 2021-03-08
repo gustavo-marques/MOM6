@@ -94,6 +94,10 @@ type, public :: VarMix_CS
   real, dimension(:,:,:), pointer :: &
     slope_x => NULL(), &  !< Zonal isopycnal slope [nondim]
     slope_y => NULL(), &  !< Meridional isopycnal slope [nondim]
+    dm07_ratio_u => NULL(), &  !< Ratio of (N2/N2_ref) used in the Danabasoglu and Marshall
+                               !! thickness diffusivity parameterization at u points [nondim]
+    dm07_ratio_v => NULL(), &  !< Ratio of (N2/N2_ref) used in the Danabasoglu and Marshall
+                               !! thickness diffusivity parameterization at v points [nondim]
     ebt_struct => NULL()  !< Vertical structure function to scale diffusivities with [nondim]
   real ALLOCABLE_, dimension(NIMEMB_PTR_,NJMEM_) :: &
     Laplac3_const_u       !< Laplacian metric-dependent constants [L3 ~> m3]
@@ -128,7 +132,6 @@ type, public :: VarMix_CS
                                !! positive integer power may be used, but even powers
                                !! and especially 2 are coded to be more efficient.
   real :: Visbeck_S_max   !< Upper bound on slope used in Eady growth rate [nondim].
-  real :: dm07_kappa_ref  !< Reference diffusivity in the Danabasoglu and Marshall 2007 formulation [L2 T-1 ~> m2 s-1].
   real :: dm07_min_ratio  !< Minimum ratio (N2/N2_ref) to be in the Danabasoglu and Marshall 2007 formulation [nondim].
 
   ! Leith parameters
@@ -460,6 +463,7 @@ subroutine calc_slope_functions(h, tv, dt, G, GV, US, CS, OBC)
       call calc_isoneutral_slopes(G, GV, US, h, e, tv, dt*CS%kappa_smooth, &
                                   CS%slope_x, CS%slope_y, N2_u, N2_v, 1, OBC=OBC)
       call calc_Visbeck_coeffs(h, CS%slope_x, CS%slope_y, N2_u, N2_v, G, GV, US, CS, OBC=OBC)
+      if (CS%use_dm07) call calc_dm07(CS%dm07_ratio_u, CS%dm07_ratio_v, N2_u, N2_v, G, GV, US, CS)
 !     call calc_slope_functions_using_just_e(h, G, CS, e, .false.)
     else
       !call calc_isoneutral_slopes(G, GV, h, e, tv, dt*CS%kappa_smooth, CS%slope_x, CS%slope_y)
@@ -481,13 +485,13 @@ subroutine calc_slope_functions(h, tv, dt, G, GV, US, CS, OBC)
 end subroutine calc_slope_functions
 
 !> Calculates diffusivities using the scheme from Danabasoglu and Marshall, 2007.
-subroutine calc_dm07(khth_u, khth_v, N2_u, N2_v, G, GV, US, CS)
+subroutine calc_dm07(dm07_ratio_u, dm07_ratio_v, N2_u, N2_v, G, GV, US, CS)
   type(ocean_grid_type),                        intent(inout) :: G  !< Ocean grid structure
   type(verticalGrid_type),                      intent(in)    :: GV !< Vertical grid structure
-  real, dimension(SZIB_(G),SZJ_(G),SZK_(GV)+1), intent(inout) :: khth_u  !< Thickness diffusivity at
-                                                                    !! u-points [L2 T-1 ~> m2 s-1]
-  real, dimension(SZI_(G),SZJB_(G),SZK_(GV)+1), intent(inout) :: khth_v  !< Thickness diffusivity at
-                                                                    !! v-points [L2 T-1 ~> m2 s-1]
+  real, dimension(SZIB_(G),SZJ_(G),SZK_(GV)+1), intent(inout) :: dm07_ratio_u  !< Ratio of (N2/N2_ref) at
+                                                                    !! u-points [nondim]
+  real, dimension(SZI_(G),SZJB_(G),SZK_(GV)+1), intent(inout) :: dm07_ratio_v  !< Ratio of (N2/N2_ref) at
+                                                                    !! v-points [nondim]
   real, dimension(SZIB_(G),SZJ_(G),SZK_(GV)+1), intent(in)    :: N2_u    !< Buoyancy (Brunt-Vaisala) frequency
                                                                          !! at u-points [T-2 ~> s-2]
   real, dimension(SZI_(G),SZJB_(G),SZK_(GV)+1), intent(in)    :: N2_v    !< Buoyancy (Brunt-Vaisala) frequency
@@ -511,7 +515,7 @@ subroutine calc_dm07(khth_u, khth_v, N2_u, N2_v, G, GV, US, CS)
       N2_max = 0.0
       N2_max = MAXVAL(N2_max, N2_u(I,j,:))
       do K=1,nz+1
-        khth_u(I,j,K) = MAXVAL((N2_u(I,j,K)/N2_max),CS%dm07_min_ratio) * CS%dm07_kappa_ref
+        dm07_ratio_u(I,j,K) = MAXVAL((N2_u(I,j,K)/N2_max),CS%dm07_min_ratio)
       enddo
     enddo
   enddo
@@ -523,7 +527,7 @@ subroutine calc_dm07(khth_u, khth_v, N2_u, N2_v, G, GV, US, CS)
       N2_max = 0.0
       N2_max = MAXVAL(N2_max, N2_v(i,J,:))
       do K=1,nz+1
-        khth_v(i,J,K) = MAXVAL((N2_v(i,J,K)/N2_max),CS%dm07_min_ratio) * CS%dm07_kappa_ref
+        dm07_ratio_v(i,J,K) = MAXVAL((N2_v(i,J,K)/N2_max),CS%dm07_min_ratio)
       enddo
     enddo
   enddo
@@ -1061,10 +1065,6 @@ subroutine VarMix_init(Time, G, GV, US, param_file, diag, CS)
                  "If true, use the Danabasoglu and Marshall (2007) formulation for \n"//&
                  "thickness diffusivity based on N^2.", default=.false.)
   if (CS%use_dm07) then
-    call get_param(param_file, mdl, "DM07_KAPPA_REF", CS%dm07_kappa_ref,&
-                 "Reference diffusivity to be used in the Danabasoglu and Marshall (2007) \n"//&
-                 "formula.", default=800.0, units="m2 s-1", //&
-                 scale=US%m_to_Z**2*US%T_to_s)
     call get_param(param_file, mdl, "DM07_MIN_RATIO", CS%dm07_min_ratio,&
                  "Minimum ratio (N^2/N_ref) to be used in the Danabasoglu and Marshall (2007) \n"//&
                  "formula.", default=0.1, units="nondim")
@@ -1164,6 +1164,10 @@ subroutine VarMix_init(Time, G, GV, US, param_file, diag, CS)
                  "A diapycnal diffusivity that is used to interpolate "//&
                  "more sensible values of T & S into thin layers.", &
                  units="m2 s-1", default=1.0e-6, scale=US%m_to_Z**2*US%T_to_s)
+    if (CS%use_dm07) then
+      allocate(CS%dm07_ratio_u(IsdB:IedB,jsd:jed,GV%ke+1)) ; CS%dm07_ratio_u(:,:,:) = 0.0
+      allocate(CS%dm07_ratio_v(isd:ied,JsdB:JedB,GV%ke+1)) ; CS%dm07_ratio_v(:,:,:) = 0.0
+    endif
   endif
 
   if (CS%calculate_Eady_growth_rate) then
