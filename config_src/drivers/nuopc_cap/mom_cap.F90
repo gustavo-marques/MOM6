@@ -1300,7 +1300,6 @@ subroutine InitializeRealize(gcomp, importState, exportState, clock, rc)
      if (ChkErr(rc,__LINE__,u_FILE_u)) return
   endif
 
-  !---------------------------------
   ! Set module variable geomtype in MOM_cap_methods
   !---------------------------------
   call mom_set_geomtype(geomtype)
