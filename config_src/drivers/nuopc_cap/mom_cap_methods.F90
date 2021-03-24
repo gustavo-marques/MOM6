@@ -661,14 +661,7 @@ subroutine State_GetImport(state, fldname, isc, iec, jsc, jec, output, do_sum, a
         call state_getfldptr(state, trim(fldname), dataptr1d, rc)
         if (ChkErr(rc,__LINE__,u_FILE_u)) return
 
-        ! option to apply area correction
-        if (present(areacor)) then
-           do n = 1,size(dataPtr1d)
-              dataPtr1d(n) = dataPtr1d(n) * areacor(n)
-           end do
-        end if
-
-        ! determine output array
+        ! determine output array and apply area correction if present
         n = 0
         do j = jsc,jec
            do i = isc,iec
