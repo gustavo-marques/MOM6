@@ -72,7 +72,7 @@ type, public :: thickness_diffuse_CS ; private
   logical :: MEKE_GEOM_answers_2018  !< If true, use expressions in the MEKE_GEOMETRIC calculation
                                  !! that recover the answers from the original implementation.
                                  !! Otherwise, use expressions that satisfy rotational symmetry.
-  real :: dm07_kappa_ref         !< Baseline (maximum) thickness diffusivity for the Danabasoglu and 
+  real    :: dm07_kappa_ref      !< Baseline (maximum) thickness diffusivity for the Danabasoglu and
                                  !! Marshall 2007 parameterization [L2 T-1 ~> m2 s-1].
   logical :: Use_KH_in_MEKE      !< If true, uses the thickness diffusivity calculated here to diffuse MEKE.
   logical :: GM_src_alt          !< If true, use the GM energy conversion form S^2*N^2*kappa rather
@@ -154,7 +154,7 @@ subroutine thickness_diffuse(h, uhtr, vhtr, tv, dt, G, GV, US, MEKE, VarMix, CDp
                     ! in roundoff and can be neglected [H ~> m or kg m-2].
   real, dimension(:,:), pointer :: cg1 => null() !< Wave speed [L T-1 ~> m s-1]
   logical :: use_VarMix, Resoln_scaled, Depth_scaled, use_stored_slopes, khth_use_ebt_struct, use_Visbeck
-  logical :: use_QG_Leith
+  logical :: use_QG_Leith, use_dm07
   integer :: i, j, k, is, ie, js, je, nz
   real :: hu(SZI_(G), SZJ_(G))       ! u-thickness [H ~> m or kg m-2]
   real :: hv(SZI_(G), SZJ_(G))       ! v-thickness [H ~> m or kg m-2]
@@ -178,7 +178,7 @@ subroutine thickness_diffuse(h, uhtr, vhtr, tv, dt, G, GV, US, MEKE, VarMix, CDp
 
   use_VarMix = .false. ; Resoln_scaled = .false. ; use_stored_slopes = .false.
   khth_use_ebt_struct = .false. ; use_Visbeck = .false. ; use_QG_Leith = .false.
-  Depth_scaled = .false.
+  Depth_scaled = .false. ; use_dm07 = .false.
 
   if (associated(VarMix)) then
     use_VarMix = VarMix%use_variable_mixing .and. (CS%KHTH_Slope_Cff > 0.)
@@ -297,9 +297,9 @@ subroutine thickness_diffuse(h, uhtr, vhtr, tv, dt, G, GV, US, MEKE, VarMix, CDp
 
     if (use_dm07) then
 !$OMP do
-      do k=1,nz+1 ; j=js,je ; do I=is-1,ie
+      do k=1,nz+1 ; do j=js,je ; do I=is-1,ie
         KH_u(I,j,k) =  VarMix%dm07_ratio_u(I,j,K)*CS%dm07_kappa_ref
-      enddo ; enddo
+      enddo ; enddo; enddo
     endif
   endif
 
@@ -393,9 +393,9 @@ subroutine thickness_diffuse(h, uhtr, vhtr, tv, dt, G, GV, US, MEKE, VarMix, CDp
 
     if (use_dm07) then
 !$OMP do
-      do k=1,nz+1 ; j=js,je ; do I=is-1,ie
+      do k=1,nz+1 ; do j=js,je ; do I=is-1,ie
         KH_v(i,J,K) = VarMix%dm07_ratio_v(i,J,K)*CS%dm07_kappa_ref
-      enddo ; enddo
+      enddo ; enddo; enddo
     endif
   endif
 
@@ -2030,9 +2030,9 @@ subroutine thickness_diffuse_init(Time, G, GV, US, param_file, diag, CDp, CS)
                  "satisfy rotational symmetry.", default=default_2018_answers)
   endif
   call get_param(param_file, mdl, "DM07_KAPPA_REF", CS%dm07_kappa_ref,&
-                 "Reference diffusivity to be used in the Danabasoglu and Marshall (2007) \n"//&
-                 "formula.", default=0.0, units="m2 s-1", //&
-                 scale=US%m_to_Z**2*US%T_to_s)
+                 "Reference diffusivity to be used in the Danabasoglu and Marshall (2007) "//&
+                 "formula.", default=0.0, units="m2 s-1", scale=US%m_to_Z**2*US%T_to_s)
+
   call get_param(param_file, mdl, "USE_KH_IN_MEKE", CS%Use_KH_in_MEKE, &
                  "If true, uses the thickness diffusivity calculated here to diffuse MEKE.", &
                  default=.false.)

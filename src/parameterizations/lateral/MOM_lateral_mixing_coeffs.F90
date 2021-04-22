@@ -511,7 +511,6 @@ subroutine calc_slope_functions(h, tv, dt, G, GV, US, CS, OBC)
 
 end subroutine calc_slope_functions
 
-<<<<<<< HEAD
 !> Calculates diffusivities using the scheme from Danabasoglu and Marshall, 2007.
 subroutine calc_dm07(dm07_ratio_u, dm07_ratio_v, N2_u, N2_v, G, GV, US, CS)
   type(ocean_grid_type),                        intent(inout) :: G  !< Ocean grid structure
@@ -541,9 +540,9 @@ subroutine calc_dm07(dm07_ratio_u, dm07_ratio_v, N2_u, N2_v, G, GV, US, CS)
   do j = js,je
     do I=is-1,ie
       N2_max = 0.0
-      N2_max = MAXVAL(N2_max, N2_u(I,j,:))
+      N2_max = MAX(N2_max, MAXVAL(N2_u(I,j,:)))
       do K=1,nz+1
-        dm07_ratio_u(I,j,K) = MAXVAL((N2_u(I,j,K)/N2_max),CS%dm07_min_ratio)
+        dm07_ratio_u(I,j,K) = MAX((N2_u(I,j,K)/N2_max),CS%dm07_min_ratio)
       enddo
     enddo
   enddo
@@ -553,9 +552,9 @@ subroutine calc_dm07(dm07_ratio_u, dm07_ratio_v, N2_u, N2_v, G, GV, US, CS)
   do J = js-1,je
     do i=is,ie
       N2_max = 0.0
-      N2_max = MAXVAL(N2_max, N2_v(i,J,:))
+      N2_max = MAX(N2_max, MAXVAL(N2_v(i,J,:)))
       do K=1,nz+1
-        dm07_ratio_v(i,J,K) = MAXVAL((N2_v(i,J,K)/N2_max),CS%dm07_min_ratio)
+        dm07_ratio_v(i,J,K) = MAX((N2_v(i,J,K)/N2_max),CS%dm07_min_ratio)
       enddo
     enddo
   enddo
@@ -576,14 +575,10 @@ subroutine calc_dm07(dm07_ratio_u, dm07_ratio_v, N2_u, N2_v, G, GV, US, CS)
 
 end subroutine calc_dm07
 
-!> Calculates factors used when setting diffusivity coefficients similar to Visbeck et al.
-subroutine calc_Visbeck_coeffs(h, slope_x, slope_y, N2_u, N2_v, G, GV, US, CS, OBC)
-=======
 !> Calculates factors used when setting diffusivity coefficients similar to Visbeck et al., 1997.
 !! This is on older implementation that is susceptible to large values of Eady growth rate
 !! for incropping layers.
 subroutine calc_Visbeck_coeffs_old(h, slope_x, slope_y, N2_u, N2_v, G, GV, US, CS, OBC)
->>>>>>> visbeck-draft
   type(ocean_grid_type),                        intent(inout) :: G  !< Ocean grid structure
   type(verticalGrid_type),                      intent(in)    :: GV !< Vertical grid structure
   real, dimension(SZI_(G),SZJ_(G),SZK_(GV)),    intent(in)    :: h  !< Layer thickness [H ~> m or kg m-2]
@@ -1445,7 +1440,7 @@ subroutine VarMix_init(Time, G, GV, US, param_file, diag, CS)
        'm2', conversion=US%L_to_m**2)
   endif
 
-  if (CS%calculate_Eady_growth_rate .and. CS%use_stored_slopes) .or. (CS%use_dm07) then
+  if ((CS%calculate_Eady_growth_rate .and. CS%use_stored_slopes) .or. (CS%use_dm07)) then
     CS%id_N2_u = register_diag_field('ocean_model', 'N2_u', diag%axesCui, Time, &
          'Square of Brunt-Vaisala frequency, N^2, at u-points, as used in Visbeck et al.', &
          's-2', conversion=(US%L_to_Z*US%s_to_T)**2)
