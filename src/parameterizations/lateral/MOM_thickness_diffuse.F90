@@ -181,7 +181,7 @@ subroutine thickness_diffuse(h, uhtr, vhtr, tv, dt, G, GV, US, MEKE, VarMix, CDp
   Depth_scaled = .false. ; use_dm07 = .false.
 
   if (associated(VarMix)) then
-    use_VarMix = VarMix%use_variable_mixing .and. (CS%KHTH_Slope_Cff > 0.)
+    use_VarMix = (VarMix%use_variable_mixing .and. (CS%KHTH_Slope_Cff > 0.) .or. VarMix%use_dm07)
     Resoln_scaled = VarMix%Resoln_scaled_KhTh
     Depth_scaled = VarMix%Depth_scaled_KhTh
     use_stored_slopes = VarMix%use_stored_slopes
@@ -393,7 +393,7 @@ subroutine thickness_diffuse(h, uhtr, vhtr, tv, dt, G, GV, US, MEKE, VarMix, CDp
 
     if (use_dm07) then
 !$OMP do
-      do k=1,nz+1 ; do j=js,je ; do I=is-1,ie
+      do k=1,nz+1 ; do J=js-1,je ; do i=is,ie
         KH_v(i,J,K) = VarMix%dm07_ratio_v(i,J,K)*CS%dm07_kappa_ref
       enddo ; enddo; enddo
     endif
