@@ -214,7 +214,7 @@ subroutine thickness_diffuse(h, uhtr, vhtr, tv, dt, G, GV, US, MEKE, VarMix, CDp
 !$OMP                               MEKE,Resoln_scaled,KH_u,G,use_QG_Leith,use_Visbeck,&
 !$OMP                               KH_u_CFL,nz,Khth_Loc,KH_v,KH_v_CFL,int_slope_u, &
 !$OMP                               int_slope_v,khth_use_ebt_struct, Depth_scaled, &
-!$OMP                               Khth_loc_v)
+!$OMP                               Khth_loc_v, use_dm07)
 !$OMP do
   do j=js,je ; do I=is-1,ie
     Khth_loc_u(I,j) = CS%Khth
