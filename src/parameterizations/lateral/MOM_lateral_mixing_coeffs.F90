@@ -151,6 +151,7 @@ type, public :: VarMix_CS
   integer :: id_N2_u=-1, id_N2_v=-1, id_S2_u=-1, id_S2_v=-1
   integer :: id_dzu=-1, id_dzv=-1, id_dzSxN=-1, id_dzSyN=-1
   integer :: id_Rd_dx=-1, id_KH_u_QG = -1, id_KH_v_QG = -1
+  integer :: id_dm07_ratio_u=-1, id_dm07_ratio_v=-1
   type(diag_ctrl), pointer :: diag !< A structure that is used to regulate the
                                    !! timing of diagnostic output.
   !>@}
@@ -468,12 +469,11 @@ subroutine calc_slope_functions(h, tv, dt, G, GV, US, CS, OBC)
   if (.not. associated(CS)) call MOM_error(FATAL, "MOM_lateral_mixing_coeffs.F90, calc_slope_functions:"//&
          "Module must be initialized before it is used.")
 
-  if (CS%use_dm07) then
+  if ((CS%use_dm07) .and. (CS%use_stored_slopes)) then
     call find_eta(h, tv, G, GV, US, e, halo_size=2)
     call calc_isoneutral_slopes(G, GV, US, h, e, tv, dt*CS%kappa_smooth, &
-                                CS%slope_x, CS%slope_y, N2_u=N2_u, N2_v=N2_v, dzu=dzu, dzv=dzv, &
-                                dzSxN=dzSxN, dzSyN=dzSyN, halo=1, OBC=OBC)
-    call calc_dm07(CS%dm07_ratio_u, CS%dm07_ratio_v, N2_u, N2_v, G, GV, US, CS)
+                                CS%slope_x, CS%slope_y, N2_u=N2_u, N2_v=N2_v, halo=1, OBC=OBC)
+    call calc_dm07(N2_u, N2_v, G, GV, US, CS)
   endif
 
   if (CS%calculate_Eady_growth_rate) then
@@ -507,71 +507,55 @@ subroutine calc_slope_functions(h, tv, dt, G, GV, US, CS, OBC)
     if (CS%id_L2v > 0)  call post_data(CS%id_L2v, CS%L2v, CS%diag)
     if (CS%id_N2_u > 0) call post_data(CS%id_N2_u, N2_u, CS%diag)
     if (CS%id_N2_v > 0) call post_data(CS%id_N2_v, N2_v, CS%diag)
+    if (CS%id_dm07_ratio_u > 0) call post_data(CS%id_dm07_ratio_u, CS%dm07_ratio_u, CS%diag)
+    if (CS%id_dm07_ratio_v > 0) call post_data(CS%id_dm07_ratio_v, CS%dm07_ratio_v, CS%diag)
   endif
 
 end subroutine calc_slope_functions
 
 !> Calculates diffusivities using the scheme from Danabasoglu and Marshall, 2007.
-subroutine calc_dm07(dm07_ratio_u, dm07_ratio_v, N2_u, N2_v, G, GV, US, CS)
+subroutine calc_dm07(N2_u, N2_v, G, GV, US, CS)
   type(ocean_grid_type),                        intent(inout) :: G  !< Ocean grid structure
   type(verticalGrid_type),                      intent(in)    :: GV !< Vertical grid structure
-  real, dimension(SZIB_(G),SZJ_(G),SZK_(GV)+1), intent(inout) :: dm07_ratio_u  !< Ratio of (N2/N2_ref) at
-                                                                    !! u-points [nondim]
-  real, dimension(SZI_(G),SZJB_(G),SZK_(GV)+1), intent(inout) :: dm07_ratio_v  !< Ratio of (N2/N2_ref) at
-                                                                    !! v-points [nondim]
-  real, dimension(SZIB_(G),SZJ_(G),SZK_(GV)+1), intent(in)    :: N2_u    !< Buoyancy (Brunt-Vaisala) frequency
-                                                                         !! at u-points [T-2 ~> s-2]
-  real, dimension(SZI_(G),SZJB_(G),SZK_(GV)+1), intent(in)    :: N2_v    !< Buoyancy (Brunt-Vaisala) frequency
-                                                                         !! at v-points [T-2 ~> s-2]
+  real, dimension(SZIB_(G),SZJ_(G),SZK_(GV)+1), intent(in)    :: N2_u !< Buoyancy (Brunt-Vaisala) frequency
+                                                                      !! at u-points [T-2 ~> s-2]
+  real, dimension(SZI_(G),SZJB_(G),SZK_(GV)+1), intent(in)    :: N2_v !< Buoyancy (Brunt-Vaisala) frequency
+                                                                      !! at v-points [T-2 ~> s-2]
   type(unit_scale_type),                        intent(in)    :: US !< A dimensional unit scaling type
   type(VarMix_CS),                              pointer       :: CS !< Variable mixing coefficients
 
   ! Local variables
-  real :: N2_max        ! Maximum N2 [T-1 ~> s-1]
-  integer :: is, ie, js, je, nz
-  integer :: i, j, k
+  real :: N2_max                         ! Maximum N2 [T-1 ~> s-1]
+  integer :: is, ie, js, je, nz, i, j, k ! useful indices
 
   is = G%isc ; ie = G%iec ; js = G%jsc ; je = G%jec ; nz = GV%ke
 
-  ! TODO: fix OMP calls
-
-  !$OMP parallel do default(shared) private(S2,H_u,Hdn,Hup,H_geom,N2,wNE,wSE,wSW,wNW)
-  ! khth_u
+  !$OMP parallel do default(shared) private(N2_max)
   do j = js,je
     do I=is-1,ie
-      N2_max = 0.0
+      N2_max = 1.0E-12
       N2_max = MAX(N2_max, MAXVAL(N2_u(I,j,:)))
       do K=1,nz+1
-        dm07_ratio_u(I,j,K) = MAX((N2_u(I,j,K)/N2_max),CS%dm07_min_ratio)
+        CS%dm07_ratio_u(I,j,K) = MAX((N2_u(I,j,K)/N2_max),CS%dm07_min_ratio)
       enddo
     enddo
   enddo
 
-  !$OMP parallel do default(shared) private(S2,H_v,Hdn,Hup,H_geom,N2,wNE,wSE,wSW,wNW)
-  ! khth_v
+  !$OMP parallel do default(shared) private(N2_max)
   do J = js-1,je
     do i=is,ie
-      N2_max = 0.0
+      N2_max = 1.0E-12
       N2_max = MAX(N2_max, MAXVAL(N2_v(i,J,:)))
       do K=1,nz+1
-        dm07_ratio_v(i,J,K) = MAX((N2_v(i,J,K)/N2_max),CS%dm07_min_ratio)
+        CS%dm07_ratio_v(i,J,K) = MAX((N2_v(i,J,K)/N2_max),CS%dm07_min_ratio)
       enddo
     enddo
   enddo
 
-! Offer diagnostic fields for averaging.
-!  if (query_averaging_enabled(CS%diag)) then
-!    if (CS%id_S2_u > 0) call post_data(CS%id_S2_u, S2_u, CS%diag)
-!    if (CS%id_S2_v > 0) call post_data(CS%id_S2_v, S2_v, CS%diag)
-!  endif
-!
-!  if (CS%debug) then
-!    call uvchksum("calc_Visbeck_coeffs slope_[xy]", slope_x, slope_y, G%HI, haloshift=1)
-!    call uvchksum("calc_Visbeck_coeffs N2_u, N2_v", N2_u, N2_v, G%HI, &
-!                  scale=US%s_to_T**2, scalar_pair=.true.)
-!    call uvchksum("calc_Visbeck_coeffs SN_[uv]", CS%SN_u, CS%SN_v, G%HI, &
-!                  scale=US%s_to_T, scalar_pair=.true.)
-!  endif
+  if (CS%debug) then
+    call uvchksum("calc_dm07 dm07_ratio_[uv]", CS%dm07_ratio_u, CS%dm07_ratio_v, G%HI, &
+                  scalar_pair=.true.)
+  endif
 
 end subroutine calc_dm07
 
@@ -1273,12 +1257,8 @@ subroutine VarMix_init(Time, G, GV, US, param_file, diag, CS)
                  "parameter file.", default=.false.)
   call get_param(param_file, mdl, "USE_DANABASOGLU_MARSHALL", CS%use_dm07,&
                  "If true, use the Danabasoglu and Marshall (2007) formulation for \n"//&
-                 "thickness diffusivity based on N^2.", default=.false.)
-  if (CS%use_dm07) then
-    call get_param(param_file, mdl, "DM07_MIN_RATIO", CS%dm07_min_ratio,&
-                 "Minimum ratio (N^2/N_ref) to be used in the Danabasoglu and Marshall (2007) \n"//&
-                 "formula.", default=0.1, units="nondim")
-  endif
+                 "thickness diffusivity based on N^2. This formulation requires \n"//&
+                 "that USE_STORED_SLOPES=True.", default=.false.)
   call get_param(param_file, mdl, "USE_VISBECK", CS%use_Visbeck,&
                  "If true, use the Visbeck et al. (1997) formulation for \n"//&
                  "thickness diffusivity.", default=.false.)
@@ -1308,12 +1288,6 @@ subroutine VarMix_init(Time, G, GV, US, param_file, diag, CS)
                  "If true, uses the equivalent barotropic structure "//&
                  "as the vertical structure of thickness diffusivity.",&
                  default=.false.)
-  if (CS%khth_use_ebt_struct .and. CS%use_dm07) then
-    call MOM_error(FATAL, &
-           "MOM_lateral_mixing_coeffs.F90, VarMix_init:"//&
-           "Cannot set both KHTH_USE_EBT_STRUCT and USE_DANABASOGLU_MARSHALL equal True.")
-  endif
-
   call get_param(param_file, mdl, "KHTH_SLOPE_CFF", KhTh_Slope_Cff, &
                  "The nondimensional coefficient in the Visbeck formula "//&
                  "for the interface depth diffusivity", units="nondim", &
@@ -1327,6 +1301,7 @@ subroutine VarMix_init(Time, G, GV, US, param_file, diag, CS)
                  "stored for re-use. This uses more memory but avoids calling "//&
                  "the equation of state more times than should be necessary.", &
                  default=.false.)
+
   call get_param(param_file, mdl, "VERY_SMALL_FREQUENCY", absurdly_small_freq, &
                  "A miniscule frequency that is used to avoid division by 0.  The default "//&
                  "value is roughly (pi / (the age of the universe)).", &
@@ -1376,10 +1351,29 @@ subroutine VarMix_init(Time, G, GV, US, param_file, diag, CS)
                  "A diapycnal diffusivity that is used to interpolate "//&
                  "more sensible values of T & S into thin layers.", &
                  units="m2 s-1", default=1.0e-6, scale=US%m_to_Z**2*US%T_to_s)
-    if (CS%use_dm07) then
-      allocate(CS%dm07_ratio_u(IsdB:IedB,jsd:jed,GV%ke+1)) ; CS%dm07_ratio_u(:,:,:) = 0.0
-      allocate(CS%dm07_ratio_v(isd:ied,JsdB:JedB,GV%ke+1)) ; CS%dm07_ratio_v(:,:,:) = 0.0
-    endif
+  endif
+
+  if (CS%use_dm07) then
+    if (CS%khth_use_ebt_struct) call MOM_error(FATAL, &
+        "MOM_lateral_mixing_coeffs.F90, VarMix_init:"//&
+        "Cannot set both KHTH_USE_EBT_STRUCT and USE_DANABASOGLU_MARSHALL equal True.")
+
+    if (.not. CS%use_stored_slopes) call MOM_error(FATAL, &
+      "MOM_lateral_mixing_coeffs.F90, VarMix_init:"//&
+      "When USE_DANABASOGLU_MARSHALL=True, USE_STORED_SLOPES must also be True.")
+
+    allocate(CS%dm07_ratio_u(IsdB:IedB,jsd:jed,GV%ke+1)) ; CS%dm07_ratio_u(:,:,:) = 0.0
+    allocate(CS%dm07_ratio_v(isd:ied,JsdB:JedB,GV%ke+1)) ; CS%dm07_ratio_v(:,:,:) = 0.0
+    CS%id_dm07_ratio_u = register_diag_field('ocean_model', 'dm07_ratio_u', diag%axesCui, Time, &
+       'Ratio of (N2/N2_ref), at u-points, used in the thickness diffusivity parameterization of '//&
+       'DM07', 'nondim')
+    CS%id_dm07_ratio_v = register_diag_field('ocean_model', 'dm07_ratio_v', diag%axesCvi, Time, &
+       'Ratio of (N2/N2_ref), at v-points, used in the thickness diffusivity parameterization of '//&
+       'DM07', 'nondim')
+
+    call get_param(param_file, mdl, "DM07_MIN_RATIO", CS%dm07_min_ratio,&
+                 "Minimum ratio (N^2/N_ref) to be used in the Danabasoglu and Marshall (2007) \n"//&
+                 "formula.", default=0.1, units="nondim")
   endif
 
   if (CS%calculate_Eady_growth_rate) then
