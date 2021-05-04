@@ -29,6 +29,7 @@ type, public :: unit_scale_type
   real :: L_T_to_m_s      !< Convert lateral velocities from L T-1 to m s-1.
   real :: m_s_to_L_T      !< Convert lateral velocities from m s-1 to L T-1.
   real :: L_T2_to_m_s2    !< Convert lateral accelerations from L T-2 to m s-2.
+  real :: L_T3_to_m_s3    !< Convert lateral hyper-accelerations from L T-3 to m s-3.
   real :: Z2_T_to_m2_s    !< Convert vertical diffusivities from Z2 T-1 to m2 s-1.
   real :: m2_s_to_Z2_T    !< Convert vertical diffusivities from m2 s-1 to Z2 T-1.
   real :: W_m2_to_QRZ_T   !< Convert heat fluxes from W m-2 to Q R Z T-1.
@@ -144,6 +145,8 @@ subroutine unit_scaling_init( param_file, US )
   US%m_s_to_L_T = US%m_to_L * US%T_to_s
   ! Horizontal accelerations:
   US%L_T2_to_m_s2 = US%L_to_m * US%s_to_T**2
+  ! Horizontal hyper-accelerations:
+  US%L_T3_to_m_s3 = US%L_to_m * US%s_to_T**3
     ! It does not look like US%m_s2_to_L_T2 would be used, so it does not exist.
   ! Vertical diffusivities and viscosities:
   US%Z2_T_to_m2_s = US%Z_to_m**2 * US%s_to_T

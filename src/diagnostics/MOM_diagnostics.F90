@@ -36,7 +36,7 @@ implicit none ; private
 
 #include <MOM_memory.h>
 
-public calculate_diagnostic_fields, register_time_deriv, write_static_fields
+public calculate_diagnostic_fields, register_time_deriv, register_time_deriv2, write_static_fields
 public find_eta
 public register_surface_diags, post_surface_dyn_diags, post_surface_thermo_diags
 public register_transport_diags, post_transport_diagnostics
@@ -69,6 +69,8 @@ type, public :: diagnostics_CS ; private
   real, pointer, dimension(:,:,:) :: &
     du_dt => NULL(), & !< net i-acceleration [L T-2 ~> m s-2]
     dv_dt => NULL(), & !< net j-acceleration [L T-2 ~> m s-2]
+    du2_dt2 => NULL(), & !< net i-hyperacceleration [L T-1 s-2 ~> m s-3]
+    dv2_dt2 => NULL(), & !< net j-hyperacceleration [L T-1 s-2 ~> m s-3]
     dh_dt => NULL(), & !< thickness rate of change [H T-1 ~> m s-1 or kg m-2 s-1]
     p_ebt => NULL()    !< Equivalent barotropic modal structure [nondim]
     ! hf_du_dt => NULL(), hf_dv_dt => NULL() !< du_dt, dv_dt x fract. thickness [L T-2 ~> m s-2].
@@ -115,6 +117,7 @@ type, public :: diagnostics_CS ; private
   integer :: id_usq = -1,   id_vsq = -1, id_uv = -1
   integer :: id_e              = -1, id_e_D            = -1
   integer :: id_du_dt          = -1, id_dv_dt          = -1
+  integer :: id_du2_dt2        = -1, id_dv2_dt2        = -1
   ! integer :: id_hf_du_dt       = -1, id_hf_dv_dt       = -1
   integer :: id_hf_du_dt_2d    = -1, id_hf_dv_dt_2d    = -1
   integer :: id_col_ht         = -1, id_dh_dt          = -1
@@ -151,12 +154,20 @@ type, public :: diagnostics_CS ; private
 
   type(p3d) :: var_ptr(MAX_FIELDS_)  !< pointers to variables used in the calculation
                                      !! of time derivatives
+  type(p3d) :: var_ptr2(MAX_FIELDS_)  !< pointers to variables used in the
+                                     !! calculation of second time derivatives
   type(p3d) :: deriv(MAX_FIELDS_)    !< Time derivatives of various fields
+  type(p3d) :: deriv2(MAX_FIELDS_)   !< Second time derivatives of various fields
   type(p3d) :: prev_val(MAX_FIELDS_) !< Previous values of variables used in the calculation
                                      !! of time derivatives
+  type(p3d) :: prev_val2_1st(MAX_FIELDS_) !< Previous values of variables one
+                                     !! time step ago, used in the calculation of second time derivatives
+  type(p3d) :: prev_val2_2nd(MAX_FIELDS_) !< Previous values of variables two time steps ago, used in the
+                                     !! calculation of second time derivatives
   !< previous values of variables used in calculation of time derivatives
   integer   :: nlay(MAX_FIELDS_) !< The number of layers in each diagnostics
   integer   :: num_time_deriv = 0 !< The number of time derivative diagnostics
+  integer   :: num_time_deriv2 = 0 !< The number of second time derivative diagnostics
 
   type(group_pass_type) :: pass_KE_uv !< A handle used for group halo passes
 
@@ -284,6 +295,10 @@ subroutine calculate_diagnostic_fields(u, v, h, uh, vh, tv, ADp, CDp, p_surf, &
     if (CS%id_du_dt>0) call post_data(CS%id_du_dt, CS%du_dt, CS%diag, alt_h = diag_pre_sync%h_state)
 
     if (CS%id_dv_dt>0) call post_data(CS%id_dv_dt, CS%dv_dt, CS%diag, alt_h = diag_pre_sync%h_state)
+
+    if (CS%id_du2_dt2>0) call post_data(CS%id_du2_dt2, CS%du2_dt2, CS%diag, alt_h = diag_pre_sync%h_state)
+
+    if (CS%id_dv2_dt2>0) call post_data(CS%id_dv2_dt2, CS%dv2_dt2, CS%diag, alt_h = diag_pre_sync%h_state)
 
     if (CS%id_dh_dt>0) call post_data(CS%id_dh_dt, CS%dh_dt, CS%diag, alt_h = diag_pre_sync%h_state)
 
@@ -1236,6 +1251,49 @@ subroutine register_time_deriv(lb, f_ptr, deriv_ptr, CS)
 
 end subroutine register_time_deriv
 
+!> This subroutine registers fields to calculate a diagnostic second time derivative.
+subroutine register_time_deriv2(lb, f_ptr, deriv_ptr2, CS)
+  integer, intent(in), dimension(3) :: lb     !< Lower index bound of f_ptr
+  real, dimension(lb(1):,lb(2):,:), target :: f_ptr
+                                              !< Time derivative operand
+  real, dimension(lb(1):,lb(2):,:), target :: deriv_ptr2
+                                              !< Time derivative of f_ptr
+  type(diagnostics_CS),  pointer :: CS        !< Control structure returned by
+                                              !! previous call to
+                                              !diagnostics_init.
+
+  ! This subroutine registers fields to calculate a diagnostic second time
+  ! derivative.
+  ! NOTE: Lower bound is required for grid indexing in calculate_derivs().
+  !       We assume that the vertical axis is 1-indexed.
+
+  integer :: m2      !< New index of deriv_ptr2 in CS%deriv2
+  integer :: ub(3)  !< Upper index bound of f_ptr, based on shape.
+
+  if (.not.associated(CS)) call MOM_error(FATAL, &
+         "register_time_deriv2: Module must be initialized before it is used.")
+
+  if (CS%num_time_deriv2 >= MAX_FIELDS_) then
+    call MOM_error(WARNING,"MOM_diagnostics:  Attempted to register more than " // &
+                   "MAX_FIELDS_ diagnostic time derivatives via register_time_deriv2.")
+    return
+  endif
+
+  m2 = CS%num_time_deriv2+1 ; CS%num_time_deriv2 = m2
+
+  ub(:) = lb(:) + shape(f_ptr) - 1
+
+  CS%nlay(m2) = size(f_ptr, 3)
+  CS%deriv2(m2)%p => deriv_ptr2
+  allocate(CS%prev_val2_1st(m2)%p(lb(1):ub(1), lb(2):ub(2), CS%nlay(m2)))
+  allocate(CS%prev_val2_2nd(m2)%p(lb(1):ub(1), lb(2):ub(2), CS%nlay(m2)))
+
+  CS%var_ptr2(m2)%p => f_ptr
+  CS%prev_val2_1st(m2)%p(:,:,:) = f_ptr(:,:,:)
+  CS%prev_val2_2nd(m2)%p(:,:,:) = f_ptr(:,:,:)
+
+end subroutine register_time_deriv2
+
 !> This subroutine calculates all registered time derivatives.
 subroutine calculate_derivs(dt, G, CS)
   real,                  intent(in)    :: dt   !< The time interval over which differences occur [T ~> s].
@@ -1245,7 +1303,7 @@ subroutine calculate_derivs(dt, G, CS)
 
 ! This subroutine calculates all registered time derivatives.
   real :: Idt  ! The inverse timestep [T-1 ~> s-1]
-  integer :: i, j, k, m
+  integer :: i, j, k, m, m2
 
   if (dt > 0.0) then ; Idt = 1.0/dt
   else ; return ; endif
@@ -1263,6 +1321,14 @@ subroutine calculate_derivs(dt, G, CS)
     do k=1,CS%nlay(m) ; do j=G%jsc-1,G%jec ; do i=G%isc-1,G%iec
       CS%deriv(m)%p(i,j,k) = (CS%var_ptr(m)%p(i,j,k) - CS%prev_val(m)%p(i,j,k)) * Idt
       CS%prev_val(m)%p(i,j,k) = CS%var_ptr(m)%p(i,j,k)
+    enddo ; enddo ; enddo
+  enddo
+
+  do m2=1,CS%num_time_deriv2
+    do k=1,CS%nlay(m2) ; do j=G%jsc-1,G%jec ; do i=G%isc-1,G%iec
+      CS%deriv2(m2)%p(i,j,k) = (CS%var_ptr2(m2)%p(i,j,k) - 2*CS%prev_val2_1st(m2)%p(i,j,k) + CS%prev_val2_2nd(m2)%p(i,j,k)) * Idt *Idt
+      CS%prev_val2_2nd(m2)%p(i,j,k) = CS%prev_val2_1st(m2)%p(i,j,k)
+      CS%prev_val2_1st(m2)%p(i,j,k) = CS%var_ptr(m2)%p(i,j,k)
     enddo ; enddo ; enddo
   enddo
 
@@ -1737,6 +1803,20 @@ subroutine MOM_diagnostics_init(MIS, ADp, CDp, Time, G, GV, US, param_file, diag
   if ((CS%id_dv_dt>0) .and. .not.associated(CS%dv_dt)) then
     call safe_alloc_ptr(CS%dv_dt,isd,ied,JsdB,JedB,nz)
     call register_time_deriv(lbound(MIS%v), MIS%v, CS%dv_dt, CS)
+  endif
+
+  CS%id_du2_dt2 = register_diag_field('ocean_model', 'du2dt2', diag%axesCuL,Time, &
+      'Zonal Hyperacceleration', 'm s-3', conversion=US%L_T3_to_m_s3)
+  if ((CS%id_du2_dt2>0) .and. .not.associated(CS%du2_dt2)) then
+    call safe_alloc_ptr(CS%du2_dt2,IsdB,IedB,jsd,jed,nz)
+    call register_time_deriv2(lbound(MIS%u), MIS%u, CS%du2_dt2, CS)
+  endif
+
+  CS%id_dv2_dt2 = register_diag_field('ocean_model', 'dv2dt2', diag%axesCvL,Time, &
+      'Meridional Hyperacceleration', 'm s-3', conversion=US%L_T3_to_m_s3)
+  if ((CS%id_dv2_dt2>0) .and. .not.associated(CS%dv2_dt2)) then
+    call safe_alloc_ptr(CS%dv2_dt2,isd,ied,JsdB,JedB,nz)
+    call register_time_deriv2(lbound(MIS%v), MIS%v, CS%dv2_dt2, CS)
   endif
 
   CS%id_dh_dt = register_diag_field('ocean_model', 'dhdt', diag%axesTL, Time, &
@@ -2304,6 +2384,7 @@ subroutine MOM_diagnostics_end(CS, ADp)
   type(accel_diag_ptrs),  intent(inout) :: ADp !< structure with pointers to
                                                !! accelerations in momentum equation.
   integer :: m
+  integer :: m2
 
   if (associated(CS%e))          deallocate(CS%e)
   if (associated(CS%e_D))        deallocate(CS%e_D)
@@ -2319,6 +2400,8 @@ subroutine MOM_diagnostics_end(CS, ADp)
   if (associated(CS%dv_dt))      deallocate(CS%dv_dt)
   if (associated(CS%dh_dt))      deallocate(CS%dh_dt)
   if (associated(CS%du_dt))      deallocate(CS%du_dt)
+  if (associated(CS%du2_dt2))    deallocate(CS%du2_dt2)
+  if (associated(CS%dv2_dt2))    deallocate(CS%dv2_dt2)
   if (associated(CS%h_Rlay))     deallocate(CS%h_Rlay)
   if (associated(CS%uh_Rlay))    deallocate(CS%uh_Rlay)
   if (associated(CS%vh_Rlay))    deallocate(CS%vh_Rlay)
@@ -2338,6 +2421,8 @@ subroutine MOM_diagnostics_end(CS, ADp)
   if (associated(ADp%diag_hfrac_v)) deallocate(ADp%diag_hfrac_v)
 
   do m=1,CS%num_time_deriv ; deallocate(CS%prev_val(m)%p) ; enddo
+  do m2=1,CS%num_time_deriv2 ; deallocate(CS%prev_val2_1st(m2)%p) ; enddo
+  do m2=1,CS%num_time_deriv2 ; deallocate(CS%prev_val2_2nd(m2)%p) ; enddo
 
   deallocate(CS)
 
