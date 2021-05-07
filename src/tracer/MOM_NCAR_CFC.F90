@@ -635,6 +635,8 @@ subroutine NCAR_CFC_fluxes(cfc11_atm, cfc12_atm, fluxes, sfc_state, G) !, GV, CS
   e2_12 = e12_dflt(2)
   e3_12 = e12_dflt(3)
 
+  ! GMM, TODO: add OMP calls
+
   do j=js,je ; do i=is,ie
     ! cite a paper that uses this formula?
     ta = max(0.01, (sfc_state%SST(i,j) + 273.15) * 0.01) ! Why is this in hectoKelvin?
@@ -746,7 +748,7 @@ subroutine get_surface_CFC(CS, CFC11, CFC12, G, US)
 
   !scale = US%m_to_Z ; if (present(m_to_BLD_units)) scale = m_to_BLD_units
 
-  !$OMP parallel do default(none) shared(BLD, CS, G, scale)
+  !$OMP parallel do default(shared)
   do j = G%jsc, G%jec ; do i = G%isc, G%iec
     CFC11(i,j) = CS%CFC11(i,j,1)
     CFC12(i,j) = CS%CFC12(i,j,1)
