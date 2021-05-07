@@ -152,6 +152,7 @@ type, public :: ocean_state_type ; private
                               !! restore salinity to a specified value.
   logical :: restore_temp     !< If true, the coupled MOM driver adds a term to
                               !! restore sst to a specified value.
+  logical :: use_cfcs         !< If true, cfcs are enabled.
   real :: press_to_z          !< A conversion factor between pressure and ocean
                               !! depth in m, usually 1/(rho_0*g), in m Pa-1.
   real :: C_p                 !< The heat capacity of seawater, in J K-1 kg-1.
@@ -247,7 +248,9 @@ subroutine ocean_model_init(Ocean_sfc, OS, Time_init, Time_in, gas_fields_ocn, i
                       !! The actual depth over which melt potential is computed will
                       !! min(HFrz, OBLD), where OBLD is the boundary layer depth.
                       !! If HFrz <= 0 (default), melt potential will not be computed.
-  logical :: use_melt_pot!< If true, allocate melt_potential array
+  logical :: use_melt_pot  !< If true, allocate melt_potential array
+  logical :: use_NCAR_CFCs !< If true, allocated arrays for surface CFCs.
+
 
 ! This include declares and sets the variable "version".
 #include "version_variable.h"
@@ -366,10 +369,14 @@ subroutine ocean_model_init(Ocean_sfc, OS, Time_init, Time_in, gas_fields_ocn, i
     use_melt_pot=.false.
   endif
 
+  call get_param(param_file, mdl, "USE_NCAR_CFC", use_NCAR_CFCs, &
+                 default=.false., do_not_log=.true.)
+
   !   Consider using a run-time flag to determine whether to do the diagnostic
   ! vertical integrals, since the related 3-d sums are not negligible in cost.
   call allocate_surface_state(OS%sfc_state, OS%grid, use_temperature, &
-                              do_integrals=.true., gas_fields_ocn=gas_fields_ocn, use_meltpot=use_melt_pot)
+                              do_integrals=.true., gas_fields_ocn=gas_fields_ocn, &
+                              use_meltpot=use_melt_pot, use_cfcs=use_NCAR_CFCs)
 
   call surface_forcing_init(Time_in, OS%grid, OS%US, param_file, OS%diag, &
                             OS%forcing_CSp, OS%restore_salinity, OS%restore_temp)
@@ -415,6 +422,9 @@ subroutine ocean_model_init(Ocean_sfc, OS, Time_init, Time_in, gas_fields_ocn, i
     call convert_state_to_ocean_type(OS%sfc_state, Ocean_sfc, OS%grid, OS%US)
 
   endif
+
+  ! GMM, delete this
+  call extract_surface_state(OS%MOM_CSp, OS%sfc_state)
 
   call close_param_file(param_file)
   call diag_mediator_close_registration(OS%diag)
@@ -506,6 +516,9 @@ subroutine update_ocean_model(Ice_ocean_boundary, OS, Ocean_sfc, &
   ! Translate Ice_ocean_boundary into fluxes.
   call mpp_get_compute_domain(Ocean_sfc%Domain, index_bnds(1), index_bnds(2), &
                               index_bnds(3), index_bnds(4))
+
+  ! GMM, Option to debug
+  !call ice_ocn_bnd_type_chksum('update_ocean_model', 1, Ice_ocean_boundary)
 
   weight = 1.0
 
