@@ -27,7 +27,7 @@ use MOM_spatial_means,     only : global_area_mean, global_layer_mean
 use MOM_spatial_means,     only : global_volume_mean, global_area_integral
 use MOM_tracer_registry,   only : tracer_registry_type, post_tracer_transport_diagnostics
 use MOM_unit_scaling,      only : unit_scale_type
-use MOM_variables,         only : thermo_var_ptrs, ocean_internal_state, p3d
+use MOM_variables,         only : thermo_var_ptrs, ocean_internal_state, p2d, p3d
 use MOM_variables,         only : accel_diag_ptrs, cont_diag_ptrs, surface
 use MOM_verticalGrid,      only : verticalGrid_type, get_thickness_units
 use MOM_wave_speed,        only : wave_speed, wave_speed_CS, wave_speed_init
@@ -36,7 +36,8 @@ implicit none ; private
 
 #include <MOM_memory.h>
 
-public calculate_diagnostic_fields, register_time_deriv, register_time_deriv2, write_static_fields
+public calculate_diagnostic_fields, write_static_fields
+public register_time_deriv, register_time_deriv2, register_time_deriv_surf, register_time_deriv2_surf
 public find_eta
 public register_surface_diags, post_surface_dyn_diags, post_surface_thermo_diags
 public register_transport_diags, post_transport_diagnostics
@@ -94,7 +95,11 @@ type, public :: diagnostics_CS ; private
     Rd1 => NULL(),       & !< First baroclinic deformation radius [L ~> m]
     cfl_cg1 => NULL(),   & !< CFL for first baroclinic gravity wave speed [nondim]
     cfl_cg1_x => NULL(), & !< i-component of CFL for first baroclinic gravity wave speed [nondim]
-    cfl_cg1_y => NULL()    !< j-component of CFL for first baroclinic gravity wave speed [nondim]
+    cfl_cg1_y => NULL(), & !< j-component of CFL for first baroclinic gravity wave speed [nondim]
+    du_dt_surf => NULL(), & !< net i-acceleration at the surface [L T-2 ~> m s-2]
+    dv_dt_surf => NULL(), & !< net j-acceleration at the surface [L T-2 ~> m s-2]
+    du2_dt2_surf => NULL(), & !< net i-hyperacceleration at the surface [L T-1 s-2 ~> m s-3]
+    dv2_dt2_surf => NULL()  !< net j-hyperacceleration at the surface [L T-1 s-2 ~> m s-3]
 
   ! The following arrays hold diagnostics in the layer-integrated energy budget.
   real, pointer, dimension(:,:,:) :: &
@@ -118,6 +123,8 @@ type, public :: diagnostics_CS ; private
   integer :: id_e              = -1, id_e_D            = -1
   integer :: id_du_dt          = -1, id_dv_dt          = -1
   integer :: id_du2_dt2        = -1, id_dv2_dt2        = -1
+  integer :: id_du_dt_surf     = -1, id_dv_dt_surf     = -1
+  integer :: id_du2_dt2_surf   = -1, id_dv2_dt2_surf   = -1
   ! integer :: id_hf_du_dt       = -1, id_hf_dv_dt       = -1
   integer :: id_hf_du_dt_2d    = -1, id_hf_dv_dt_2d    = -1
   integer :: id_col_ht         = -1, id_dh_dt          = -1
@@ -164,10 +171,24 @@ type, public :: diagnostics_CS ; private
                                      !! time step ago, used in the calculation of second time derivatives
   type(p3d) :: prev_val2_2nd(MAX_FIELDS_) !< Previous values of variables two time steps ago, used in the
                                      !! calculation of second time derivatives
+  type(p3d) :: var_ptr_surf(MAX_FIELDS_)  !< pointers to variables used in the calculation
+                                     !! of time derivatives at the surface
+  type(p3d) :: var_ptr2_surf(MAX_FIELDS_)  !< pointers to variables used in the
+                                     !! calculation of second time derivatives at the surface
+  type(p2d) :: deriv_surf(MAX_FIELDS_)    !< Time derivatives of various fields at the surface
+  type(p2d) :: deriv2_surf(MAX_FIELDS_)   !< Second time derivatives of various fields at the surface
+  type(p2d) :: prev_val_surf(MAX_FIELDS_) !< Previous values of variables used in the calculation
+                                     !! of time derivatives at the surface
+  type(p2d) :: prev_val2_1st_surf(MAX_FIELDS_) !< Previous values of variables one
+                                     !! time step ago, used in the calculation of second time derivatives at the surface
+  type(p2d) :: prev_val2_2nd_surf(MAX_FIELDS_) !< Previous values of variables two time steps ago, used in the
+                                     !! calculation of second time derivatives at the surface
   !< previous values of variables used in calculation of time derivatives
   integer   :: nlay(MAX_FIELDS_) !< The number of layers in each diagnostics
   integer   :: num_time_deriv = 0 !< The number of time derivative diagnostics
   integer   :: num_time_deriv2 = 0 !< The number of second time derivative diagnostics
+  integer   :: num_time_deriv_surf = 0 !< The number of time derivative diagnostics
+  integer   :: num_time_deriv2_surf = 0 !< The number of second time derivative diagnostics
 
   type(group_pass_type) :: pass_KE_uv !< A handle used for group halo passes
 
@@ -299,6 +320,14 @@ subroutine calculate_diagnostic_fields(u, v, h, uh, vh, tv, ADp, CDp, p_surf, &
     if (CS%id_du2_dt2>0) call post_data(CS%id_du2_dt2, CS%du2_dt2, CS%diag, alt_h = diag_pre_sync%h_state)
 
     if (CS%id_dv2_dt2>0) call post_data(CS%id_dv2_dt2, CS%dv2_dt2, CS%diag, alt_h = diag_pre_sync%h_state)
+
+    if (CS%id_du_dt_surf>0) call post_data(CS%id_du_dt_surf, CS%du_dt_surf, CS%diag, mask=G%mask2dCu)
+
+    if (CS%id_dv_dt_surf>0) call post_data(CS%id_dv_dt_surf, CS%dv_dt_surf, CS%diag, mask=G%mask2dCv)
+
+    if (CS%id_du2_dt2_surf>0) call post_data(CS%id_du2_dt2_surf, CS%du2_dt2_surf, CS%diag, mask=G%mask2dCu)
+
+    if (CS%id_dv2_dt2_surf>0) call post_data(CS%id_dv2_dt2_surf, CS%dv2_dt2_surf, CS%diag, mask=G%mask2dCv)
 
     if (CS%id_dh_dt>0) call post_data(CS%id_dh_dt, CS%dh_dt, CS%diag, alt_h = diag_pre_sync%h_state)
 
@@ -1251,6 +1280,44 @@ subroutine register_time_deriv(lb, f_ptr, deriv_ptr, CS)
 
 end subroutine register_time_deriv
 
+!> This subroutine registers fields to calculate a diagnostic time derivative at the surface.
+subroutine register_time_deriv_surf(lb, f_ptr, deriv_ptr, CS)
+  integer, intent(in), dimension(3) :: lb     !< Lower index bound of f_ptr
+  real, dimension(lb(1):,lb(2):,:), target :: f_ptr
+                                              !< Time derivative operand
+  real, dimension(lb(1):,lb(2):), target :: deriv_ptr
+                                              !< Time derivative of f_ptr
+  type(diagnostics_CS),  pointer :: CS        !< Control structure returned by previous call to
+                                              !! diagnostics_init.
+
+  ! This subroutine registers fields to calculate a diagnostic time derivative.
+  ! NOTE: Lower bound is required for grid indexing in calculate_derivs().
+  !       We assume that the vertical axis is 1-indexed.
+
+  integer :: m      !< New index of deriv_ptr in CS%deriv
+  integer :: ub(3)  !< Upper index bound of f_ptr, based on shape.
+
+  if (.not.associated(CS)) call MOM_error(FATAL, &
+         "register_time_deriv: Module must be initialized before it is used.")
+
+  if (CS%num_time_deriv_surf >= MAX_FIELDS_) then
+    call MOM_error(WARNING,"MOM_diagnostics:  Attempted to register more than " // &
+                   "MAX_FIELDS_ diagnostic time derivatives via register_time_deriv.")
+    return
+  endif
+
+  m = CS%num_time_deriv_surf+1 ; CS%num_time_deriv_surf = m
+
+  ub(:) = lb(:) + shape(f_ptr) - 1
+
+  CS%deriv_surf(m)%p => deriv_ptr
+  allocate(CS%prev_val_surf(m)%p(lb(1):ub(1), lb(2):ub(2)))
+
+  CS%var_ptr_surf(m)%p => f_ptr
+  CS%prev_val_surf(m)%p(:,:) = f_ptr(:,:,1)
+
+end subroutine register_time_deriv_surf
+
 !> This subroutine registers fields to calculate a diagnostic second time derivative.
 subroutine register_time_deriv2(lb, f_ptr, deriv_ptr2, CS)
   integer, intent(in), dimension(3) :: lb     !< Lower index bound of f_ptr
@@ -1294,6 +1361,48 @@ subroutine register_time_deriv2(lb, f_ptr, deriv_ptr2, CS)
 
 end subroutine register_time_deriv2
 
+!> This subroutine registers fields to calculate a diagnostic second time derivative at the surface.
+subroutine register_time_deriv2_surf(lb, f_ptr, deriv_ptr2, CS)
+  integer, intent(in), dimension(3) :: lb     !< Lower index bound of f_ptr
+  real, dimension(lb(1):,lb(2):,:), target :: f_ptr
+                                              !< Time derivative operand
+  real, dimension(lb(1):,lb(2):), target :: deriv_ptr2
+                                              !< Time derivative of f_ptr
+  type(diagnostics_CS),  pointer :: CS        !< Control structure returned by
+                                              !! previous call to
+                                              !diagnostics_init.
+
+  ! This subroutine registers fields to calculate a diagnostic second time
+  ! derivative.
+  ! NOTE: Lower bound is required for grid indexing in calculate_derivs().
+  !       We assume that the vertical axis is 1-indexed.
+
+  integer :: m2      !< New index of deriv_ptr2 in CS%deriv2
+  integer :: ub(3)  !< Upper index bound of f_ptr, based on shape.
+
+  if (.not.associated(CS)) call MOM_error(FATAL, &
+         "register_time_deriv2: Module must be initialized before it is used.")
+
+  if (CS%num_time_deriv2_surf >= MAX_FIELDS_) then
+    call MOM_error(WARNING,"MOM_diagnostics:  Attempted to register more than " // &
+                   "MAX_FIELDS_ diagnostic time derivatives via register_time_deriv2.")
+    return
+  endif
+
+  m2 = CS%num_time_deriv2_surf+1 ; CS%num_time_deriv2_surf = m2
+
+  ub(:) = lb(:) + shape(f_ptr) - 1
+
+  CS%deriv2_surf(m2)%p => deriv_ptr2
+  allocate(CS%prev_val2_1st_surf(m2)%p(lb(1):ub(1), lb(2):ub(2)))
+  allocate(CS%prev_val2_2nd_surf(m2)%p(lb(1):ub(1), lb(2):ub(2)))
+
+  CS%var_ptr2_surf(m2)%p => f_ptr
+  CS%prev_val2_1st_surf(m2)%p(:,:) = f_ptr(:,:,1)
+  CS%prev_val2_2nd_surf(m2)%p(:,:) = f_ptr(:,:,1)
+
+end subroutine register_time_deriv2_surf
+
 !> This subroutine calculates all registered time derivatives.
 subroutine calculate_derivs(dt, G, CS)
   real,                  intent(in)    :: dt   !< The time interval over which differences occur [T ~> s].
@@ -1303,7 +1412,7 @@ subroutine calculate_derivs(dt, G, CS)
 
 ! This subroutine calculates all registered time derivatives.
   real :: Idt  ! The inverse timestep [T-1 ~> s-1]
-  integer :: i, j, k, m, m2
+  integer :: i, j, k, m, m2, ms, m2s
 
   if (dt > 0.0) then ; Idt = 1.0/dt
   else ; return ; endif
@@ -1330,6 +1439,21 @@ subroutine calculate_derivs(dt, G, CS)
       CS%prev_val2_2nd(m2)%p(i,j,k) = CS%prev_val2_1st(m2)%p(i,j,k)
       CS%prev_val2_1st(m2)%p(i,j,k) = CS%var_ptr(m2)%p(i,j,k)
     enddo ; enddo ; enddo
+  enddo
+
+  do ms=1,CS%num_time_deriv_surf
+    do j=G%jsc-1,G%jec ; do i=G%isc-1,G%iec
+      CS%deriv_surf(ms)%p(i,j) = (CS%var_ptr_surf(ms)%p(i,j,1) - CS%prev_val_surf(ms)%p(i,j)) * Idt
+      CS%prev_val_surf(ms)%p(i,j) = CS%var_ptr_surf(ms)%p(i,j,1)
+    enddo ; enddo
+  enddo
+
+  do m2s=1,CS%num_time_deriv2_surf
+    do j=G%jsc-1,G%jec ; do i=G%isc-1,G%iec
+      CS%deriv2_surf(m2s)%p(i,j) = (CS%var_ptr2_surf(m2s)%p(i,j,1) - 2*CS%prev_val2_1st_surf(m2s)%p(i,j) + CS%prev_val2_2nd_surf(m2s)%p(i,j)) * Idt *Idt
+      CS%prev_val2_2nd_surf(m2s)%p(i,j) = CS%prev_val2_1st_surf(m2s)%p(i,j)
+      CS%prev_val2_1st_surf(m2s)%p(i,j) = CS%var_ptr2_surf(m2s)%p(i,j,1)
+    enddo ; enddo
   enddo
 
 end subroutine calculate_derivs
@@ -1817,6 +1941,34 @@ subroutine MOM_diagnostics_init(MIS, ADp, CDp, Time, G, GV, US, param_file, diag
   if ((CS%id_dv2_dt2>0) .and. .not.associated(CS%dv2_dt2)) then
     call safe_alloc_ptr(CS%dv2_dt2,isd,ied,JsdB,JedB,nz)
     call register_time_deriv2(lbound(MIS%v), MIS%v, CS%dv2_dt2, CS)
+  endif
+
+  CS%id_du_dt_surf = register_diag_field('ocean_model', 'dudt_surf', diag%axesCu1, Time, &
+      'Zonal Acceleration at the surface', 'm s-2', conversion=US%L_T2_to_m_s2)
+  if ((CS%id_du_dt_surf>0) .and. .not.associated(CS%du_dt_surf)) then
+    call safe_alloc_ptr(CS%du_dt_surf,IsdB,IedB,jsd,jed)
+    call register_time_deriv_surf(lbound(MIS%u), MIS%u, CS%du_dt_surf, CS)
+  endif
+
+  CS%id_dv_dt_surf = register_diag_field('ocean_model', 'dvdt_surf', diag%axesCv1, Time, &
+      'Meridional Acceleration at the surface', 'm s-2', conversion=US%L_T2_to_m_s2)
+  if ((CS%id_dv_dt_surf>0) .and. .not.associated(CS%dv_dt_surf)) then
+    call safe_alloc_ptr(CS%dv_dt_surf,isd,ied,JsdB,JedB)
+    call register_time_deriv_surf(lbound(MIS%v), MIS%v, CS%dv_dt_surf, CS)
+  endif
+
+  CS%id_du2_dt2_surf = register_diag_field('ocean_model', 'du2dt2_surf', diag%axesCu1,Time, &
+      'Zonal Hyperacceleration at the surface', 'm s-3', conversion=US%L_T3_to_m_s3)
+  if ((CS%id_du2_dt2_surf>0) .and. .not.associated(CS%du2_dt2_surf)) then
+    call safe_alloc_ptr(CS%du2_dt2_surf,IsdB,IedB,jsd,jed)
+    call register_time_deriv2_surf(lbound(MIS%u), MIS%u, CS%du2_dt2_surf, CS)
+  endif
+
+  CS%id_dv2_dt2_surf = register_diag_field('ocean_model', 'dv2dt2_surf', diag%axesCv1,Time, &
+      'Meridional Hyperacceleration at the surface', 'm s-3', conversion=US%L_T3_to_m_s3)
+  if ((CS%id_dv2_dt2_surf>0) .and. .not.associated(CS%dv2_dt2_surf)) then
+    call safe_alloc_ptr(CS%dv2_dt2_surf,isd,ied,JsdB,JedB)
+    call register_time_deriv2_surf(lbound(MIS%v), MIS%v, CS%dv2_dt2_surf, CS)
   endif
 
   CS%id_dh_dt = register_diag_field('ocean_model', 'dhdt', diag%axesTL, Time, &
@@ -2383,8 +2535,7 @@ subroutine MOM_diagnostics_end(CS, ADp)
                                                !! previous call to diagnostics_init.
   type(accel_diag_ptrs),  intent(inout) :: ADp !< structure with pointers to
                                                !! accelerations in momentum equation.
-  integer :: m
-  integer :: m2
+  integer :: m, m2, ms, m2s
 
   if (associated(CS%e))          deallocate(CS%e)
   if (associated(CS%e_D))        deallocate(CS%e_D)
@@ -2402,6 +2553,10 @@ subroutine MOM_diagnostics_end(CS, ADp)
   if (associated(CS%du_dt))      deallocate(CS%du_dt)
   if (associated(CS%du2_dt2))    deallocate(CS%du2_dt2)
   if (associated(CS%dv2_dt2))    deallocate(CS%dv2_dt2)
+  if (associated(CS%dv_dt_surf))      deallocate(CS%dv_dt_surf)
+  if (associated(CS%du_dt_surf))      deallocate(CS%du_dt_surf)
+  if (associated(CS%du2_dt2_surf))    deallocate(CS%du2_dt2_surf)
+  if (associated(CS%dv2_dt2_surf))    deallocate(CS%dv2_dt2_surf)
   if (associated(CS%h_Rlay))     deallocate(CS%h_Rlay)
   if (associated(CS%uh_Rlay))    deallocate(CS%uh_Rlay)
   if (associated(CS%vh_Rlay))    deallocate(CS%vh_Rlay)
@@ -2423,6 +2578,9 @@ subroutine MOM_diagnostics_end(CS, ADp)
   do m=1,CS%num_time_deriv ; deallocate(CS%prev_val(m)%p) ; enddo
   do m2=1,CS%num_time_deriv2 ; deallocate(CS%prev_val2_1st(m2)%p) ; enddo
   do m2=1,CS%num_time_deriv2 ; deallocate(CS%prev_val2_2nd(m2)%p) ; enddo
+  do ms=1,CS%num_time_deriv_surf ; deallocate(CS%prev_val_surf(ms)%p) ; enddo
+  do m2s=1,CS%num_time_deriv2_surf ; deallocate(CS%prev_val2_1st_surf(m2s)%p) ; enddo
+  do m2s=1,CS%num_time_deriv2_surf ; deallocate(CS%prev_val2_2nd_surf(m2s)%p) ; enddo
 
   deallocate(CS)
 
