@@ -654,16 +654,12 @@ subroutine NCAR_CFC_fluxes(cfc11_atm, cfc12_atm, fluxes, sfc_state, G) !, GV, CS
 
     ! Calculate Schmidt numbers using coefficients given by
     ! Wanninkhof (2014); doi:10.4319/lom.2014.12.351.
-    call comp_CFC_schmidt(sfc_state%SST(i,j), sc_11, sc_12, G%mask2dT(i,j))
-    !write(*,*)'sfc_state%SST(i,j), sc_11, sc_12, G%mask2dT(i,j)',sfc_state%SST(i,j), sc_11, sc_12, G%mask2dT(i,j)
-    ! GMM, the following was stopping the model because of unbounded values. Using the GFDL approach instead.
-    !sc_no_term = sqrt(660.0 / sc_11)
-    ! The abs here is to avoid NaNs. The model should be failing at this point.
-    sc_no_term = sqrt(660.0 / (abs(sc_11) + 1.0e-30))
+    call comp_CFC_schmidt(sfc_state%SST(i,j), sc_11, sc_12)
+    sc_no_term = sqrt(660.0 / sc_11)
 
     CFC11_alpha(i,j) = alpha_11 * sc_no_term
     CFC11_Csurf(i,j) = sfc_state%sfc_CFC11(i,j) * sc_no_term
-    sc_no_term = sqrt(660.0 / (abs(sc_12) + 1.0e-30))
+    sc_no_term = sqrt(660.0 / sc_12)
     CFC12_alpha(i,j) = alpha_12 * sc_no_term
     CFC12_Csurf(i,j) = sfc_state%sfc_CFC12(i,j) * sc_no_term
 
@@ -702,11 +698,10 @@ end subroutine NCAR_CFC_fluxes
 
 !> Compute Schmidt numbers of CFCs following Wanninkhof (2014); doi:10.4319/lom.2014.12.351
 !! Range of validity of fit is -2:40.
-subroutine comp_CFC_schmidt(sst_in, cfc11_sc, cfc12_sc, mask)
+subroutine comp_CFC_schmidt(sst_in, cfc11_sc, cfc12_sc)
   real, intent(in)    :: sst_in   !< The sea surface temperature [degC].
   real, intent(inout) :: cfc11_sc !< Schmidt number of CFC11 [nondim].
   real, intent(inout) :: cfc12_sc !< Schmidt number of CFC12 [nondim].
-  real, intent(in)    :: mask     !< 0 for land points and 1 for ocean points on the h-grid [nondim].
 
   !local variables
   real , parameter :: a_11 = 3579.2
@@ -722,15 +717,10 @@ subroutine comp_CFC_schmidt(sst_in, cfc11_sc, cfc12_sc, mask)
   real             :: sst
 
 
-  if (mask>0.) then
-    ! clip SST to avoid bad values
-    sst = MAX(-2.0, MIN(40.0, sst_in))
-    cfc11_sc = a_11 + sst * (b_11 + sst * (c_11 + sst * (d_11 + sst * e_11)))
-    cfc12_sc = a_12 + sst * (b_12 + sst * (c_12 + sst * (d_12 + sst * e_12)))
-  else
-    cfc11_sc = 0.0
-    cfc12_sc = 0.0
-  endif
+  ! clip SST to avoid bad values
+  sst = MAX(-2.0, MIN(40.0, sst_in))
+  cfc11_sc = a_11 + sst * (b_11 + sst * (c_11 + sst * (d_11 + sst * e_11)))
+  cfc12_sc = a_12 + sst * (b_12 + sst * (c_12 + sst * (d_12 + sst * e_12)))
 
 end subroutine comp_CFC_schmidt
 
