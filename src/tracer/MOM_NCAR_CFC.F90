@@ -583,7 +583,7 @@ logical function NCAR_CFC_unit_tests(verbose)
 
   ! test comp_CFC_schmidt
 
-end function near_boundary_unit_tests
+end function NCAR_CFC_unit_tests
 
 !> \namespace mom_ncar_cfc
 !!
