@@ -42,7 +42,7 @@ use regional_dyes, only : dye_stock, regional_dyes_end, dye_tracer_CS
 use MOM_OCMIP2_CFC, only : register_OCMIP2_CFC, initialize_OCMIP2_CFC, flux_init_OCMIP2_CFC
 use MOM_OCMIP2_CFC, only : OCMIP2_CFC_column_physics, OCMIP2_CFC_surface_state
 use MOM_OCMIP2_CFC, only : OCMIP2_CFC_stock, OCMIP2_CFC_end, OCMIP2_CFC_CS
-use MOM_NCAR_CFC, only : register_NCAR_CFC, initialize_NCAR_CFC !, flux_init_NCAR_CFC
+use MOM_NCAR_CFC, only : register_NCAR_CFC, initialize_NCAR_CFC
 use MOM_NCAR_CFC, only : NCAR_CFC_column_physics, NCAR_CFC_surface_state
 use MOM_NCAR_CFC, only : NCAR_CFC_stock, NCAR_CFC_end, NCAR_CFC_CS
 use oil_tracer, only : register_oil_tracer, initialize_oil_tracer
@@ -134,7 +134,6 @@ subroutine call_tracer_flux_init(verbosity)
   call close_param_file(param_file, quiet_close=.true.)
 
   if (use_OCMIP_CFCs) call flux_init_OCMIP2_CFC(verbosity=verbosity)
-  !if (use_NCAR_CFCs) call flux_init_NCAR_CFC(verbosity=verbosity)
   if (use_MOM_generic_tracer) then
     call MOM_generic_flux_init(verbosity=verbosity)
   endif
@@ -332,8 +331,8 @@ subroutine tracer_flow_control_init(restart, day, G, GV, US, h, param_file, diag
     call initialize_OCMIP2_CFC(restart, day, G, GV, US, h, diag, OBC, CS%OCMIP2_CFC_CSp, &
                                 sponge_CSp)
   if (CS%use_NCAR_CFC) &
-    call initialize_NCAR_CFC(restart, day, G, GV, US, h, diag, OBC, CS%NCAR_CFC_CSp, &
-                                sponge_CSp)
+    call initialize_NCAR_CFC(restart, day, G, GV, US, h, diag, OBC, CS%NCAR_CFC_CSp)
+
   if (CS%use_MOM_generic_tracer) &
     call initialize_MOM_generic_tracer(restart, day, G, GV, US, h, param_file, diag, OBC, &
         CS%MOM_generic_tracer_CSp, sponge_CSp, ALE_sponge_CSp)
