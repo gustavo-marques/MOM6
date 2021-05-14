@@ -40,7 +40,6 @@ use MOM_time_manager,        only : operator(+), operator(-), operator(*), opera
 use MOM_time_manager,        only : operator(/=), operator(<=), operator(>=)
 use MOM_time_manager,        only : operator(<), real_to_time_type, time_type_to_real
 use time_interp_external_mod,only : time_interp_external_init
-use MOM_tracer_flow_control, only : call_tracer_register, tracer_flow_control_init
 use MOM_tracer_flow_control, only : call_tracer_flux_init
 use MOM_unit_scaling,        only : unit_scale_type
 use MOM_variables,           only : surface

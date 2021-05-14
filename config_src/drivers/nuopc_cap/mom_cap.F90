@@ -627,9 +627,12 @@ subroutine InitializeAdvertise(gcomp, importState, exportState, clock, rc)
   ocean_public%is_ocean_pe = .true.
   call ocean_model_init(ocean_public, ocean_state, time0, time_start, input_restart_file=trim(restartfiles))
 
-  ! GMM, is this call necessary?
-  call ocean_model_flux_init(ocean_state)
+  ! GMM, this call is not needed for NCAR. Check with EMC.
+  ! If this can be deleted, we should also delete ocean_model_flux_init
+  !call ocean_model_flux_init(ocean_state)
 
+  ! GMM, this call is probably not needed
+  ! if so, also delete soubroutine ocean_model_init_sfc
   call ocean_model_init_sfc(ocean_state, ocean_public)
 
   call mpp_get_compute_domain(ocean_public%domain, isc, iec, jsc, jec)
