@@ -42,9 +42,9 @@ use regional_dyes, only : dye_stock, regional_dyes_end, dye_tracer_CS
 use MOM_OCMIP2_CFC, only : register_OCMIP2_CFC, initialize_OCMIP2_CFC, flux_init_OCMIP2_CFC
 use MOM_OCMIP2_CFC, only : OCMIP2_CFC_column_physics, OCMIP2_CFC_surface_state
 use MOM_OCMIP2_CFC, only : OCMIP2_CFC_stock, OCMIP2_CFC_end, OCMIP2_CFC_CS
-use MOM_NCAR_CFC, only : register_NCAR_CFC, initialize_NCAR_CFC
-use MOM_NCAR_CFC, only : NCAR_CFC_column_physics, NCAR_CFC_surface_state
-use MOM_NCAR_CFC, only : NCAR_CFC_stock, NCAR_CFC_end, NCAR_CFC_CS
+use MOM_CFC_cap, only : register_CFC_cap, initialize_CFC_cap
+use MOM_CFC_cap, only : CFC_cap_column_physics, CFC_cap_surface_state
+use MOM_CFC_cap, only : CFC_cap_stock, CFC_cap_end, CFC_cap_CS
 use oil_tracer, only : register_oil_tracer, initialize_oil_tracer
 use oil_tracer, only : oil_tracer_column_physics, oil_tracer_surface_state
 use oil_tracer, only : oil_stock, oil_tracer_end, oil_tracer_CS
@@ -83,7 +83,7 @@ type, public :: tracer_flow_control_CS ; private
   logical :: use_oil = .false.                     !< If true, use the oil tracer package
   logical :: use_advection_test_tracer = .false.   !< If true, use the advection_test_tracer package
   logical :: use_OCMIP2_CFC = .false.              !< If true, use the OCMIP2_CFC tracer package
-  logical :: use_NCAR_CFC = .false.                !< If true, use the NCAR_CFC tracer package
+  logical :: use_CFC_cap = .false.                 !< If true, use the CFC_cap tracer package
   logical :: use_MOM_generic_tracer = .false.      !< If true, use the MOM_generic_tracer packages
   logical :: use_pseudo_salt_tracer = .false.      !< If true, use the psuedo_salt tracer  package
   logical :: use_boundary_impulse_tracer = .false. !< If true, use the boundary impulse tracer package
@@ -98,7 +98,7 @@ type, public :: tracer_flow_control_CS ; private
   type(oil_tracer_CS), pointer :: oil_tracer_CSp => NULL()
   type(advection_test_tracer_CS), pointer :: advection_test_tracer_CSp => NULL()
   type(OCMIP2_CFC_CS), pointer :: OCMIP2_CFC_CSp => NULL()
-  type(NCAR_CFC_CS), pointer :: NCAR_CFC_CSp => NULL()
+  type(CFC_cap_CS),    pointer :: CFC_cap_CSp => NULL()
   type(MOM_generic_tracer_CS), pointer :: MOM_generic_tracer_CSp => NULL()
   type(pseudo_salt_tracer_CS), pointer :: pseudo_salt_tracer_CSp => NULL()
   type(boundary_impulse_tracer_CS), pointer :: boundary_impulse_tracer_CSp => NULL()
@@ -119,7 +119,7 @@ subroutine call_tracer_flux_init(verbosity)
 
   type(param_file_type) :: param_file ! A structure to parse for run-time parameters
   character(len=40)  :: mdl = "call_tracer_flux_init"  ! This module's name.
-  logical :: use_OCMIP_CFCs, use_MOM_generic_tracer, use_NCAR_CFCs
+  logical :: use_OCMIP_CFCs, use_MOM_generic_tracer, use_CFC_caps
 
   ! Determine which tracer routines with tracer fluxes are to be called.  Note
   ! that not every tracer package is required to have a flux_init call.
@@ -127,8 +127,6 @@ subroutine call_tracer_flux_init(verbosity)
 
   call get_param(param_file, mdl, "USE_OCMIP2_CFC", use_OCMIP_CFCs, &
                  default=.false., do_not_log=.true.)
-  !call get_param(param_file, mdl, "USE_NCAR_CFC", use_NCAR_CFCs, &
-  !               default=.false., do_not_log=.true.)
   call get_param(param_file, mdl, "USE_generic_tracer", use_MOM_generic_tracer,&
                  default=.false., do_not_log=.true.)
   call close_param_file(param_file, quiet_close=.true.)
@@ -200,8 +198,8 @@ subroutine call_tracer_register(HI, GV, US, param_file, CS, tr_Reg, restart_CS)
   call get_param(param_file, mdl, "USE_OCMIP2_CFC", CS%use_OCMIP2_CFC, &
                  "If true, use the MOM_OCMIP2_CFC tracer package.", &
                  default=.false.)
-  call get_param(param_file, mdl, "USE_NCAR_CFC", CS%use_NCAR_CFC, &
-                 "If true, use the MOM_NCAR_CFC tracer package.", &
+  call get_param(param_file, mdl, "USE_CFC_CAP", CS%use_CFC_cap, &
+                 "If true, use the MOM_CFC_cap tracer package.", &
                  default=.false.)
   call get_param(param_file, mdl, "USE_generic_tracer", CS%use_MOM_generic_tracer, &
                  "If true and _USE_GENERIC_TRACER is defined as a "//&
@@ -247,8 +245,8 @@ subroutine call_tracer_register(HI, GV, US, param_file, CS, tr_Reg, restart_CS)
   if (CS%use_OCMIP2_CFC) CS%use_OCMIP2_CFC = &
     register_OCMIP2_CFC(HI, GV, param_file,  CS%OCMIP2_CFC_CSp, &
                         tr_Reg, restart_CS)
-  if (CS%use_NCAR_CFC) CS%use_NCAR_CFC = &
-    register_NCAR_CFC(HI, GV, param_file,  CS%NCAR_CFC_CSp, &
+  if (CS%use_CFC_cap) CS%use_CFC_cap = &
+    register_CFC_cap(HI, GV, param_file,  CS%CFC_cap_CSp, &
                         tr_Reg, restart_CS)
   if (CS%use_MOM_generic_tracer) CS%use_MOM_generic_tracer = &
     register_MOM_generic_tracer(HI, GV, param_file,  CS%MOM_generic_tracer_CSp, &
@@ -330,8 +328,8 @@ subroutine tracer_flow_control_init(restart, day, G, GV, US, h, param_file, diag
   if (CS%use_OCMIP2_CFC) &
     call initialize_OCMIP2_CFC(restart, day, G, GV, US, h, diag, OBC, CS%OCMIP2_CFC_CSp, &
                                 sponge_CSp)
-  if (CS%use_NCAR_CFC) &
-    call initialize_NCAR_CFC(restart, day, G, GV, US, h, diag, OBC, CS%NCAR_CFC_CSp)
+  if (CS%use_CFC_cap) &
+    call initialize_CFC_cap(restart, day, G, GV, US, h, diag, OBC, CS%CFC_cap_CSp)
 
   if (CS%use_MOM_generic_tracer) &
     call initialize_MOM_generic_tracer(restart, day, G, GV, US, h, param_file, diag, OBC, &
@@ -478,9 +476,9 @@ subroutine call_tracer_column_fns(h_old, h_new, ea, eb, fluxes, Hml, dt, G, GV, 
                                      G, GV, US, CS%OCMIP2_CFC_CSp, &
                                      evap_CFL_limit=evap_CFL_limit, &
                                      minimum_forcing_depth=minimum_forcing_depth)
-    if (CS%use_NCAR_CFC) &
-      call NCAR_CFC_column_physics(h_old, h_new, ea, eb, fluxes, dt, &
-                                     G, GV, US, CS%NCAR_CFC_CSp, &
+    if (CS%use_CFC_cap) &
+      call CFC_cap_column_physics(h_old, h_new, ea, eb, fluxes, dt, &
+                                     G, GV, US, CS%CFC_cap_CSp, &
                                      evap_CFL_limit=evap_CFL_limit, &
                                      minimum_forcing_depth=minimum_forcing_depth)
     if (CS%use_MOM_generic_tracer) then
@@ -537,9 +535,9 @@ subroutine call_tracer_column_fns(h_old, h_new, ea, eb, fluxes, Hml, dt, G, GV, 
     if (CS%use_OCMIP2_CFC) &
       call OCMIP2_CFC_column_physics(h_old, h_new, ea, eb, fluxes, dt, &
                                      G, GV, US, CS%OCMIP2_CFC_CSp)
-    if (CS%use_NCAR_CFC) &
-      call NCAR_CFC_column_physics(h_old, h_new, ea, eb, fluxes, dt, &
-                                     G, GV, US, CS%NCAR_CFC_CSp)
+    if (CS%use_CFC_cap) &
+      call CFC_cap_column_physics(h_old, h_new, ea, eb, fluxes, dt, &
+                                     G, GV, US, CS%CFC_cap_CSp)
     if (CS%use_MOM_generic_tracer) then
       if (US%QRZ_T_to_W_m2 /= 1.0) call MOM_error(FATAL, "MOM_generic_tracer_column_physics "//&
             "has not been written to permit dimensionsal rescaling.  Set all 4 of the "//&
@@ -648,9 +646,9 @@ subroutine call_tracer_stocks(h, stock_values, G, GV, CS, stock_names, stock_uni
                        set_pkg_name, max_ns, ns_tot, stock_names, stock_units)
   endif
 
-  if (CS%use_NCAR_CFC) then
-    ns = NCAR_CFC_stock(h, values, G, GV, CS%NCAR_CFC_CSp, names, units, stock_index)
-    call store_stocks("MOM_NCAR_CFC", ns, names, units, values, index, stock_values, &
+  if (CS%use_CFC_cap) then
+    ns = CFC_cap_stock(h, values, G, GV, CS%CFC_cap_CSp, names, units, stock_index)
+    call store_stocks("MOM_CFC_cap", ns, names, units, values, index, stock_values, &
                        set_pkg_name, max_ns, ns_tot, stock_names, stock_units)
   endif
 
@@ -783,8 +781,8 @@ subroutine call_tracer_surface_state(sfc_state, h, G, GV, CS)
     call advection_test_tracer_surface_state(sfc_state, h, G, GV, CS%advection_test_tracer_CSp)
   if (CS%use_OCMIP2_CFC) &
     call OCMIP2_CFC_surface_state(sfc_state, h, G, GV, CS%OCMIP2_CFC_CSp)
-  if (CS%use_NCAR_CFC) &
-    call NCAR_CFC_surface_state(sfc_state, G, CS%NCAR_CFC_CSp)
+  if (CS%use_CFC_cap) &
+    call CFC_cap_surface_state(sfc_state, G, CS%CFC_cap_CSp)
   if (CS%use_MOM_generic_tracer) &
     call MOM_generic_tracer_surface_state(sfc_state, h, G, GV, CS%MOM_generic_tracer_CSp)
 
@@ -804,7 +802,7 @@ subroutine tracer_flow_control_end(CS)
   if (CS%use_oil) call oil_tracer_end(CS%oil_tracer_CSp)
   if (CS%use_advection_test_tracer) call advection_test_tracer_end(CS%advection_test_tracer_CSp)
   if (CS%use_OCMIP2_CFC) call OCMIP2_CFC_end(CS%OCMIP2_CFC_CSp)
-  if (CS%use_NCAR_CFC) call NCAR_CFC_end(CS%NCAR_CFC_CSp)
+  if (CS%use_CFC_cap) call CFC_cap_end(CS%CFC_cap_CSp)
   if (CS%use_MOM_generic_tracer) call end_MOM_generic_tracer(CS%MOM_generic_tracer_CSp)
   if (CS%use_pseudo_salt_tracer) call pseudo_salt_tracer_end(CS%pseudo_salt_tracer_CSp)
   if (CS%use_boundary_impulse_tracer) call boundary_impulse_tracer_end(CS%boundary_impulse_tracer_CSp)

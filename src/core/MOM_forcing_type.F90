@@ -183,8 +183,7 @@ type, public :: forcing
   real :: C_p                !< heat capacity of seawater [Q degC-1 ~> J kg-1 degC-1].
                              !! C_p is is the same value as in thermovar_ptrs_type.
 
-  ! GMM, TODO
-  ! CFCs, via MOM_NCAR_CFC module
+  ! CFCs, via MOM_CFC_cap module
   real, pointer, dimension(:,:) :: &
     cfc11_flux    => NULL(), &  !< flux of cfc_11 into the ocean [kg kg-1 m s-1].
     cfc12_flux    => NULL(), &  !< flux of cfc_12 into the ocean [kg kg-1 m s-1].
@@ -2999,7 +2998,7 @@ subroutine allocate_forcing_by_group(G, fluxes, water, heat, ustar, press, &
   call myAlloc(fluxes%area_berg,isd,ied,jsd,jed, iceberg)
   call myAlloc(fluxes%mass_berg,isd,ied,jsd,jed, iceberg)
 
-  !These fields should only on allocated when USE_NCAR_CFC is activated.
+  !These fields should only on allocated when USE_CFC_CAP is activated.
   call myAlloc(fluxes%cfc11_flux,isd,ied,jsd,jed, cfc)
   call myAlloc(fluxes%cfc12_flux,isd,ied,jsd,jed, cfc)
   call myAlloc(fluxes%ice_fraction,isd,ied,jsd,jed, cfc)

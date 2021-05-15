@@ -21,8 +21,7 @@ use MOM_forcing_type,     only : allocate_forcing_type, deallocate_forcing_type
 use MOM_forcing_type,     only : allocate_mech_forcing, deallocate_mech_forcing
 use MOM_get_input,        only : Get_MOM_Input, directories
 use MOM_grid,             only : ocean_grid_type
-use MOM_NCAR_CFC,         only : NCAR_CFC_fluxes
-!use MOM_NCAR_CFC,         only : NCAR_CFC_surface_state, get_surface_CFC, NCAR_CFC_CS
+use MOM_CFC_cap,          only : CFC_cap_fluxes
 use MOM_io,               only : slasher, write_version_number, MOM_read_data
 use MOM_restart,          only : register_restart_field, restart_init, MOM_restart_CS
 use MOM_restart,          only : restart_init_end, save_restart, restore_state
@@ -81,7 +80,7 @@ type, public :: surface_forcing_CS ; private
                                 !! the correction for the atmospheric (and sea-ice)
                                 !! pressure limited by max_p_surf instead of the
                                 !! full atmospheric pressure.  The default is true.
-  logical :: use_NCAR_CFCs      !< enables the NCAR_CFC tracer package.
+  logical :: use_CFC            !< enables the MOM_CFC_cap tracer package.
   real :: gust_const            !< constant unresolved background gustiness for ustar [R L Z T-1 ~> Pa]
   logical :: read_gust_2d       !< If true, use a 2-dimensional gustiness supplied
                                 !! from an input file.
@@ -151,9 +150,6 @@ type, public :: surface_forcing_CS ; private
   integer :: id_trestore = -1    !< id number for time_interp_external.
   integer :: id_cfc11_atm = -1   !< id number for time_interp_external.
   integer :: id_cfc12_atm = -1   !< id number for time_interp_external.
-
-  ! CFCs
-  !type(NCAR_CFC_CS), pointer :: NCAR_CFC_CSp => NULL() !< KPP control structure needed to get CFC11 and CFC12.
 
   ! Diagnostics handles
   type(forcing_diags), public :: handles
@@ -308,7 +304,7 @@ subroutine convert_IOB_to_fluxes(IOB, fluxes, index_bounds, Time, valid_time, G,
   if (fluxes%dt_buoy_accum < 0) then
     call allocate_forcing_type(G, fluxes, water=.true., heat=.true., ustar=.true., &
                                press=.true., fix_accum_bug=CS%fix_ustar_gustless_bug, &
-                               cfc=CS%use_NCAR_CFCs)
+                               cfc=CS%use_CFC)
 
     call safe_alloc_ptr(fluxes%sw_vis_dir,isd,ied,jsd,jed)
     call safe_alloc_ptr(fluxes%sw_vis_dif,isd,ied,jsd,jed)
@@ -334,14 +330,6 @@ subroutine convert_IOB_to_fluxes(IOB, fluxes, index_bounds, Time, valid_time, G,
       call safe_alloc_ptr(fluxes%heat_added,isd,ied,jsd,jed)
       call safe_alloc_ptr(fluxes%salt_flux_added,isd,ied,jsd,jed)
     endif
-
-    ! CFCs
-    !if (CS%use_NCAR_CFCs) then
-    !  call safe_alloc_ptr(fluxes%cfc11_flux,isd,ied,jsd,jed)
-    !  call safe_alloc_ptr(fluxes%cfc12_flux,isd,ied,jsd,jed)
-    !  call safe_alloc_ptr(fluxes%ice_fraction,isd,ied,jsd,jed)
-    !  call safe_alloc_ptr(fluxes%u10_sqr,isd,ied,jsd,jed)
-    !endif
 
     do j=js-2,je+2 ; do i=is-2,ie+2
       fluxes%TKE_tidal(i,j)   = CS%TKE_tidal(i,j)
@@ -583,7 +571,7 @@ subroutine convert_IOB_to_fluxes(IOB, fluxes, index_bounds, Time, valid_time, G,
   endif
 
   ! CFCs
-  if (CS%use_NCAR_CFCs) then
+  if (CS%use_CFC) then
     !if ((len_trim(CS%CFC_BC_file) > 0) .and. (scan(CS%CFC_BC_file,'/') == 0)) then
       ! extract ATM values of CFC11 and CFC12
       call time_interp_external(CS%id_cfc11_atm,Time,cfc11_atm)
@@ -591,7 +579,7 @@ subroutine convert_IOB_to_fluxes(IOB, fluxes, index_bounds, Time, valid_time, G,
     !else
       !GMM, TODO option to generete ATM cfc11 and cfc12 internally
     !endif
-    call NCAR_CFC_fluxes(cfc11_atm, cfc12_atm, fluxes, sfc_state, G)
+    call CFC_cap_fluxes(cfc11_atm, cfc12_atm, fluxes, sfc_state, G)
   endif
 
   if (associated(IOB%salt_flux)) then
@@ -1205,8 +1193,8 @@ subroutine surface_forcing_init(Time, G, US, param_file, diag, CS, restore_salt,
                  "coupler. This is used for testing and should be =1.0 for any "//&
                  "production runs.", default=1.0)
 
-  ! GMM, TODO log here?
-  call get_param(param_file, mdl, "USE_NCAR_CFC", CS%use_NCAR_CFCs, &
+  ! GMM, should this be logged here?
+  call get_param(param_file, mdl, "USE_CFC_CAP", CS%use_CFC, &
                  default=.false., do_not_log=.true.)
 
   if (restore_salt) then
@@ -1370,7 +1358,7 @@ subroutine surface_forcing_init(Time, G, US, param_file, diag, CS, restore_salt,
                  "as seen by MOM6.", default=.false.)
 
   call register_forcing_type_diags(Time, diag, US, CS%use_temperature, CS%handles, &
-                                   use_berg_fluxes=iceberg_flux_diags, use_cfcs=CS%use_NCAR_CFCs)
+                                   use_berg_fluxes=iceberg_flux_diags, use_cfcs=CS%use_CFC)
 
   call get_param(param_file, mdl, "ALLOW_FLUX_ADJUSTMENTS", CS%allow_flux_adjustments, &
                  "If true, allows flux adjustments to specified via the "//&
@@ -1404,22 +1392,22 @@ subroutine surface_forcing_init(Time, G, US, param_file, diag, CS, restore_salt,
     endif
   endif ; endif
 
-  ! CFCs
-  if (CS%use_NCAR_CFCs) then
+  ! CFCs, do not log these params where since they are logged in the CFC cap module
+  if (CS%use_CFC) then
     call get_param(param_file, mdl, "CFC_BC_FILE", CS%CFC_BC_file, &
                    "The file in which the CFC-11 and CFC-12 atm concentrations can be "//&
                    "found (units must be parts per trillion), or an empty string for "//&
-                   "internal BC generation (TBD).", default=" ")
+                   "internal BC generation (TODO).", default=" ", do_not_log=.true.)
     if ((len_trim(CS%CFC_BC_file) > 0) .and. (scan(CS%CFC_BC_file,'/') == 0)) then
       ! Add the directory if CFC_BC_file is not already a complete path.
       CS%CFC_BC_file = trim(slasher(CS%inputdir))//trim(CS%CFC_BC_file)
       !call log_param(param_file, mdl, "INPUTDIR/CFC_BC_FILE", CFC_BC_file)
       call get_param(param_file, mdl, "CFC11_VARIABLE", CS%cfc11_var_name, &
                    "The name of the variable representing CFC-11 in  "//&
-                   "CFC_BC_FILE.", default="CFC_11")
+                   "CFC_BC_FILE.", default="CFC_11", do_not_log=.true.)
       call get_param(param_file, mdl, "CFC12_VARIABLE", CS%cfc12_var_name, &
                    "The name of the variable representing CFC-12 in  "//&
-                   "CFC_BC_FILE.", default="CFC_12")
+                   "CFC_BC_FILE.", default="CFC_12", do_not_log=.true.)
 
       CS%id_cfc11_atm = init_external_field(CS%CFC_BC_file, CS%cfc11_var_name, domain=G%Domain%mpp_domain)
       CS%id_cfc12_atm = init_external_field(CS%CFC_BC_file, CS%cfc12_var_name, domain=G%Domain%mpp_domain)

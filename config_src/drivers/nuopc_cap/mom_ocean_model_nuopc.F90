@@ -151,7 +151,7 @@ type, public :: ocean_state_type ; private
                               !! restore salinity to a specified value.
   logical :: restore_temp     !< If true, the coupled MOM driver adds a term to
                               !! restore sst to a specified value.
-  logical :: use_cfcs         !< If true, cfcs are enabled.
+  !GMM logical :: use_cfcs         !< If true, cfcs are enabled.
   real :: press_to_z          !< A conversion factor between pressure and ocean
                               !! depth in m, usually 1/(rho_0*g), in m Pa-1.
   real :: C_p                 !< The heat capacity of seawater, in J K-1 kg-1.
@@ -240,6 +240,7 @@ subroutine ocean_model_init(Ocean_sfc, OS, Time_init, Time_in, gas_fields_ocn, i
                                               !! tracer fluxes, and can be used to spawn related
                                               !! internal variables in the ice model.
   character(len=*), optional, intent(in) :: input_restart_file !< If present, name of restart file to read
+
   ! Local variables
   real :: Rho0        ! The Boussinesq ocean density, in kg m-3.
   real :: G_Earth     ! The gravitational acceleration in m s-2.
@@ -247,8 +248,8 @@ subroutine ocean_model_init(Ocean_sfc, OS, Time_init, Time_in, gas_fields_ocn, i
                       !! The actual depth over which melt potential is computed will
                       !! min(HFrz, OBLD), where OBLD is the boundary layer depth.
                       !! If HFrz <= 0 (default), melt potential will not be computed.
-  logical :: use_melt_pot  !< If true, allocate melt_potential array
-  logical :: use_NCAR_CFCs !< If true, allocated arrays for surface CFCs.
+  logical :: use_melt_pot !< If true, allocate melt_potential array
+  logical :: use_CFC  !< If true, allocated arrays for surface CFCs.
 
 
 ! This include declares and sets the variable "version".
@@ -368,14 +369,14 @@ subroutine ocean_model_init(Ocean_sfc, OS, Time_init, Time_in, gas_fields_ocn, i
     use_melt_pot=.false.
   endif
 
-  call get_param(param_file, mdl, "USE_NCAR_CFC", use_NCAR_CFCs, &
+  call get_param(param_file, mdl, "USE_CFC_CAP", use_CFC, &
                  default=.false., do_not_log=.true.)
 
   !   Consider using a run-time flag to determine whether to do the diagnostic
   ! vertical integrals, since the related 3-d sums are not negligible in cost.
   call allocate_surface_state(OS%sfc_state, OS%grid, use_temperature, &
                               do_integrals=.true., gas_fields_ocn=gas_fields_ocn, &
-                              use_meltpot=use_melt_pot, use_cfcs=use_NCAR_CFCs)
+                              use_meltpot=use_melt_pot, use_cfcs=use_CFC)
 
   call surface_forcing_init(Time_in, OS%grid, OS%US, param_file, OS%diag, &
                             OS%forcing_CSp, OS%restore_salinity, OS%restore_temp)
