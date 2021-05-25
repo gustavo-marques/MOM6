@@ -307,10 +307,10 @@ subroutine CFC_cap_column_physics(h_old, h_new, ea, eb, fluxes, dt, G, GV, US, C
 
   is = G%isc ; ie = G%iec ; js = G%jsc ; je = G%jec ; nz = GV%ke
 
-  ! GMM, TODO: check this with Bob
-  ! ####### THIS IS WRONG??? #########
-  ! convert from [mol m-2 s-1] to [mol kg m-2 s-1]. The latter is what tracer_vertdiff needs.
-  scale_factor = 1.0 !G%US%R_to_kg_m3*GV%Rho0*US%T_to_s
+  ! GMM, TODO: check scale_factor with Bob
+  ! CFC_flux units are [mol m-2 s-1] which is the same as [CU kg m-2 s-1], where CU = mol kg-1
+  ! These units are what tracer_vertdiff needs.
+  scale_factor = 1.0 !US%m_to_Z**2*US%s_to_T
 
   if (.not.associated(CS)) return
 

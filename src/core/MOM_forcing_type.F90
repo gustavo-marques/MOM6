@@ -1307,7 +1307,7 @@ subroutine register_forcing_type_diags(Time, diag, US, use_temperature, handles,
   endif
 
   ! GMM, TODO: check the conversion below with Bob
-  ! units for cfc11_flux and cfc12_flux should be mol m-2 s-1
+  ! units for cfc11_flux and cfc12_flux is mol m-2 s-1
   ! See:
   ! http://clipc-services.ceda.ac.uk/dreq/u/0940cbee6105037e4b7aa5579004f124.html
   ! http://clipc-services.ceda.ac.uk/dreq/u/e9e21426e4810d0bb2d3dddb24dbf4dc.html
