@@ -596,29 +596,72 @@ logical function CFC_cap_unit_tests(verbose)
                                  !! information for debugging unit tests
 
   ! Local variables
-  real :: dummy1, dummy2, ta, sal
-  !integer, parameter    :: nk = 2               ! Number of layers
+  real               :: dummy1, dummy2, ta, sal
+  character(len=120) :: test_name ! Title of the unit test
 
   CFC_cap_unit_tests = .false.
   write(stdout,*) '==== MOM_CFC_cap ======================='
 
   ! test comp_CFC_schmidt, Table 1 in Wanninkhof (2014); doi:10.4319/lom.2014.12.351
+  test_name = 'Schmidt number calculation'
   call comp_CFC_schmidt(20.0, dummy1, dummy2)
-  if ((dummy1 .ne. 1179.0) .or. (dummy2 .ne. 1188.0)) CFC_cap_unit_tests = .true.
+  CFC_cap_unit_tests = CFC_cap_unit_tests .or. &
+                       compare_values(verbose, test_name, dummy1, 1179.0, 0.5)
+  CFC_cap_unit_tests = CFC_cap_unit_tests .or. &
+                       compare_values(verbose, test_name, dummy2, 1188.0, 0.5)
 
-  if (.not. CFC_cap_unit_tests) write(stdout,*) 'Passed Schmidt numbers calculation'
+  if (.not. CFC_cap_unit_tests) write(stdout,'(2x,a)') "Passed "//test_name
 
-  ! GMM, TODO: test get_solubility()
+  test_name = 'Solubility function, SST = 1.0 C, and SSS = 10 psu'
   ta = max(0.01, (1.0 + 273.15) * 0.01); sal = 10.
   ! cfc1 = 3.238 10-2 mol kg-1 atm-1
   ! cfc2 = 7.943 10-3 mol kg-1 atm-1
   call get_solubility(dummy1, dummy2, ta, sal , 1.0)
+  CFC_cap_unit_tests = CFC_cap_unit_tests .or. &
+                       compare_values(verbose, test_name, dummy1, 3.238e-2, 5.0e-6)
+  CFC_cap_unit_tests = CFC_cap_unit_tests .or. &
+                       compare_values(verbose, test_name, dummy2, 7.943e-3, 5.0e-6)
 
+  if (.not. CFC_cap_unit_tests) write(stdout,'(2x,a)')"Passed "//test_name
+
+  test_name = 'Solubility function, SST = 20.0 C, and SSS = 35 psu'
   ta = max(0.01, (20.0 + 273.15) * 0.01); sal = 35.
   ! cfc1 = 0.881 10-2 mol kg-1 atm-1
   ! cfc2 = 2.446 10-3 mol kg-1 atm-1
   call get_solubility(dummy1, dummy2, ta, sal , 1.0)
+  CFC_cap_unit_tests = CFC_cap_unit_tests .or. &
+                       compare_values(verbose, test_name, dummy1, 8.8145e-3, 5.0e-8)
+  CFC_cap_unit_tests = CFC_cap_unit_tests .or. &
+                       compare_values(verbose, test_name, dummy2, 2.4462e-3, 5.0e-8)
+  if (.not. CFC_cap_unit_tests) write(stdout,'(2x,a)')"Passed "//test_name
+
 end function CFC_cap_unit_tests
+
+!> Test that ans and calc are approximately equal by computing the difference
+!! and comparing it against limit.
+logical function compare_values(verbose, test_name, calc, ans, limit)
+  logical,             intent(in) :: verbose   !< If true, write results to stdout
+  character(len=80),   intent(in) :: test_name !< Brief description of the unit test
+  real,                intent(in) :: calc      !< computed value
+  real,                intent(in) :: ans       !< correct value
+  real,                intent(in) :: limit     !< value above which test fails
+
+  ! Local variables
+  real :: diff
+
+  diff = ans - calc
+
+  compare_values = .false.
+  if (diff > limit ) then
+    compare_values = .true.
+    write(stdout,*) "CFC_cap_unit_tests, UNIT TEST FAILED: ", test_name
+    write(stdout,10) calc, ans
+  elseif (verbose) then
+    write(stdout,10) calc, ans
+  endif
+
+10 format("calc=",f20.16," ans",f20.16)
+end function compare_values
 
 !> \namespace mom_CFC_cap
 !!
