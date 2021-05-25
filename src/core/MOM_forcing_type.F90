@@ -185,8 +185,8 @@ type, public :: forcing
 
   ! CFCs, via MOM_CFC_cap module
   real, pointer, dimension(:,:) :: &
-    cfc11_flux    => NULL(), &  !< flux of cfc_11 into the ocean [kg kg-1 m s-1].
-    cfc12_flux    => NULL(), &  !< flux of cfc_12 into the ocean [kg kg-1 m s-1].
+    cfc11_flux    => NULL(), &  !< flux of cfc_11 into the ocean [mol kg-1 m s-1].
+    cfc12_flux    => NULL(), &  !< flux of cfc_12 into the ocean [mol kg-1 m s-1].
     ice_fraction  => NULL(), &  !< fraction of sea ice coverage at h-cells, from 0 to 1 [nondim].
     u10_sqr       => NULL()     !< wind magnitude at 10 m squared [L2 T-2 ~> m2 s-2]
 
@@ -1306,21 +1306,23 @@ subroutine register_forcing_type_diags(Time, diag, US, use_temperature, handles,
     endif
   endif
 
-  ! GMM, TODO add conversion?
-  ! units for cfc11_flux and cfc12_flux should be mol m-2 s-1, we need to fix that
+  ! GMM, TODO: check the conversion below with Bob
+  ! units for cfc11_flux and cfc12_flux should be mol m-2 s-1
   ! See:
   ! http://clipc-services.ceda.ac.uk/dreq/u/0940cbee6105037e4b7aa5579004f124.html
   ! http://clipc-services.ceda.ac.uk/dreq/u/e9e21426e4810d0bb2d3dddb24dbf4dc.html
   if (present(use_cfcs)) then
     if (use_cfcs) then
       handles%id_cfc11 = register_diag_field('ocean_model', 'cfc11_flux', diag%axesT1, Time, &
-          'Gas exchange flux of CFC11 into the ocean ', 'kg kg-1 m s-1', &
+          'Gas exchange flux of CFC11 into the ocean ', 'mol m-2 s-1', &
+          conversion= US%m_to_Z**2*US%s_to_T,&
           cmor_field_name='fgcfc11', &
           cmor_long_name='Surface Downward CFC11 Flux', &
           cmor_standard_name='surface_downward_cfc11_flux')
 
       handles%id_cfc12 = register_diag_field('ocean_model', 'cfc12_flux', diag%axesT1, Time, &
-          'Gas exchange flux of CFC12 into the ocean ', 'kg kg-1 m s-1', &
+          'Gas exchange flux of CFC12 into the ocean ', 'mol m-2 s-1', &
+          conversion= US%m_to_Z**2*US%s_to_T,&
           cmor_field_name='fgcfc12', &
           cmor_long_name='Surface Downward CFC12 Flux', &
           cmor_standard_name='surface_downward_cfc12_flux')

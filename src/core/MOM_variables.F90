@@ -42,8 +42,8 @@ type, public :: surface
     SST, &         !< The sea surface temperature [degC].
     SSS, &         !< The sea surface salinity [ppt ~> psu or gSalt/kg].
     sfc_density, & !< The mixed layer density [R ~> kg m-3].
-    sfc_cfc11,   & !< Surface CFC11 concentration [???].
-    sfc_cfc12,   & !< Surface CFC12 concentration [???].
+    sfc_cfc11,   & !< Sea surface concentration of CFC11 [mol kg-1 atm-1].
+    sfc_cfc12,   & !< Sea surface concentration of CFC12 [mol kg-1 atm-1].
     Hml, &         !< The mixed layer depth [Z ~> m].
     u, &           !< The mixed layer zonal velocity [L T-1 ~> m s-1].
     v, &           !< The mixed layer meridional velocity [L T-1 ~> m s-1].

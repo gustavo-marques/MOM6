@@ -4,7 +4,7 @@ module MOM_CFC_cap
 
 ! This file is part of MOM6. See LICENSE.md for the license.
 
-use MOM_diag_mediator,   only : diag_ctrl
+use MOM_diag_mediator,   only : diag_ctrl, register_diag_field, post_data
 use MOM_error_handler,   only : MOM_error, FATAL, WARNING
 use MOM_file_parser,     only : get_param, log_param, log_version, param_file_type
 use MOM_forcing_type,    only : forcing
@@ -28,7 +28,7 @@ implicit none ; private
 
 public register_CFC_cap, initialize_CFC_cap, CFC_cap_unit_tests
 public CFC_cap_column_physics, CFC_cap_surface_state, CFC_cap_fluxes
-public CFC_cap_stock, get_surface_CFC, CFC_cap_end
+public CFC_cap_stock, CFC_cap_end
 
 integer, parameter :: NTR = 2 !< the number of tracers in this module.
 
@@ -40,18 +40,17 @@ type, public :: CFC_cap_CS ; private
   type(time_type), pointer :: Time => NULL() !< A pointer to the ocean model's clock.
   type(tracer_registry_type), pointer :: tr_Reg => NULL() !< A pointer to the MOM6 tracer registry
   real, pointer, dimension(:,:,:) :: &
-    CFC11 => NULL(), &     !< The CFC11 concentration [mol m-3].
-    CFC12 => NULL()        !< The CFC12 concentration [mol m-3].
+    CFC11 => NULL(), &     !< The CFC11 concentration [mol kg-1].
+    CFC12 => NULL()        !< The CFC12 concentration [mol kg-1].
   ! In the following variables a suffix of _11 refers to CFC11 and _12 to CFC12.
-  real :: CFC11_IC_val = 0.0    !< The initial value assigned to CFC11 [mol m-3].
-  real :: CFC12_IC_val = 0.0    !< The initial value assigned to CFC12 [mol m-3].
-  real :: CFC11_land_val = -1.0 !< The value of CFC11 used where land is masked out [mol m-3].
-  real :: CFC12_land_val = -1.0 !< The value of CFC12 used where land is masked out [mol m-3].
+  real :: CFC11_IC_val = 0.0    !< The initial value assigned to CFC11 [mol kg-1].
+  real :: CFC12_IC_val = 0.0    !< The initial value assigned to CFC12 [mol kg-1].
+  real :: CFC11_land_val = -1.0 !< The value of CFC11 used where land is masked out [mol kg-1].
+  real :: CFC12_land_val = -1.0 !< The value of CFC12 used where land is masked out [mol kg-1].
   logical :: tracers_may_reinit !< If true, tracers may be reset via the initialization code
                                 !! if they are not found in the restart files.
   character(len=16) :: CFC11_name !< CFC11 variable name
   character(len=16) :: CFC12_name !< CFC12 variable name
-
   type(diag_ctrl), pointer :: diag => NULL() !< A structure that is used to regulate
                                              !! the timing of diagnostic output.
   type(MOM_restart_CS), pointer :: restart_CSp => NULL() !< Model restart control structure
@@ -59,6 +58,9 @@ type, public :: CFC_cap_CS ; private
   ! The following vardesc types contain a package of metadata about each tracer.
   type(vardesc) :: CFC11_desc !< A set of metadata for the CFC11 tracer
   type(vardesc) :: CFC12_desc !< A set of metadata for the CFC12 tracer
+  !>@{ Diagnostic IDs
+  integer :: id_cfc11_cmor = -1, id_cfc12_cmor = -1
+  !>@}
 end type CFC_cap_CS
 
 contains
@@ -136,9 +138,10 @@ function register_CFC_cap(HI, GV, param_file, CS, tr_Reg, restart_CS)
 
   !   The following vardesc types contain a package of metadata about each tracer,
   ! including, the name; units; longname; and grid information.
-  CS%CFC11_name = "CFC11" ; CS%CFC12_name = "CFC12"
-  CS%CFC11_desc = var_desc(CS%CFC11_name,"mol m-3","CFC-11 Concentration", caller=mdl)
-  CS%CFC12_desc = var_desc(CS%CFC12_name,"mol m-3","CFC-12 Concentration", caller=mdl)
+  CS%CFC11_name = "CFC_11" ; CS%CFC12_name = "CFC_12"
+  CS%CFC11_desc = var_desc(CS%CFC11_name,"mol kg-1","Moles Per Unit Mass of CFC-11 in sea water", caller=mdl)
+  CS%CFC12_desc = var_desc(CS%CFC12_name,"mol kg-1","Moles Per Unit Mass of CFC-12 in sea water", caller=mdl)
+  ! GMM, TODO: check following with Bob
   if (GV%Boussinesq) then ; flux_units = "mol s-1"
   else ; flux_units = "mol m-3 kg s-1" ; endif
 
@@ -149,30 +152,21 @@ function register_CFC_cap(HI, GV, param_file, CS, tr_Reg, restart_CS)
   ! the registration calls.  Curses on the designers and implementers of F90.
   tr_ptr => CS%CFC11
   ! Register CFC11 for horizontal advection, diffusion, and restarts.
-
-  ! CFC11 cmor conventions: http://clipc-services.ceda.ac.uk/dreq/u/42625c97b8fe75124a345962c4430982.html
   call register_tracer(tr_ptr, tr_Reg, param_file, HI, GV, &
                        tr_desc=CS%CFC11_desc, registry_diags=.true., &
-                       cmor_name='cfc11' ,&
-                       cmor_units='mol m-3'  ,&
-                       cmor_longname='Mole Concentration of CFC11 in Sea Water' ,&
                        flux_units=flux_units, &
                        restart_CS=restart_CS, mandatory=.not.CS%tracers_may_reinit)
   ! Do the same for CFC12
-  ! CFC12 cmor conventions: http://clipc-services.ceda.ac.uk/dreq/u/3ab8e10027d7014f18f9391890369235.html
   tr_ptr => CS%CFC12
   call register_tracer(tr_ptr, Tr_Reg, param_file, HI, GV, &
                        tr_desc=CS%CFC12_desc, registry_diags=.true., &
-                       cmor_name='cfc12' ,&
-                       cmor_units='mol m-3'  ,&
-                       cmor_longname='Mole Concentration of CFC12 in Sea Water' ,&
                        flux_units=flux_units, &
                        restart_CS=restart_CS, mandatory=.not.CS%tracers_may_reinit)
 
   CS%tr_Reg => tr_Reg
   CS%restart_CSp => restart_CS
-
   register_CFC_cap = .true.
+
 end function register_CFC_cap
 
 !> Initialize the OCMP2 CFC tracer fields and set up the tracer output.
@@ -190,7 +184,7 @@ subroutine initialize_CFC_cap(restart, day, G, GV, US, h, diag, OBC, CS)
   type(ocean_OBC_type),           pointer    :: OBC        !< This open boundary condition type
                                                            !! specifies whether, where, and what
                                                            !! open boundary conditions are used.
-  type(CFC_cap_CS),              pointer    :: CS         !< The control structure returned by a
+  type(CFC_cap_CS),              pointer    :: CS          !< The control structure returned by a
                                                            !! previous call to register_CFC_cap.
 
   ! local variables
@@ -211,6 +205,15 @@ subroutine initialize_CFC_cap(restart, day, G, GV, US, h, diag, OBC, CS)
     call init_tracer_CFC(h, CS%CFC12, CS%CFC12_name, CS%CFC12_land_val, &
                          CS%CFC12_IC_val, G, GV, US, CS)
 
+
+  ! cmor diagnostics
+  ! CFC11 cmor conventions: http://clipc-services.ceda.ac.uk/dreq/u/42625c97b8fe75124a345962c4430982.html
+  CS%id_cfc11_cmor = register_diag_field('ocean_model', 'cfc11', diag%axesTL, day,   &
+    'Mole Concentration of CFC11 in Sea Water', 'mol m-3')
+  ! CFC12 cmor conventions: http://clipc-services.ceda.ac.uk/dreq/u/3ab8e10027d7014f18f9391890369235.html
+  CS%id_cfc12_cmor = register_diag_field('ocean_model', 'cfc12', diag%axesTL, day,   &
+    'Mole Concentration of CFC12 in Sea Water', 'mol m-3')
+
   if (associated(OBC)) then
   ! Steal from updated DOME in the fullness of time.
   ! GMM: TODO this must be coded if we intend to use this module in regional applications
@@ -220,19 +223,18 @@ end subroutine initialize_CFC_cap
 
 !>This subroutine initializes a tracer array.
 subroutine init_tracer_CFC(h, tr, name, land_val, IC_val, G, GV, US, CS)
-  type(ocean_grid_type),                     intent(in)  :: G    !< The ocean's grid structure
-  type(verticalGrid_type),                   intent(in)  :: GV   !< The ocean's vertical grid structure.
-  type(unit_scale_type),                     intent(in)  :: US   !< A dimensional unit scaling type
-  real, dimension(SZI_(G),SZJ_(G),SZK_(GV)), intent(in)  :: h    !< Layer thicknesses [H ~> m or kg m-2]
-  real, dimension(SZI_(G),SZJ_(G),SZK_(GV)), intent(out) :: tr   !< The tracer concentration array
-  character(len=*),                          intent(in)  :: name !< The tracer name
+  type(ocean_grid_type),                     intent(in)  :: G        !< The ocean's grid structure
+  type(verticalGrid_type),                   intent(in)  :: GV       !< The ocean's vertical grid structure.
+  type(unit_scale_type),                     intent(in)  :: US       !< A dimensional unit scaling type
+  real, dimension(SZI_(G),SZJ_(G),SZK_(GV)), intent(in)  :: h        !< Layer thicknesses [H ~> m or kg m-2]
+  real, dimension(SZI_(G),SZJ_(G),SZK_(GV)), intent(out) :: tr       !< The tracer concentration array
+  character(len=*),                          intent(in)  :: name     !< The tracer name
   real,                                      intent(in)  :: land_val !< A value the tracer takes over land
   real,                                      intent(in)  :: IC_val   !< The initial condition value for the tracer
-  type(CFC_cap_CS),                         pointer     :: CS   !< The control structure returned by a
-                                                                !! previous call to register_CFC_cap.
+  type(CFC_cap_CS),                          pointer     :: CS       !< The control structure returned by a
+                                                                     !! previous call to register_CFC_cap.
 
-  ! This subroutine initializes a tracer array.
-
+  ! local variables
   logical :: OK
   integer :: i, j, k, is, ie, js, je, nz
   is = G%isc ; ie = G%iec ; js = G%jsc ; je = G%jec ; nz = GV%ke
@@ -264,35 +266,35 @@ subroutine init_tracer_CFC(h, tr, name, land_val, IC_val, G, GV, US, CS)
 
 end subroutine init_tracer_CFC
 
-!> This subroutine applies diapycnal diffusion, souces and sinks and any other column
-!! tracer physics or chemistry to the CFC cap tracers.
-!! CFCs are relatively simple, as they are passive tracers with only a surface flux as a source.
+!> Applies diapycnal diffusion, souces and sinks and any other column
+!! tracer physics to the CFC cap tracers. CFCs are relatively simple,
+!! as they are passive tracers with only a surface flux as a source.
 subroutine CFC_cap_column_physics(h_old, h_new, ea, eb, fluxes, dt, G, GV, US, CS, &
               evap_CFL_limit, minimum_forcing_depth)
-  type(ocean_grid_type),   intent(in) :: G    !< The ocean's grid structure
-  type(verticalGrid_type), intent(in) :: GV   !< The ocean's vertical grid structure
+  type(ocean_grid_type),   intent(in) :: G     !< The ocean's grid structure
+  type(verticalGrid_type), intent(in) :: GV    !< The ocean's vertical grid structure
   real, dimension(SZI_(G),SZJ_(G),SZK_(GV)), &
                            intent(in) :: h_old !< Layer thickness before entrainment [H ~> m or kg m-2].
   real, dimension(SZI_(G),SZJ_(G),SZK_(GV)), &
                            intent(in) :: h_new !< Layer thickness after entrainment [H ~> m or kg m-2].
   real, dimension(SZI_(G),SZJ_(G),SZK_(GV)), &
-                           intent(in) :: ea   !< an array to which the amount of fluid entrained
-                                              !! from the layer above during this call will be
-                                              !! added [H ~> m or kg m-2].
+                           intent(in) :: ea    !< an array to which the amount of fluid entrained
+                                               !! from the layer above during this call will be
+                                               !! added [H ~> m or kg m-2].
   real, dimension(SZI_(G),SZJ_(G),SZK_(GV)), &
-                           intent(in) :: eb   !< an array to which the amount of fluid entrained
-                                              !! from the layer below during this call will be
-                                              !! added [H ~> m or kg m-2].
-  type(forcing),           intent(in) :: fluxes !< A structure containing pointers to thermodynamic
-                                              !! and tracer forcing fields.  Unused fields have NULL ptrs.
-  real,                    intent(in) :: dt   !< The amount of time covered by this call [T ~> s]
-  type(unit_scale_type),   intent(in) :: US   !< A dimensional unit scaling type
-  type(CFC_cap_CS),     pointer    :: CS   !< The control structure returned by a
-                                              !! previous call to register_CFC_cap.
+                           intent(in) :: eb    !< an array to which the amount of fluid entrained
+                                               !! from the layer below during this call will be
+                                               !! added [H ~> m or kg m-2].
+  type(forcing),           intent(in) :: fluxes!< A structure containing pointers to thermodynamic
+                                               !! and tracer forcing fields.  Unused fields have NULL ptrs.
+  real,                    intent(in) :: dt    !< The amount of time covered by this call [T ~> s]
+  type(unit_scale_type),   intent(in) :: US    !< A dimensional unit scaling type
+  type(CFC_cap_CS),        pointer    :: CS    !< The control structure returned by a
+                                               !! previous call to register_CFC_cap.
   real,          optional, intent(in) :: evap_CFL_limit !< Limit on the fraction of the water that can
-                                              !! be fluxed out of the top layer in a timestep [nondim]
+                                               !! be fluxed out of the top layer in a timestep [nondim]
   real,          optional, intent(in) :: minimum_forcing_depth !< The smallest depth over which
-                                              !! fluxes can be applied [H ~> m or kg m-2]
+                                               !! fluxes can be applied [H ~> m or kg m-2]
 
   ! The arguments to this subroutine are redundant in that
   !     h_new(k) = h_old(k) + ea(k) - eb(k-1) + eb(k) - ea(k+1)
@@ -300,9 +302,15 @@ subroutine CFC_cap_column_physics(h_old, h_new, ea, eb, fluxes, dt, G, GV, US, C
   ! Local variables
   real, pointer, dimension(:,:,:) :: CFC11 => NULL(), CFC12 => NULL()
   real, dimension(SZI_(G),SZJ_(G),SZK_(GV)) :: h_work ! Used so that h can be modified [H ~> m or kg m-2]
+  real :: scale_factor ! convert from [Conc. m s-1] to [Conc. kg m-2 T-1]
   integer :: i, j, k, m, is, ie, js, je, nz
 
   is = G%isc ; ie = G%iec ; js = G%jsc ; je = G%jec ; nz = GV%ke
+
+  ! GMM, TODO: check this with Bob
+  ! ####### THIS IS WRONG??? #########
+  ! convert from [mol m-2 s-1] to [mol kg m-2 s-1]. The latter is what tracer_vertdiff needs.
+  scale_factor = 1.0 !G%US%R_to_kg_m3*GV%Rho0*US%T_to_s
 
   if (.not.associated(CS)) return
 
@@ -316,24 +324,26 @@ subroutine CFC_cap_column_physics(h_old, h_new, ea, eb, fluxes, dt, G, GV, US, C
     enddo ; enddo ; enddo
     call applyTracerBoundaryFluxesInOut(G, GV, CFC11, dt, fluxes, h_work, &
                                         evap_CFL_limit, minimum_forcing_depth)
-    call tracer_vertdiff(h_work, ea, eb, dt, CFC11, G, GV, sfc_flux=fluxes%CFC11_flux)
+    call tracer_vertdiff(h_work, ea, eb, dt, CFC11, G, GV, sfc_flux=fluxes%CFC11_flux*scale_factor)
 
     do k=1,nz ;do j=js,je ; do i=is,ie
       h_work(i,j,k) = h_old(i,j,k)
     enddo ; enddo ; enddo
     call applyTracerBoundaryFluxesInOut(G, GV, CFC12, dt, fluxes, h_work, &
                                         evap_CFL_limit, minimum_forcing_depth)
-    call tracer_vertdiff(h_work, ea, eb, dt, CFC12, G, GV, sfc_flux=fluxes%CFC12_flux)
+    call tracer_vertdiff(h_work, ea, eb, dt, CFC12, G, GV, sfc_flux=fluxes%CFC12_flux*scale_factor)
   else
-    call tracer_vertdiff(h_old, ea, eb, dt, CFC11, G, GV, sfc_flux=fluxes%CFC11_flux)
-    call tracer_vertdiff(h_old, ea, eb, dt, CFC12, G, GV, sfc_flux=fluxes%CFC12_flux)
+    call tracer_vertdiff(h_old, ea, eb, dt, CFC11, G, GV, sfc_flux=fluxes%CFC11_flux*scale_factor)
+    call tracer_vertdiff(h_old, ea, eb, dt, CFC12, G, GV, sfc_flux=fluxes%CFC12_flux*scale_factor)
   endif
 
   ! If needed, write out any desired diagnostics from tracer sources & sinks here.
+  if (CS%id_cfc11_cmor > 0) call post_data(CS%id_cfc11_cmor, CFC11*GV%Rho0, CS%diag)
+  if (CS%id_cfc12_cmor > 0) call post_data(CS%id_cfc12_cmor, CFC12*GV%Rho0, CS%diag)
 
 end subroutine CFC_cap_column_physics
 
-!> This function calculates the mass-weighted integral of all tracer stocks,
+!> Calculates the mass-weighted integral of all tracer stocks,
 !! returning the number of stocks it has calculated.  If the stock_index
 !! is present, only the stock corresponding to that coded index is returned.
 function CFC_cap_stock(h, stocks, G, GV, CS, names, units, stock_index)
@@ -343,7 +353,7 @@ function CFC_cap_stock(h, stocks, G, GV, CS, names, units, stock_index)
                                    intent(in)    :: h      !< Layer thicknesses [H ~> m or kg m-2].
   real, dimension(:),              intent(out)   :: stocks !< the mass-weighted integrated amount of each
                                                            !! tracer, in kg times concentration units [kg conc].
-  type(CFC_cap_CS),             pointer       :: CS     !< The control structure returned by a
+  type(CFC_cap_CS),                pointer       :: CS     !< The control structure returned by a
                                                            !! previous call to register_CFC_cap.
   character(len=*), dimension(:),  intent(out)   :: names  !< The names of the stocks calculated.
   character(len=*), dimension(:),  intent(out)   :: units  !< The units of the stocks calculated.
@@ -388,7 +398,7 @@ subroutine CFC_cap_surface_state(sfc_state, G, CS)
   type(ocean_grid_type),   intent(in)    :: G !< The ocean's grid structure.
   type(surface),           intent(inout) :: sfc_state !< A structure containing fields that
                                               !! describe the surface state of the ocean.
-  type(CFC_cap_CS),       pointer       :: CS !< The control structure returned by a previous
+  type(CFC_cap_CS),        pointer       :: CS!< The control structure returned by a previous
                                               !! call to register_CFC_cap.
 
   ! Local variables
@@ -405,72 +415,38 @@ subroutine CFC_cap_surface_state(sfc_state, G, CS)
 
 end subroutine CFC_cap_surface_state
 
-!> Orchestrates the calculation of the CFC fluxes, including solubility, Schmidt number,
+!> Orchestrates the calculation of the CFC fluxes [mol m-2 s-1], including solubility, Schmidt number,
 !! and gas exchange.
-subroutine CFC_cap_fluxes(cfc11_atm, cfc12_atm, fluxes, sfc_state, G)
+subroutine CFC_cap_fluxes(cfc11_atm, cfc12_atm, fluxes, sfc_state, G, Rho0)
   type(ocean_grid_type),            intent(in) :: G  !< The ocean's grid structure.
-  real, dimension(SZI_(G),SZJ_(G)), intent(in) :: cfc11_atm !< cfc11 atm concentration [??].
-  real, dimension(SZI_(G),SZJ_(G)), intent(in) :: cfc12_atm !< cfc12 atm concentration [??].
+  real, dimension(SZI_(G),SZJ_(G)), intent(in) :: cfc11_atm !< cfc11 atm concentration [mol mol-1].
+  real, dimension(SZI_(G),SZJ_(G)), intent(in) :: cfc12_atm !< cfc12 atm concentration [mol mol-1].
   type(surface),                    intent(in) :: sfc_state !< A structure containing fields
                                     !! that describe the surface state of the ocean.
   type(forcing),                    intent(inout) :: fluxes !< A structure containing pointers
                                     !! to thermodynamic and tracer forcing fields. Unused fields
                                     !! have NULL ptrs.
+  real,                             intent(in)   :: Rho0 !< The mean ocean density [kg m-3]
 
   ! Local variables
   real, dimension(SZI_(G),SZJ_(G)) :: &
-    CFC11_Csurf, &  ! The CFC-11 surface concentrations times the Schmidt number term [mol m-3].
-    CFC12_Csurf, &  ! The CFC-12 surface concentrations times the Schmidt number term [mol m-3].
-    CFC11_alpha, &  ! The CFC-11 solubility [mol m-3 pptv-1].
-    CFC12_alpha, &  ! The CFC-12 solubility [mol m-3 pptv-1].
-    kw,          &  ! gas transfer velocity [?????] GMM TODO
+    CFC11_Csurf, &  ! The CFC-11 surface concentrations times the Schmidt number term [mol kg-1].
+    CFC12_Csurf, &  ! The CFC-12 surface concentrations times the Schmidt number term [mol kg-1].
+    CFC11_alpha, &  ! The CFC-11 solubility [mol kg-1 atm-1].
+    CFC12_alpha, &  ! The CFC-12 solubility [mol kg-1 atm-1].
+    kw,          &  ! gas transfer velocity [m s-1].
     cair            ! The surface gas concentration in equilibrium with the atmosphere (saturation concentration)
-  real :: ta        ! Absolute sea surface temperature [hectoKelvin] (Why use such bizzare units?)
+                    ! [mol kg-1].
+  real :: ta        ! Absolute sea surface temperature [hectoKelvin]
   real :: sal       ! Surface salinity [PSU].
-  real :: alpha_11  ! The solubility of CFC 11 [mol m-3 pptv-1].
-  real :: alpha_12  ! The solubility of CFC 12 [mol m-3 pptv-1].
+  real :: alpha_11  ! The solubility of CFC 11 [mol kg-1 atm-1].
+  real :: alpha_12  ! The solubility of CFC 12 [mol kg-1 atm-1].
   real :: sc_11, sc_12 ! The Schmidt numbers of CFC 11 and CFC 12.
   real :: sc_no_term   ! A term related to the Schmidt number.
-  real :: d11_dflt(4), d12_dflt(4) ! values of the various coefficients
-  real :: e11_dflt(3), e12_dflt(3) ! in the expressions for the solubility
-  real :: d1_11, d1_12 ! Coefficients for calculating CFC11 and CFC12 solubilities [nondim]
-  real :: d2_11, d2_12 ! Coefficients for calculating CFC11 and CFC12 solubilities [hectoKelvin-1]
-  real :: d3_11, d3_12 ! Coefficients for calculating CFC11 and CFC12 solubilities [log(hectoKelvin)-1]
-  real :: d4_11, d4_12 ! Coefficients for calculating CFC11 and CFC12 solubilities [hectoKelvin-2]
-  real :: e1_11, e1_12 ! Coefficients for calculating CFC11 and CFC12 solubilities [PSU-1]
-  real :: e2_11, e2_12 ! Coefficients for calculating CFC11 and CFC12 solubilities [PSU-1 hectoKelvin-1]
-  real :: e3_11, e3_12 ! Coefficients for calculating CFC11 and CFC12 solubilities [PSU-2 hectoKelvin-2]
+  real, parameter :: pa_to_atm = 9.8692316931427e-6 ! factor for converting from Pa to atm.
   integer :: i, j, m, is, ie, js, je
 
   is = G%isc ; ie = G%iec ; js = G%jsc ; je = G%jec
-
-  !-----------------------------------------------------------------------
-  ! Solubility coefficients for alpha in mol/l/atm for CFC11 (_11) and CFC12 (_12)
-  ! after Warner and Weiss (1985) DSR, vol 32.
-  !-----------------------------------------------------------------------
-  d11_dflt(:) = (/ -229.9261, 319.6552, 119.4471, -1.39165 /)
-  e11_dflt(:) = (/ -0.142382, 0.091459, -0.0157274 /)
-  d12_dflt(:) = (/ -218.0971, 298.9702, 113.8049, -1.39165 /)
-  e12_dflt(:) = (/ -0.143566, 0.091015, -0.0153924 /)
-
-  d1_11 = d11_dflt(1)
-  d2_11 = d11_dflt(2)
-  d3_11 = d11_dflt(3)
-  d4_11 = d11_dflt(4)
-
-  e1_11 = e11_dflt(1)
-  e2_11 = e11_dflt(2)
-  e3_11 = e11_dflt(3)
-
-
-  d1_12 = d12_dflt(1)
-  d2_12 = d12_dflt(2)
-  d3_12 = d12_dflt(3)
-  d4_12 = d12_dflt(4)
-
-  e1_12 = e12_dflt(1)
-  e2_12 = e12_dflt(2)
-  e3_12 = e12_dflt(3)
 
   ! GMM, TODO: add OMP calls?
 
@@ -496,26 +472,26 @@ subroutine CFC_cap_fluxes(cfc11_atm, cfc12_atm, fluxes, sfc_state, G)
     !---------------------------------------------------------------------
     !     Gas exchange/piston velocity parameter
     !---------------------------------------------------------------------
-    ! pop uses xkw_coeff = 6.97e-9_r8 ! in s/cm, from a = 0.251 cm/hr s^2/m^2 in Wannikhof 2014
-    ! 6.97e-07 m/s
+    ! From a = 0.251 cm/hr s^2/m^2 in Wannikhof 2014
+    ! 6.97e-07 m/s s^2/m^2, kw = m/s
     kw(i,j) = 6.97e-07 *  ((1.0 - fluxes%ice_fraction(i,j))*fluxes%u10_sqr(i,j))
 
     ! air concentrations and cfcs BC's fluxes
-    cair(i,j) = 9.7561e-06 * CFC11_alpha(i,j) * cfc11_atm(i,j) * fluxes%p_surf_full(i,j)
-    fluxes%cfc11_flux(i,j) = kw(i,j) * (cair(i,j) - CFC11_Csurf(i,j))
-    cair(i,j) = 9.7561e-06 * CFC12_alpha(i,j) * cfc12_atm(i,j) * fluxes%p_surf_full(i,j)
-    fluxes%cfc12_flux(i,j) = kw(i,j) * (cair(i,j) - CFC12_Csurf(i,j))
+    cair(i,j) = pa_to_atm * CFC11_alpha(i,j) * cfc11_atm(i,j) * fluxes%p_surf_full(i,j)
+    fluxes%CFC11_flux(i,j) = kw(i,j) * (cair(i,j) - CFC11_Csurf(i,j)) * Rho0
+    cair(i,j) = pa_to_atm * CFC12_alpha(i,j) * cfc12_atm(i,j) * fluxes%p_surf_full(i,j)
+    fluxes%CFC12_flux(i,j) = kw(i,j) * (cair(i,j) - CFC12_Csurf(i,j)) * Rho0
   enddo ; enddo
 
 end subroutine CFC_cap_fluxes
 
 !> Calculates the CFC's solubility function following Warner and Weiss (1985) DSR, vol 32.
 subroutine get_solubility(alpha_11, alpha_12, ta, sal , mask)
-  real,                  intent(inout) :: alpha_11 !< The solubility of CFC 11 [mol m-3 atm-1]
-  real,                  intent(inout) :: alpha_12 !< The solubility of CFC 12 [mol m-3 atm-1]
-  real,                  intent(in   ) :: ta   !< Absolute sea surface temperature [hectoKelvin]
-  real,                  intent(in   ) :: sal  !< Surface salinity [PSU].
-  real,                  intent(in   ) :: mask !< ocean mask
+  real,                  intent(inout) :: alpha_11 !< The solubility of CFC 11 [mol kg-1 atm-1]
+  real,                  intent(inout) :: alpha_12 !< The solubility of CFC 12 [mol kg-1 atm-1]
+  real,                  intent(in   ) :: ta       !< Absolute sea surface temperature [hectoKelvin]
+  real,                  intent(in   ) :: sal      !< Surface salinity [PSU].
+  real,                  intent(in   ) :: mask     !< ocean mask
 
   ! Local variables
   real :: d11_dflt(4), d12_dflt(4) ! values of the various coefficients
@@ -528,15 +504,15 @@ subroutine get_solubility(alpha_11, alpha_12, ta, sal , mask)
   real :: e2_11, e2_12 ! Coefficients for calculating CFC11 and CFC12 solubilities [PSU-1 hectoKelvin-1]
   real :: e3_11, e3_12 ! Coefficients for calculating CFC11 and CFC12 solubilities [PSU-2 hectoKelvin-2]
   real :: factor       ! factor to use in the solubility conversion
+
   !-----------------------------------------------------------------------
-  ! Constants for the calculation of the function F for CFC11 (_11) and
-  ! CFC12 (_12). These are in volumetric units: mol/l/atm
-  ! From Table 5 in Warner and Weiss (1985) DSR, vol 32.
+  ! Solubility coefficients for alpha in mol/(kg atm) for CFC11 (_11) and CFC12 (_12)
+  ! from Table 5 in Warner and Weiss (1985) DSR, vol 32.
   !-----------------------------------------------------------------------
-  d11_dflt(:) = (/ -229.9261, 319.6552, 119.4471, -1.39165 /)
-  e11_dflt(:) = (/ -0.142382, 0.091459, -0.0157274 /)
-  d12_dflt(:) = (/ -218.0971, 298.9702, 113.8049, -1.39165 /)
-  e12_dflt(:) = (/ -0.143566, 0.091015, -0.0153924 /)
+  d11_dflt(:) = (/ -232.0411, 322.5546, 120.4956, -1.39165 /)
+  e11_dflt(:) = (/ -0.146531, 0.093621, -0.0160693 /)
+  d12_dflt(:) = (/ -220.2120, 301.8695, 114.8533, -1.39165 /)
+  e12_dflt(:) = (/ -0.147718, 0.093175, -0.0157340 /)
 
   d1_11 = d11_dflt(1)
   d2_11 = d11_dflt(2)
@@ -560,7 +536,7 @@ subroutine get_solubility(alpha_11, alpha_12, ta, sal , mask)
   ! The following is from Eq. 9 in Warner and Weiss (1985)
   ! The factor 1.0e+03 is for the conversion from mol/(l * atm) to mol/(m3 * atm)
   ! The factor 1.e-09 converts from mol/(l * atm) to mol/(m3 * pptv)
-  factor = 1.0e-09
+  factor = 1.0
   alpha_11 = exp(d1_11 + d2_11/ta + d3_11*log(ta) + d4_11*ta**2 +&
                  sal * ((e3_11 * ta + e2_11) * ta + e1_11)) * &
              factor * mask
@@ -599,28 +575,6 @@ subroutine comp_CFC_schmidt(sst_in, cfc11_sc, cfc12_sc)
 
 end subroutine comp_CFC_schmidt
 
-!> Copies surface CFCs from control structure into CFC11 and CFC12.
-subroutine get_surface_CFC(CS, CFC11, CFC12, G, US)
-  type(CFC_cap_CS),                pointer       :: CS  !< The control structure returned by a previous
-                                                        !! call to register_CFC_cap.
-  type(ocean_grid_type),            intent(in)    :: G  !< Grid structure.
-  type(unit_scale_type),            intent(in)    :: US !< A dimensional unit scaling type.
-  real, dimension(SZI_(G),SZJ_(G)), intent(inout) :: CFC11 !< Surface CFC11 concentration [???].
-  real, dimension(SZI_(G),SZJ_(G)), intent(inout) :: CFC12 !< Surface CFC12 concentration [???].
-
-  ! Local variables
-  integer :: i,j
-
-  !scale = US%m_to_Z ; if (present(m_to_BLD_units)) scale = m_to_BLD_units
-
-  !$OMP parallel do default(shared)
-  do j = G%jsc, G%jec ; do i = G%isc, G%iec
-    CFC11(i,j) = CS%CFC11(i,j,1)
-    CFC12(i,j) = CS%CFC12(i,j,1)
-  enddo ; enddo
-
-end subroutine get_surface_CFC
-
 !> Deallocate any memory associated with the CFC cap tracer package
 subroutine CFC_cap_end(CS)
   type(CFC_cap_CS), pointer :: CS !< The control structure returned by a
@@ -642,7 +596,7 @@ logical function CFC_cap_unit_tests(verbose)
                                  !! information for debugging unit tests
 
   ! Local variables
-  real :: dummy1, dummy2
+  real :: dummy1, dummy2, ta, sal
   !integer, parameter    :: nk = 2               ! Number of layers
 
   CFC_cap_unit_tests = .false.
@@ -655,15 +609,21 @@ logical function CFC_cap_unit_tests(verbose)
   if (.not. CFC_cap_unit_tests) write(stdout,*) 'Passed Schmidt numbers calculation'
 
   ! GMM, TODO: test get_solubility()
+  ta = max(0.01, (1.0 + 273.15) * 0.01); sal = 10.
+  ! cfc1 = 3.238 10-2 mol kg-1 atm-1
+  ! cfc2 = 7.943 10-3 mol kg-1 atm-1
+  call get_solubility(dummy1, dummy2, ta, sal , 1.0)
 
+  ta = max(0.01, (20.0 + 273.15) * 0.01); sal = 35.
+  ! cfc1 = 0.881 10-2 mol kg-1 atm-1
+  ! cfc2 = 2.446 10-3 mol kg-1 atm-1
+  call get_solubility(dummy1, dummy2, ta, sal , 1.0)
 end function CFC_cap_unit_tests
 
 !> \namespace mom_CFC_cap
 !!
-!!   By Gustavo M. Marques, 2021
-!!
 !!     This module contains the code that is needed to simulate
 !!   CFC-11 and CFC-12 using atmospheric and sea ice variables
-!!   provided via cap (using NUOPC cap is implemented so far).
+!!   provided via cap (only NUOPC cap is implemented so far).
 
 end module MOM_CFC_cap
