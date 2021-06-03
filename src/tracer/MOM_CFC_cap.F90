@@ -310,7 +310,8 @@ subroutine CFC_cap_column_physics(h_old, h_new, ea, eb, fluxes, dt, G, GV, US, C
   ! GMM, TODO: check scale_factor with Bob
   ! CFC_flux units are [mol m-2 s-1] which is the same as [CU kg m-2 s-1], where CU = mol kg-1
   ! These units are what tracer_vertdiff needs.
-  scale_factor = 1.0 !US%m_to_Z**2*US%s_to_T
+  ! mol kg-1 s-1 kg m-2
+  scale_factor = US%T_to_s
 
   if (.not.associated(CS)) return
 
@@ -477,6 +478,7 @@ subroutine CFC_cap_fluxes(cfc11_atm, cfc12_atm, fluxes, sfc_state, G, Rho0)
     kw(i,j) = 6.97e-07 *  ((1.0 - fluxes%ice_fraction(i,j))*fluxes%u10_sqr(i,j))
 
     ! air concentrations and cfcs BC's fluxes
+    ! CFC flux units: mol kg-1 s-1 kg m-2
     cair(i,j) = pa_to_atm * CFC11_alpha(i,j) * cfc11_atm(i,j) * fluxes%p_surf_full(i,j)
     fluxes%CFC11_flux(i,j) = kw(i,j) * (cair(i,j) - CFC11_Csurf(i,j)) * Rho0
     cair(i,j) = pa_to_atm * CFC12_alpha(i,j) * cfc12_atm(i,j) * fluxes%p_surf_full(i,j)
