@@ -514,7 +514,7 @@ subroutine convert_IOB_to_fluxes(IOB, fluxes, index_bounds, Time, valid_time, G,
 
     ! 10-m wind speed squared [m2/s2]
     if (associated(IOB%u10_sqr)) &
-         fluxes%u10_sqr(i,j) = US%m_to_Z**2 * US%T_to_s**2 * G%mask2dT(i,j) * IOB%u10_sqr(i-i0,j-j0)
+         fluxes%u10_sqr(i,j) = US%m_to_L**2 * US%T_to_s**2 * G%mask2dT(i,j) * IOB%u10_sqr(i-i0,j-j0)
 
     fluxes%latent(i,j) = 0.0
     ! notice minus sign since fprec is positive into the ocean
