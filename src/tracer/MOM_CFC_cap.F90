@@ -307,11 +307,12 @@ subroutine CFC_cap_column_physics(h_old, h_new, ea, eb, fluxes, dt, G, GV, US, C
 
   is = G%isc ; ie = G%iec ; js = G%jsc ; je = G%jec ; nz = GV%ke
 
-  ! GMM, TODO: check scale_factor with Bob
-  ! CFC_flux units are [mol m-2 s-1] which is the same as [CU kg m-2 s-1], where CU = mol kg-1
-  ! These units are what tracer_vertdiff needs.
-  ! mol kg-1 s-1 kg m-2
-  scale_factor = US%T_to_s
+  ! CFC_flux **unscaled** units are [mol m-2 s-1] which is the same as [CU kg m-2 s-1],
+  ! where CU = mol kg-1. However, CFC_flux has been scaled already.
+  ! CFC_flux **scaled** units are [CU L T-1 R]. We want [CU kg m-2 T-1] because
+  ! these units are what tracer_vertdiff needs.
+  ! Therefore, we need to convert [L R] to [kg m-2] using scale_factor.
+  scale_factor = US%L_to_Z * US%RZ_to_kg_m2 ! this will give [CU kg m-2 T-1], which is what verdiff wants
 
   if (.not.associated(CS)) return
 
@@ -435,7 +436,7 @@ subroutine CFC_cap_fluxes(cfc11_atm, cfc12_atm, fluxes, sfc_state, G, Rho0)
     CFC12_Csurf, &  ! The CFC-12 surface concentrations times the Schmidt number term [mol kg-1].
     CFC11_alpha, &  ! The CFC-11 solubility [mol kg-1 atm-1].
     CFC12_alpha, &  ! The CFC-12 solubility [mol kg-1 atm-1].
-    kw,          &  ! gas transfer velocity [m s-1].
+    kw_wo_sc_no_term, &  ! gas transfer velocity, without the Schmidt number term [m s-1].
     cair            ! The surface gas concentration in equilibrium with the atmosphere (saturation concentration)
                     ! [mol kg-1].
   real :: ta        ! Absolute sea surface temperature [hectoKelvin]
@@ -474,15 +475,17 @@ subroutine CFC_cap_fluxes(cfc11_atm, cfc12_atm, fluxes, sfc_state, G, Rho0)
     !     Gas exchange/piston velocity parameter
     !---------------------------------------------------------------------
     ! From a = 0.251 cm/hr s^2/m^2 in Wannikhof 2014
-    ! 6.97e-07 m/s s^2/m^2, kw = m/s
-    kw(i,j) = 6.97e-07 *  ((1.0 - fluxes%ice_fraction(i,j))*fluxes%u10_sqr(i,j))
+    ! 6.97e-07 m/s [] s^2/m^2 [L^2/T^2], kw = m/s [L/T]
+    kw_coeff = 6.97e-07 * G%US%m_to_L * G%US%T_to_s
+
+    kw_wo_sc_no_term(i,j) = kw_coeff *  ((1.0 - fluxes%ice_fraction(i,j))*fluxes%u10_sqr(i,j))
 
     ! air concentrations and cfcs BC's fluxes
     ! CFC flux units: mol kg-1 s-1 kg m-2
     cair(i,j) = pa_to_atm * CFC11_alpha(i,j) * cfc11_atm(i,j) * fluxes%p_surf_full(i,j)
-    fluxes%CFC11_flux(i,j) = kw(i,j) * (cair(i,j) - CFC11_Csurf(i,j)) * Rho0
+    fluxes%CFC11_flux(i,j) = kw_wo_sc_no_term(i,j) * (cair(i,j) - CFC11_Csurf(i,j)) * Rho0
     cair(i,j) = pa_to_atm * CFC12_alpha(i,j) * cfc12_atm(i,j) * fluxes%p_surf_full(i,j)
-    fluxes%CFC12_flux(i,j) = kw(i,j) * (cair(i,j) - CFC12_Csurf(i,j)) * Rho0
+    fluxes%CFC12_flux(i,j) = kw_wo_sc_no_term(i,j) * (cair(i,j) - CFC12_Csurf(i,j)) * Rho0
   enddo ; enddo
 
 end subroutine CFC_cap_fluxes
