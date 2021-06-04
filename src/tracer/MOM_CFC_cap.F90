@@ -445,6 +445,7 @@ subroutine CFC_cap_fluxes(cfc11_atm, cfc12_atm, fluxes, sfc_state, G, Rho0)
   real :: alpha_12  ! The solubility of CFC 12 [mol kg-1 atm-1].
   real :: sc_11, sc_12 ! The Schmidt numbers of CFC 11 and CFC 12.
   real :: sc_no_term   ! A term related to the Schmidt number.
+  real :: kw_coeff     ! A coefficient used to scale the piston velocity [L T-1 ~> m s-1]
   real, parameter :: pa_to_atm = 9.8692316931427e-6 ! factor for converting from Pa to atm.
   integer :: i, j, m, is, ie, js, je
 
