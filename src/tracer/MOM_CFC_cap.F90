@@ -364,7 +364,8 @@ function CFC_cap_stock(h, stocks, G, GV, CS, names, units, stock_index)
   integer                                        :: CFC_cap_stock !< The number of stocks calculated here.
 
   ! Local variables
-  real :: mass
+  real :: stock_scale ! The dimensional scaling factor to convert stocks to kg [kg H-1 L-2 ~> kg m-3 or nondim]
+  real :: mass        ! The cell volume or mass [H L2 ~> m3 or kg]
   integer :: i, j, k, is, ie, js, je, nz
   is = G%isc ; ie = G%iec ; js = G%jsc ; je = G%jec ; nz = GV%ke
 
@@ -382,14 +383,15 @@ function CFC_cap_stock(h, stocks, G, GV, CS, names, units, stock_index)
   call query_vardesc(CS%CFC12_desc, name=names(2), units=units(2), caller="CFC_cap_stock")
   units(1) = trim(units(1))//" kg" ; units(2) = trim(units(2))//" kg"
 
+  stock_scale = G%US%L_to_m**2 * GV%H_to_kg_m2
   stocks(1) = 0.0 ; stocks(2) = 0.0
   do k=1,nz ; do j=js,je ; do i=is,ie
-    mass = G%mask2dT(i,j) * G%US%L_to_m**2*G%areaT(i,j) * h(i,j,k)
+    mass = G%mask2dT(i,j) * G%areaT(i,j) * h(i,j,k)
     stocks(1) = stocks(1) + CS%CFC11(i,j,k) * mass
     stocks(2) = stocks(2) + CS%CFC12(i,j,k) * mass
   enddo ; enddo ; enddo
-  stocks(1) = GV%H_to_kg_m2 * stocks(1)
-  stocks(2) = GV%H_to_kg_m2 * stocks(2)
+  stocks(1) = stock_scale * stocks(1)
+  stocks(2) = stock_scale * stocks(2)
 
   CFC_cap_stock = 2
 
