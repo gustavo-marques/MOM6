@@ -572,17 +572,7 @@ subroutine convert_IOB_to_fluxes(IOB, fluxes, index_bounds, Time, valid_time, G,
 
   ! CFCs
   if (CS%use_CFC) then
-    !if ((len_trim(CS%CFC_BC_file) > 0) .and. (scan(CS%CFC_BC_file,'/') == 0)) then
-      ! extract ATM values of CFC11 and CFC12
-      call time_interp_external(CS%id_cfc11_atm,Time,cfc11_atm)
-      call time_interp_external(CS%id_cfc12_atm,Time,cfc12_atm)
-      ! convert from ppt (pico mol/mol) to mol/mol
-      cfc11_atm = cfc11_atm * 1.0e-12
-      cfc12_atm = cfc12_atm * 1.0e-12
-    !else
-      !GMM, TODO option to generete ATM cfc11 and cfc12 internally
-    !endif
-    call CFC_cap_fluxes(cfc11_atm, cfc12_atm, fluxes, sfc_state, G, CS%Rho0)
+    call CFC_cap_fluxes(fluxes, sfc_state, G, CS%Rho0, Time, CS%id_cfc11_atm, CS%id_cfc11_atm)
   endif
 
   if (associated(IOB%salt_flux)) then

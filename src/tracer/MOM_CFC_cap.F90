@@ -1,5 +1,5 @@
-!> Simulates CFCs using atmospheric and sea ice variables
-!! provided via cap (using NUOPC cap is implemented so far).
+!> Simulates CFCs using atmospheric pressure and sea ice cover
+!! provided via cap (only NUOPC cap is implemented so far).
 module MOM_CFC_cap
 
 ! This file is part of MOM6. See LICENSE.md for the license.
@@ -15,6 +15,7 @@ use MOM_io,              only : vardesc, var_desc, query_vardesc, stdout
 use MOM_open_boundary,   only : ocean_OBC_type
 use MOM_restart,         only : query_initialized, MOM_restart_CS
 use MOM_time_manager,    only : time_type
+use time_interp_external_mod, only : init_external_field, time_interp_external
 use MOM_tracer_registry, only : register_tracer, tracer_registry_type
 use MOM_tracer_diabatic, only : tracer_vertdiff, applyTracerBoundaryFluxesInOut
 use MOM_tracer_Z_init,   only : tracer_Z_init
@@ -141,7 +142,6 @@ function register_CFC_cap(HI, GV, param_file, CS, tr_Reg, restart_CS)
   CS%CFC11_name = "CFC_11" ; CS%CFC12_name = "CFC_12"
   CS%CFC11_desc = var_desc(CS%CFC11_name,"mol kg-1","Moles Per Unit Mass of CFC-11 in sea water", caller=mdl)
   CS%CFC12_desc = var_desc(CS%CFC12_name,"mol kg-1","Moles Per Unit Mass of CFC-12 in sea water", caller=mdl)
-  ! GMM, TODO: check following with Bob
   if (GV%Boussinesq) then ; flux_units = "mol s-1"
   else ; flux_units = "mol m-3 kg s-1" ; endif
 
@@ -419,18 +419,20 @@ subroutine CFC_cap_surface_state(sfc_state, G, CS)
 
 end subroutine CFC_cap_surface_state
 
-!> Orchestrates the calculation of the CFC fluxes [mol m-2 s-1], including solubility, Schmidt number,
-!! and gas exchange.
-subroutine CFC_cap_fluxes(cfc11_atm, cfc12_atm, fluxes, sfc_state, G, Rho0)
-  type(ocean_grid_type),            intent(in) :: G  !< The ocean's grid structure.
-  real, dimension(SZI_(G),SZJ_(G)), intent(in) :: cfc11_atm !< cfc11 atm concentration [mol mol-1].
-  real, dimension(SZI_(G),SZJ_(G)), intent(in) :: cfc12_atm !< cfc12 atm concentration [mol mol-1].
-  type(surface),                    intent(in) :: sfc_state !< A structure containing fields
-                                    !! that describe the surface state of the ocean.
-  type(forcing),                    intent(inout) :: fluxes !< A structure containing pointers
-                                    !! to thermodynamic and tracer forcing fields. Unused fields
-                                    !! have NULL ptrs.
-  real,                             intent(in)   :: Rho0 !< The mean ocean density [kg m-3]
+!> Orchestrates the calculation of the CFC fluxes [mol m-2 s-1], including getting the ATM
+!! concentration, and calculating the solubility, Schmidt number, and gas exchange.
+subroutine CFC_cap_fluxes(fluxes, sfc_state, G, Rho0, Time, id_cfc11_atm, id_cfc12_atm)
+  type(ocean_grid_type),        intent(in   ) :: G  !< The ocean's grid structure.
+  type(surface),                intent(in   ) :: sfc_state !< A structure containing fields
+                                              !! that describe the surface state of the ocean.
+  type(forcing),                intent(inout) :: fluxes !< A structure containing pointers
+                                              !! to thermodynamic and tracer forcing fields. Unused fields
+                                              !! have NULL ptrs.
+  real,                         intent(in   ) :: Rho0 !< The mean ocean density [kg m-3]
+  type(time_type),              intent(in   ) :: Time !< The time of the fluxes, used for interpolating the
+                                              !! CFC's concentration in the atmosphere.
+  integer,           optional,  intent(inout):: id_cfc11_atm !< id number for time_interp_external.
+  integer,           optional,  intent(inout):: id_cfc12_atm !< id number for time_interp_external.
 
   ! Local variables
   real, dimension(SZI_(G),SZJ_(G)) :: &
@@ -439,8 +441,10 @@ subroutine CFC_cap_fluxes(cfc11_atm, cfc12_atm, fluxes, sfc_state, G, Rho0)
     CFC11_alpha, &  ! The CFC-11 solubility [mol kg-1 atm-1].
     CFC12_alpha, &  ! The CFC-12 solubility [mol kg-1 atm-1].
     kw_wo_sc_no_term, &  ! gas transfer velocity, without the Schmidt number term [m s-1].
-    cair            ! The surface gas concentration in equilibrium with the atmosphere (saturation concentration)
+    cair, &         ! The surface gas concentration in equilibrium with the atmosphere (saturation concentration)
                     ! [mol kg-1].
+    cfc11_atm,     & !< CFC11 concentration in the atmopshere [pico mol/mol]
+    cfc12_atm        !< CFC11 concentration in the atmopshere [pico mol/mol]
   real :: ta        ! Absolute sea surface temperature [hectoKelvin]
   real :: sal       ! Surface salinity [PSU].
   real :: alpha_11  ! The solubility of CFC 11 [mol kg-1 atm-1].
@@ -453,11 +457,31 @@ subroutine CFC_cap_fluxes(cfc11_atm, cfc12_atm, fluxes, sfc_state, G, Rho0)
 
   is = G%isc ; ie = G%iec ; js = G%jsc ; je = G%jec
 
-  ! GMM, TODO: add OMP calls?
+  ! CFC11 ATM concentration
+  if (present(id_cfc11_atm) .and. (id_cfc11_atm /= -1)) then
+    call time_interp_external(id_cfc11_atm, Time, cfc11_atm)
+    ! convert from ppt (pico mol/mol) to mol/mol
+    cfc11_atm = cfc11_atm * 1.0e-12
+  else
+    ! TODO: create cfc11_atm internally
+    call MOM_error(FATAL, "CFC_cap_fluxes: option to create cfc11_atm internally" &
+                          "has not been implemented yet.")
+  endif
+
+  ! CFC12 ATM concentration
+  if (present(id_cfc12_atm) .and. (id_cfc12_atm /= -1)) then
+    call time_interp_external(id_cfc12_atm, Time, cfc12_atm)
+    ! convert from ppt (pico mol/mol) to mol/mol
+    cfc12_atm = cfc12_atm * 1.0e-12
+  else
+    ! TODO: create cfc11_atm internally
+    call MOM_error(FATAL, "CFC_cap_fluxes: option to create cfc12_atm internally" &
+                          "has not been implemented yet.")
+  endif
 
   do j=js,je ; do i=is,ie
-    ! cite a paper that uses this formula?
-    ta = max(0.01, (sfc_state%SST(i,j) + 273.15) * 0.01) ! Why is this in hectoKelvin?
+    ! ta in hectoKelvin
+    ta = max(0.01, (sfc_state%SST(i,j) + 273.15) * 0.01)
     sal = sfc_state%SSS(i,j)
 
     ! Calculate solubilities
