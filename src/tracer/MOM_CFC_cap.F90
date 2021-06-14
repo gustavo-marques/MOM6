@@ -464,7 +464,7 @@ subroutine CFC_cap_fluxes(fluxes, sfc_state, G, Rho0, Time, id_cfc11_atm, id_cfc
     cfc11_atm = cfc11_atm * 1.0e-12
   else
     ! TODO: create cfc11_atm internally
-    call MOM_error(FATAL, "CFC_cap_fluxes: option to create cfc11_atm internally" &
+    call MOM_error(FATAL, "CFC_cap_fluxes: option to create cfc11_atm internally" //&
                           "has not been implemented yet.")
   endif
 
@@ -475,7 +475,7 @@ subroutine CFC_cap_fluxes(fluxes, sfc_state, G, Rho0, Time, id_cfc11_atm, id_cfc
     cfc12_atm = cfc12_atm * 1.0e-12
   else
     ! TODO: create cfc11_atm internally
-    call MOM_error(FATAL, "CFC_cap_fluxes: option to create cfc12_atm internally" &
+    call MOM_error(FATAL, "CFC_cap_fluxes: option to create cfc12_atm internally" //&
                           "has not been implemented yet.")
   endif
 
