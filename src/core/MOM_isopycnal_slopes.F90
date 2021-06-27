@@ -27,7 +27,7 @@ contains
 !> Calculate isopycnal slopes, and optionally return other stratification dependent functions such as N^2
 !! and dz*S^2*g-prime used, or calculable from factors used, during the calculation.
 subroutine calc_isoneutral_slopes(G, GV, US, h, e, tv, dt_kappa_smooth, &
-                                  slope_x, slope_y, N2_u, N2_v, dzu, dzv, dzSxN, dzSyN, halo, OBC) !, eta_to_m)
+                                  slope_x, slope_y, N2_u, N2_v, dzu, dzv, dzSxN, dzSyN, halo, OBC, Rho_f) !, eta_to_m)
   type(ocean_grid_type),                       intent(in)    :: G    !< The ocean's grid structure
   type(verticalGrid_type),                     intent(in)    :: GV   !< The ocean's vertical grid structure
   type(unit_scale_type),                       intent(in)    :: US   !< A dimensional unit scaling type
@@ -58,6 +58,8 @@ subroutine calc_isoneutral_slopes(G, GV, US, h, e, tv, dt_kappa_smooth, &
                                                                      !! Eady growth rate at v-points. [Z T-1 ~> m s-1]
   integer,                           optional, intent(in)    :: halo !< Halo width over which to compute
   type(ocean_OBC_type),              optional, pointer       :: OBC  !< Open boundaries control structure.
+  real, dimension(SZI_(G),SZJ_(G),SZK_(GV)), &
+                                     optional, intent(inout) :: Rho_f!< Density filled
 
   ! real,                              optional, intent(in)    :: eta_to_m !< The conversion factor from the units
   !  (This argument has been tested but for now serves no purpose.)  !! of eta to m; US%Z_to_m by default.
@@ -65,9 +67,9 @@ subroutine calc_isoneutral_slopes(G, GV, US, h, e, tv, dt_kappa_smooth, &
   real, dimension(SZI_(G), SZJ_(G), SZK_(GV)) :: &
     T, &          ! The temperature [degC], with the values in
                   ! in massless layers filled vertically by diffusion.
-    S !, &          ! The filled salinity [ppt], with the values in
+    S, &          ! The filled salinity [ppt], with the values in
                   ! in massless layers filled vertically by diffusion.
-!    Rho           ! Density itself, when a nonlinear equation of state is not in use [R ~> kg m-3].
+    Rho           ! Density itself, when a nonlinear equation of state is not in use [R ~> kg m-3].
   real, dimension(SZI_(G), SZJ_(G),SZK_(GV)+1) :: &
     pres          ! The pressure at an interface [R L2 T-2 ~> Pa].
   real, dimension(SZIB_(G)) :: &
@@ -118,6 +120,10 @@ subroutine calc_isoneutral_slopes(G, GV, US, h, e, tv, dt_kappa_smooth, &
   integer :: i, j, k
   integer :: l_seg
   logical :: local_open_u_BC, local_open_v_BC
+  logical :: diffuse_RHO
+
+  diffuse_RHO = .false.
+  if (present(Rho_f)) diffuse_RHO = .true.
 
   if (present(halo)) then
     is = G%isc-halo ; ie = G%iec+halo ; js = G%jsc-halo ; je = G%jec+halo
@@ -212,6 +218,19 @@ subroutine calc_isoneutral_slopes(G, GV, US, h, e, tv, dt_kappa_smooth, &
 
   EOSdom_u(1) = is-1 - (G%IsdB-1) ; EOSdom_u(2) = ie - (G%IsdB-1)
 
+  if (diffuse_RHO) then
+    do j=js-1,je ; do i=is-1,ie; do k=1,nz
+      ! calculate sigma to improve accuracy
+      Rho(i,j,k) = GV%Rlay(k) - 1000.0
+    enddo ; enddo ; enddo
+
+    if (present(halo)) then
+      call vert_fill_rho(h, Rho, dt_kappa_smooth, Rho_f, G, GV, halo+1)
+    else
+      call vert_fill_rho(h, Rho, dt_kappa_smooth, Rho_f, G, GV, 1)
+    endif
+  endif
+
   !$OMP parallel do default(none) shared(nz,is,ie,js,je,IsdB,use_EOS,G,GV,US,pres,T,S,tv,h,e, &
   !$OMP                                  h_neglect,dz_neglect,Z_to_L,L_to_Z,H_to_Z,h_neglect2, &
   !$OMP                                  present_N2_u,G_Rho0,N2_u,slope_x,dzSxN,EOSdom_u,local_open_u_BC, &
@@ -221,10 +240,6 @@ subroutine calc_isoneutral_slopes(G, GV, US, h, e, tv, dt_kappa_smooth, &
   !$OMP                                  haB,haL,haR,dzaL,dzaR,wtA,wtB,wtL,wtR,drdz,  &
   !$OMP                                  drdx,mag_grad2,slope,slope2_Ratio,l_seg)
   do j=js,je ; do K=nz,2,-1
-    if (.not.(use_EOS)) then
-      drdiA = 0.0 ; drdiB = 0.0
-      drdkL = GV%Rlay(k)-GV%Rlay(k-1) ; drdkR = GV%Rlay(k)-GV%Rlay(k-1)
-    endif
 
     ! Calculate the zonal isopycnal slope.
     if (use_EOS) then
@@ -250,6 +265,13 @@ subroutine calc_isoneutral_slopes(G, GV, US, h, e, tv, dt_kappa_smooth, &
                  drho_dS_u(I) * (S(i,j,k)-S(i,j,k-1)))
         drdkR = (drho_dT_u(I) * (T(i+1,j,k)-T(i+1,j,k-1)) + &
                  drho_dS_u(I) * (S(i+1,j,k)-S(i+1,j,k-1)))
+      else ! not use_EOS
+        drdiA = 0.0 ; drdiB = 0.0
+        if (diffuse_RHO) then
+          drdkL = Rho_f(i,j,k)-Rho_f(i,j,k-1) ; drdkR = Rho_f(i+1,j,k)-Rho_f(i+1,j,k-1)
+        else
+          drdkL = GV%Rlay(k)-GV%Rlay(k-1) ; drdkR = GV%Rlay(k)-GV%Rlay(k-1)
+        endif
       endif
 
 
@@ -319,6 +341,7 @@ subroutine calc_isoneutral_slopes(G, GV, US, h, e, tv, dt_kappa_smooth, &
     enddo ! I
   enddo ; enddo ! end of j-loop
 
+
   EOSdom_v(1) = is - (G%isd-1) ; EOSdom_v(2) = ie - (G%isd-1)
 
   ! Calculate the meridional isopycnal slope.
@@ -331,10 +354,6 @@ subroutine calc_isoneutral_slopes(G, GV, US, h, e, tv, dt_kappa_smooth, &
   !$OMP                                  haB,haL,haR,dzaL,dzaR,wtA,wtB,wtL,wtR,drdz,  &
   !$OMP                                  drdy,mag_grad2,slope,slope2_Ratio,l_seg)
   do j=js-1,je ; do K=nz,2,-1
-    if (.not.(use_EOS)) then
-      drdjA = 0.0 ; drdjB = 0.0
-      drdkL = GV%Rlay(k)-GV%Rlay(k-1) ; drdkR = GV%Rlay(k)-GV%Rlay(k-1)
-    endif
 
     if (use_EOS) then
       do i=is,ie
@@ -358,6 +377,13 @@ subroutine calc_isoneutral_slopes(G, GV, US, h, e, tv, dt_kappa_smooth, &
                  drho_dS_v(i) * (S(i,j,k)-S(i,j,k-1)))
         drdkR = (drho_dT_v(i) * (T(i,j+1,k)-T(i,j+1,k-1)) + &
                  drho_dS_v(i) * (S(i,j+1,k)-S(i,j+1,k-1)))
+      else ! not use_EOS
+        drdjA = 0.0 ; drdjB = 0.0
+        if (diffuse_RHO) then
+          drdkL = Rho_f(i,j,k)-Rho_f(i,j,k-1) ; drdkR = Rho_f(i,j+1,k)-Rho_f(i,j+1,k-1)
+        else
+          drdkL = GV%Rlay(k)-GV%Rlay(k-1) ; drdkR = GV%Rlay(k)-GV%Rlay(k-1)
+        endif
       endif
 
       hg2A = h(i,j,k-1)*h(i,j+1,k-1) + h_neglect2
@@ -514,5 +540,84 @@ subroutine vert_fill_TS(h, T_in, S_in, kappa_dt, T_f, S_f, G, GV, halo_here, lar
   endif
 
 end subroutine vert_fill_TS
+
+!> Returns rho arrays with massless layers filled with
+!! sensible values, by diffusing vertically with a small but constant diffusivity.
+subroutine vert_fill_rho(h, R_in, kappa_dt, R_f, G, GV, halo_here, larger_h_denom)
+  type(ocean_grid_type),                     intent(in)  :: G    !< The ocean's grid structure
+  type(verticalGrid_type),                   intent(in)  :: GV   !< The ocean's vertical grid structure
+  real, dimension(SZI_(G),SZJ_(G),SZK_(GV)), intent(in)  :: h    !< Layer thicknesses [H ~> m or kg m-2]
+  real, dimension(SZI_(G),SZJ_(G),SZK_(GV)), intent(in)  :: R_in !< Input temperature [degC]
+  real,                                      intent(in)  :: kappa_dt !< A vertical diffusivity to use for smoothing
+                                                                 !! times a smoothing timescale [Z2 ~> m2].
+  real, dimension(SZI_(G),SZJ_(G),SZK_(GV)), intent(inout) :: R_f  !< Filled temperature [degC]
+  integer,                         optional, intent(in)  :: halo_here !< Number of halo points to work on,
+                                                                 !! 0 by default
+  logical,                         optional, intent(in)  :: larger_h_denom !< Present and true, add a large
+                                                                 !! enough minimal thickness in the denominator of
+                                                                 !! the flux calculations so that the fluxes are
+                                                                 !! never so large as eliminate the transmission
+                                                                 !! of information across groups of massless layers.
+  ! Local variables
+  real :: ent(SZI_(G),SZK_(GV)+1)  ! The diffusive entrainment (kappa*dt)/dz
+                                   ! between layers in a timestep [H ~> m or kg m-2].
+  real :: b1(SZI_(G)), d1(SZI_(G)) ! b1, c1, and d1 are variables used by the
+  real :: c1(SZI_(G),SZK_(GV))     ! tridiagonal solver.
+  real :: kap_dt_x2                ! The 2*kappa_dt converted to H units [H2 ~> m2 or kg2 m-4].
+  real :: h_neglect                ! A negligible thickness [H ~> m or kg m-2], to allow for zero thicknesses.
+  real :: h0                       ! A negligible thickness to allow for zero thickness layers without
+                                   ! completely decouping groups of layers [H ~> m or kg m-2].
+                                   ! Often 0 < h_neglect << h0.
+  real :: h_tr                     ! h_tr is h at tracer points with a tiny thickness
+                                   ! added to ensure positive definiteness [H ~> m or kg m-2].
+  integer :: i, j, k, is, ie, js, je, nz, halo
+
+  halo=0 ; if (present(halo_here)) halo = max(halo_here,0)
+
+  is = G%isc-halo ; ie = G%iec+halo ; js = G%jsc-halo ; je = G%jec+halo ; nz = GV%ke
+
+  h_neglect = GV%H_subroundoff
+  kap_dt_x2 = (2.0*kappa_dt)*GV%Z_to_H**2
+  h0 = h_neglect
+  if (present(larger_h_denom)) then
+    if (larger_h_denom) h0 = 1.0e-16*sqrt(kappa_dt)*GV%Z_to_H
+  endif
+
+  if (kap_dt_x2 <= 0.0) then
+    !$OMP parallel do default(shared)
+    do k=1,nz ; do j=js-1,je ; do i=is-1,ie
+      R_f(i,j,k) = R_in(i,j,k)
+    enddo ; enddo ; enddo
+  else
+   !$OMP parallel do default(shared) private(ent,b1,d1,c1,h_tr)
+    do j=js-1,je
+      do i=is-1,ie
+        ent(i,2) = kap_dt_x2 / ((h(i,j,1)+h(i,j,2)) + h0)
+        h_tr = h(i,j,1) + h_neglect
+        b1(i) = 1.0 / (h_tr + ent(i,2))
+        d1(i) = b1(i) * h_tr
+        R_f(i,j,1) = (b1(i)*h_tr)*R_in(i,j,1)
+      enddo
+      do k=2,nz-1 ; do i=is,ie
+        ent(i,K+1) = kap_dt_x2 / ((h(i,j,k)+h(i,j,k+1)) + h0)
+        h_tr = h(i,j,k) + h_neglect
+        c1(i,k) = ent(i,K) * b1(i)
+        b1(i) = 1.0 / ((h_tr + d1(i)*ent(i,K)) + ent(i,K+1))
+        d1(i) = b1(i) * (h_tr + d1(i)*ent(i,K))
+        R_f(i,j,k) = b1(i) * (h_tr*R_in(i,j,k) + ent(i,K)*R_f(i,j,k-1))
+      enddo ; enddo
+      do i=is,ie
+        c1(i,nz) = ent(i,nz) * b1(i)
+        h_tr = h(i,j,nz) + h_neglect
+        b1(i) = 1.0 / (h_tr + d1(i)*ent(i,nz))
+        R_f(i,j,nz) = b1(i) * (h_tr*R_in(i,j,nz) + ent(i,nz)*R_f(i,j,nz-1))
+      enddo
+      do k=nz-1,1,-1 ; do i=is,ie
+        R_f(i,j,k) = R_f(i,j,k) + c1(i,k+1)*R_f(i,j,k+1)
+      enddo ; enddo
+    enddo
+  endif
+
+end subroutine vert_fill_rho
 
 end module MOM_isopycnal_slopes

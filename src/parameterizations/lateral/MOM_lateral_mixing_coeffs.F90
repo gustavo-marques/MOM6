@@ -96,6 +96,12 @@ type, public :: VarMix_CS
                           !! spacing squared at v [L2 T-2 ~> m2 s-2].
     Rd_dx_h => NULL()     !< Deformation radius over grid spacing [nondim]
 
+  real, dimension(:,:), pointer :: &
+    N2_ref_u => NULL(), &      !< N2_ref at u points used in the Danabasoglu and Marshall
+                               !! thickness diffusivity parameterization [H T-2 ~> m s-2]
+    N2_ref_v => NULL()         !< N2_ref at v points used in the Danabasoglu and Marshall
+                               !! thickness diffusivity parameterization [H T-2 ~> m s-2]
+
   real, dimension(:,:,:), pointer :: &
     slope_x => NULL(), &  !< Zonal isopycnal slope [nondim]
     slope_y => NULL(), &  !< Meridional isopycnal slope [nondim]
@@ -103,6 +109,7 @@ type, public :: VarMix_CS
                                !! thickness diffusivity parameterization at u points [nondim]
     dm07_ratio_v => NULL(), &  !< Ratio of (N2/N2_ref) used in the Danabasoglu and Marshall
                                !! thickness diffusivity parameterization at v points [nondim]
+    Rho_f => NULL(), &         !< Density with massless layaers filled
     ebt_struct => NULL()  !< Vertical structure function to scale diffusivities with [nondim]
   real ALLOCABLE_, dimension(NIMEMB_PTR_,NJMEM_) :: &
     Laplac3_const_u       !< Laplacian metric-dependent constants [L3 ~> m3]
@@ -117,6 +124,9 @@ type, public :: VarMix_CS
     KH_v_QG               !< QG Leith GM coefficient at v-points [L2 T-1 ~> m2 s-1]
 
   ! Parameters
+  logical :: fill_rho     !< If true, returns rho arrays with massless layers filled with
+                          !! sensible values, by diffusing vertically with a small but constant diffusivity.
+                          !! It is desirable to set this option when computing N2 in layer mode.
   logical :: use_dm07     !< Use Danabasoglu and Marshall 2007 formulation for thickness diffusivity
   logical :: use_Visbeck  !< Use Visbeck formulation for thickness diffusivity
   integer :: VarMix_Ktop  !< Top layer to start downward integrals
@@ -138,8 +148,8 @@ type, public :: VarMix_CS
                                !! positive integer power may be used, but even powers
                                !! and especially 2 are coded to be more efficient.
   real :: Visbeck_S_max   !< Upper bound on slope used in Eady growth rate [nondim].
-  real :: dm07_min_ratio  !< Minimum ratio (N2/N2_ref) to be in the Danabasoglu and Marshall 2007 formulation [nondim].
-
+  real :: dm07_min_ratio  !< Minimum ratio (N2/N2_ref) to be in the Danabasoglu and Marshall 2007 [nondim].
+  real :: n2_ref_ratio    !< Fraction used to estimate N2_ref in Danabasoglu and Marshall 2007 [nondim].
   ! Leith parameters
   logical :: use_QG_Leith_GM      !< If true, uses the QG Leith viscosity as the GM coefficient
   logical :: use_beta_in_QG_Leith !< If true, includes the beta term in the QG Leith GM coefficient
@@ -152,6 +162,7 @@ type, public :: VarMix_CS
   integer :: id_dzu=-1, id_dzv=-1, id_dzSxN=-1, id_dzSyN=-1
   integer :: id_Rd_dx=-1, id_KH_u_QG = -1, id_KH_v_QG = -1
   integer :: id_dm07_ratio_u=-1, id_dm07_ratio_v=-1
+  integer :: id_N2_ref_u=-1, id_N2_ref_v=-1, id_Rho_f=-1
   type(diag_ctrl), pointer :: diag !< A structure that is used to regulate the
                                    !! timing of diagnostic output.
   !>@}
@@ -472,7 +483,7 @@ subroutine calc_slope_functions(h, tv, dt, G, GV, US, CS, OBC)
   if ((CS%use_dm07) .and. (CS%use_stored_slopes)) then
     call find_eta(h, tv, G, GV, US, e, halo_size=2)
     call calc_isoneutral_slopes(G, GV, US, h, e, tv, dt*CS%kappa_smooth, &
-                                CS%slope_x, CS%slope_y, N2_u=N2_u, N2_v=N2_v, halo=1, OBC=OBC)
+                                CS%slope_x, CS%slope_y, N2_u=N2_u, N2_v=N2_v, halo=1, OBC=OBC, Rho_f=CS%Rho_f)
     call calc_dm07(N2_u, N2_v, G, GV, US, CS)
   endif
 
@@ -507,8 +518,11 @@ subroutine calc_slope_functions(h, tv, dt, G, GV, US, CS, OBC)
     if (CS%id_L2v > 0)  call post_data(CS%id_L2v, CS%L2v, CS%diag)
     if (CS%id_N2_u > 0) call post_data(CS%id_N2_u, N2_u, CS%diag)
     if (CS%id_N2_v > 0) call post_data(CS%id_N2_v, N2_v, CS%diag)
+    if (CS%id_Rho_f > 0) call post_data(CS%id_Rho_f, CS%Rho_f, CS%diag)
     if (CS%id_dm07_ratio_u > 0) call post_data(CS%id_dm07_ratio_u, CS%dm07_ratio_u, CS%diag)
     if (CS%id_dm07_ratio_v > 0) call post_data(CS%id_dm07_ratio_v, CS%dm07_ratio_v, CS%diag)
+    if (CS%id_N2_ref_u > 0)     call post_data(CS%id_N2_ref_u, CS%N2_ref_u, CS%diag)
+    if (CS%id_N2_ref_v > 0)     call post_data(CS%id_N2_ref_v, CS%N2_ref_v, CS%diag)
   endif
 
 end subroutine calc_slope_functions
@@ -525,35 +539,50 @@ subroutine calc_dm07(N2_u, N2_v, G, GV, US, CS)
   type(VarMix_CS),                              pointer       :: CS !< Variable mixing coefficients
 
   ! Local variables
-  real :: N2_max                         ! Maximum N2 [T-1 ~> s-1]
+  real :: N2_ref                         ! Reference N2 [T-1 ~> s-1]
+  real :: depth_uv                       ! depth at u or vpoints [H ~> m]
+  real :: g_prime_surf, g_prime_bot      ! reduced gravity and the surface and bottom [H T-2 ~> m s-2]
   integer :: is, ie, js, je, nz, i, j, k ! useful indices
 
   is = G%isc ; ie = G%iec ; js = G%jsc ; je = G%jec ; nz = GV%ke
 
+  CS%dm07_ratio_u(:,:,:) = CS%dm07_min_ratio
+  CS%dm07_ratio_v(:,:,:) = CS%dm07_min_ratio
+
   !$OMP parallel do default(shared) private(N2_max)
   do j = js,je
     do I=is-1,ie
-      N2_max = 1.0E-12
-      N2_max = MAX(N2_max, MAXVAL(N2_u(I,j,:)))
-      do K=1,nz+1
-        CS%dm07_ratio_u(I,j,K) = MAX((N2_u(I,j,K)/N2_max),CS%dm07_min_ratio)
-      enddo
+      if (G%mask2dCu(I,j) > 0.5) then
+        depth_uv = 0.5 * (G%bathyT(I,j) + G%bathyT(I+1,j))
+        g_prime_surf = -0.5 * (CS%Rho_f(I,j,1)+CS%Rho_f(I+1,j,1))*GV%g_Earth/GV%Rho0
+        g_prime_bot = -0.5 * (CS%Rho_f(I,j,nz)+CS%Rho_f(I+1,j,nz))*GV%g_Earth/GV%Rho0
+        CS%N2_ref_u(I,j) = MAX(0.0, MAXVAL(N2_u(I,j,:))) !CS%n2_ref_ratio * (g_prime_surf - g_prime_bot)/depth_uv
+        do K=1,nz+1
+          CS%dm07_ratio_u(I,j,K) = MAX((N2_u(I,j,K)/CS%N2_ref_u(I,j)),CS%dm07_min_ratio)
+        enddo
+      endif
     enddo
   enddo
 
   !$OMP parallel do default(shared) private(N2_max)
   do J = js-1,je
     do i=is,ie
-      N2_max = 1.0E-12
-      N2_max = MAX(N2_max, MAXVAL(N2_v(i,J,:)))
-      do K=1,nz+1
-        CS%dm07_ratio_v(i,J,K) = MAX((N2_v(i,J,K)/N2_max),CS%dm07_min_ratio)
-      enddo
+      if (G%mask2dCv(i,J) > 0.5) then
+        depth_uv = 0.5 * (G%bathyT(i,J) + G%bathyT(i,J+1))
+        g_prime_surf = -0.5 * (CS%Rho_f(i,J,1)+CS%Rho_f(i,J+1,1))*GV%g_Earth/GV%Rho0
+        g_prime_bot = -0.5 * (CS%Rho_f(i,J,nz)+CS%Rho_f(i,J+1,nz))*GV%g_Earth/GV%Rho0
+        CS%N2_ref_v(i,J) =  MAX(0.0, MAXVAL(N2_v(i,J,:))) !CS%n2_ref_ratio * (g_prime_surf - g_prime_bot)/depth_uv
+        do K=1,nz+1
+          CS%dm07_ratio_v(i,J,K) = MAX((N2_v(i,J,K)/CS%N2_ref_v(i,J)),CS%dm07_min_ratio)
+        enddo
+      endif
     enddo
   enddo
 
   if (CS%debug) then
     call uvchksum("calc_dm07 dm07_ratio_[uv]", CS%dm07_ratio_u, CS%dm07_ratio_v, G%HI, &
+                  scalar_pair=.true.)
+    call uvchksum("calc_dm07 N2_ref_[uv]", CS%N2_ref_u, CS%N2_ref_v, G%HI, &
                   scalar_pair=.true.)
   endif
 
@@ -1349,7 +1378,7 @@ subroutine VarMix_init(Time, G, GV, US, param_file, diag, CS)
     allocate(CS%slope_y(isd:ied,JsdB:JedB,GV%ke+1)) ; CS%slope_y(:,:,:) = 0.0
     call get_param(param_file, mdl, "KD_SMOOTH", CS%kappa_smooth, &
                  "A diapycnal diffusivity that is used to interpolate "//&
-                 "more sensible values of T & S into thin layers.", &
+                 "more sensible values of T, S, and RHO into thin layers.", &
                  units="m2 s-1", default=1.0e-6, scale=US%m_to_Z**2*US%T_to_s)
   endif
 
@@ -1364,16 +1393,39 @@ subroutine VarMix_init(Time, G, GV, US, param_file, diag, CS)
 
     allocate(CS%dm07_ratio_u(IsdB:IedB,jsd:jed,GV%ke+1)) ; CS%dm07_ratio_u(:,:,:) = 0.0
     allocate(CS%dm07_ratio_v(isd:ied,JsdB:JedB,GV%ke+1)) ; CS%dm07_ratio_v(:,:,:) = 0.0
+    allocate(CS%N2_ref_u(IsdB:IedB,jsd:jed)) ; CS%N2_ref_u(:,:) = 0.0
+    allocate(CS%N2_ref_v(isd:ied,JsdB:JedB)) ; CS%N2_ref_v(:,:) = 0.0
+
+    CS%id_Rho_f = register_diag_field('ocean_model', 'Rho_f', diag%axesTl, Time, &
+       'Rho filled', 'kg m-3')
+
     CS%id_dm07_ratio_u = register_diag_field('ocean_model', 'dm07_ratio_u', diag%axesCui, Time, &
        'Ratio of (N2/N2_ref), at u-points, used in the thickness diffusivity parameterization of '//&
        'DM07', 'nondim')
     CS%id_dm07_ratio_v = register_diag_field('ocean_model', 'dm07_ratio_v', diag%axesCvi, Time, &
        'Ratio of (N2/N2_ref), at v-points, used in the thickness diffusivity parameterization of '//&
        'DM07', 'nondim')
+    CS%id_N2_ref_u = register_diag_field('ocean_model', 'N2_ref_u', diag%axesCu1, Time, &
+       'N2_ref at u-points, used in the thickness diffusivity parameterization of '//&
+       'DM07', 's-2')
+    CS%id_N2_ref_v = register_diag_field('ocean_model', 'N2_ref_v', diag%axesCv1, Time, &
+       'N2_ref at v-points, used in the thickness diffusivity parameterization of '//&
+       'DM07', 's-2')
 
     call get_param(param_file, mdl, "DM07_MIN_RATIO", CS%dm07_min_ratio,&
                  "Minimum ratio (N^2/N_ref) to be used in the Danabasoglu and Marshall (2007) \n"//&
                  "formula.", default=0.1, units="nondim")
+
+    call get_param(param_file, mdl, "N2_REF_RATIO", CS%n2_ref_ratio,&
+                 "A fraction used to determine the reference N^2 (N_ref) to be used in the Danabasoglu and Marshall \n"//&
+                 "(2007) formula. N_ref = N2_REF_RATIO * (g_prime(1) - g_prime(nz))/D, where D is the total depth.", &
+                 default=0.25, units="nondim")
+
+    call get_param(param_file, mdl, "FILL_RHO", CS%fill_rho,&
+                 "If true, returns RHO arrays with massless layers filled with \n"//&
+                 "sensible values, by diffusing vertically with a small but constant diffusivity. \n"//&
+                 "It is advisable to enable this option when computing N2 in layer mode.", default=.false.)
+    if (CS%fill_rho)  allocate(CS%Rho_f(isd:ied,jsd:jed,GV%ke)) ; CS%Rho_f(:,:,:) = 0.0
   endif
 
   if (CS%calculate_Eady_growth_rate) then
