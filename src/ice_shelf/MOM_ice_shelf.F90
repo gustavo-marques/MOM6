@@ -73,7 +73,7 @@ implicit none ; private
 
 public shelf_calc_flux, initialize_ice_shelf, ice_shelf_end, ice_shelf_query
 public ice_shelf_save_restart, solo_step_ice_shelf, add_shelf_forces
-public initialize_ice_shelf_fluxes, initialize_ice_shelf_forces
+public initialize_ice_shelf_fluxes, initialize_ice_shelf_forces, get_hmask
 
 ! A note on unit descriptions in comments: MOM6 uses units that can be rescaled for dimensional
 ! consistency testing. These are noted in comments with units like Z, H, L, and T, along with
@@ -211,6 +211,26 @@ integer :: id_clock_pass=-1  !< CPU Clock for ice shelf group pass calls
 !>@}
 
 contains
+
+
+subroutine get_hmask(CS,hmask)
+  type(ice_shelf_CS),    pointer       :: CS    !< A pointer to the control structure returned
+                                                !! by a previous call to initialize_ice_shelf.
+  real, dimension(SZDI_(CS%grid),SZDJ_(CS%grid)), intent(inout) :: hmask
+
+  ! Local variables
+  type(ocean_grid_type), pointer :: G => NULL()  !< The grid structure used by the ice shelf.
+  type(ice_shelf_state), pointer :: ISS => NULL()
+  integer :: is, ie, js, je, i, j
+  hmask(:,:) = 0.0
+  G => CS%grid
+  ISS => CS%ISS
+  is = G%isc ; ie = G%iec ; js = G%jsc ; je = G%jec
+  do j=js,je ; do i=is,ie
+    if (ISS%mass_shelf(i,j)>0.) hmask(i,j) = 1.0
+  enddo; enddo
+
+end subroutine get_hmask
 
 !> Calculates fluxes between the ocean and ice-shelf using the three-equations
 !! formulation (optional to use just two equations).

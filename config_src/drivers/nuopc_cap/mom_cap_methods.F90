@@ -16,10 +16,11 @@ use ESMF,                      only: ESMF_RC_VAL_OUTOFRANGE, ESMF_INDEX_DELOCAL,
 use ESMF,                      only: ESMF_TYPEKIND_R8, ESMF_FIELDSTATUS_COMPLETE
 use ESMF,                      only: ESMF_FieldStatus_Flag, ESMF_LOGMSG_ERROR, ESMF_FAILURE, ESMF_MAXSTR
 use ESMF,                      only: operator(/=), operator(==)
-use MOM_ocean_model_nuopc,     only: ocean_public_type, ocean_state_type
+use MOM_ocean_model_nuopc,     only: ocean_public_type, ocean_state_type, get_ice_shelf
 use MOM_surface_forcing_nuopc, only: ice_ocean_boundary_type
 use MOM_grid,                  only: ocean_grid_type
 use MOM_domains,               only: pass_var
+use MOM_ice_shelf,             only: get_hmask, ice_shelf_CS
 use mpp_domains_mod,           only: mpp_get_compute_domain
 
 ! By default make data private
@@ -326,11 +327,13 @@ subroutine mom_export(ocean_public, ocean_grid, ocean_state, exportState, clock,
   real                            :: slp_L, slp_R, slp_C
   real                            :: slope, u_min, u_max
   integer                         :: day, secs
+  type(ice_shelf_CS), pointer     :: ice_shelf_CSp => NULL()
   type(ESMF_TimeInterval)         :: timeStep
   integer                         :: dt_int
   real                            :: inv_dt_int  !< The inverse of coupling time interval in s-1.
   type(ESMF_StateItem_Flag)       :: itemFlag
   real(ESMF_KIND_R8), allocatable :: omask(:,:)
+  real, pointer,   dimension(:,:) :: hmask
   real(ESMF_KIND_R8), allocatable :: melt_potential(:,:)
   real(ESMF_KIND_R8), allocatable :: ocz(:,:), ocm(:,:)
   real(ESMF_KIND_R8), allocatable :: ocz_rot(:,:), ocm_rot(:,:)
@@ -363,13 +366,19 @@ subroutine mom_export(ocean_public, ocean_grid, ocean_state, exportState, clock,
   ! -------
   ! ocean mask
   ! -------
-
+  !call get_ice_shelf(ocean_state, ice_shelf_CSp)
+  allocate(hmask(isc:iec, jsc:jec))
+  !call get_hmask(ice_shelf_CSp, hmask)
+  hmask(:,:) = 0.
   allocate(omask(isc:iec, jsc:jec))
   do j = jsc, jec
      jg = j + ocean_grid%jsc - jsc
      do i = isc, iec
         ig = i + ocean_grid%isc - isc
         omask(i,j) = nint(ocean_grid%mask2dT(ig,jg))
+        !if (hmask(ig,jg) > 0.) then
+        !  omask(i,j) = nint(0.)
+        !endif
      enddo
   enddo
 
@@ -383,14 +392,14 @@ subroutine mom_export(ocean_public, ocean_grid, ocean_state, exportState, clock,
   ! Sea surface temperature
   ! -------
   call State_SetExport(exportState, 'sea_surface_temperature', &
-       isc, iec, jsc, jec, ocean_public%t_surf, ocean_grid, rc=rc)
+       isc, iec, jsc, jec, ocean_public%t_surf, ocean_grid, hmask=hmask, rc=rc)
   if (ChkErr(rc,__LINE__,u_FILE_u)) return
 
   ! -------
   ! Sea surface salinity
   ! -------
   call State_SetExport(exportState, 's_surf', &
-       isc, iec, jsc, jec, ocean_public%s_surf, ocean_grid, rc=rc)
+       isc, iec, jsc, jec, ocean_public%s_surf, ocean_grid, hmask=hmask, rc=rc)
   if (ChkErr(rc,__LINE__,u_FILE_u)) return
 
   ! -------
@@ -417,11 +426,11 @@ subroutine mom_export(ocean_public, ocean_grid, ocean_state, exportState, clock,
   enddo
 
   call State_SetExport(exportState, 'ocn_current_zonal', &
-       isc, iec, jsc, jec, ocz_rot, ocean_grid, rc=rc)
+       isc, iec, jsc, jec, ocz_rot, ocean_grid, hmask=hmask, rc=rc)
   if (ChkErr(rc,__LINE__,u_FILE_u)) return
 
   call State_SetExport(exportState, 'ocn_current_merid', &
-       isc, iec, jsc, jec, ocm_rot, ocean_grid, rc=rc)
+       isc, iec, jsc, jec, ocm_rot, ocean_grid, hmask=hmask, rc=rc)
   if (ChkErr(rc,__LINE__,u_FILE_u)) return
 
   deallocate(ocz, ocm, ocz_rot, ocm_rot)
@@ -432,7 +441,7 @@ subroutine mom_export(ocean_public, ocean_grid, ocean_state, exportState, clock,
   call ESMF_StateGet(exportState, 'So_bldepth', itemFlag, rc=rc)
   if (itemFlag /= ESMF_STATEITEM_NOTFOUND) then
      call State_SetExport(exportState, 'So_bldepth', &
-          isc, iec, jsc, jec, ocean_public%obld, ocean_grid, rc=rc)
+          isc, iec, jsc, jec, ocean_public%obld, ocean_grid, hmask=hmask, rc=rc)
      if (ChkErr(rc,__LINE__,u_FILE_u)) return
   endif
 
@@ -456,10 +465,11 @@ subroutine mom_export(ocean_public, ocean_grid, ocean_state, exportState, clock,
   enddo
 
   call State_SetExport(exportState, 'freezing_melting_potential', &
-       isc, iec, jsc, jec, melt_potential, ocean_grid, areacor=mod2med_areacor, rc=rc)
+       isc, iec, jsc, jec, melt_potential, ocean_grid, areacor=mod2med_areacor, hmask=hmask, rc=rc)
   if (ChkErr(rc,__LINE__,u_FILE_u)) return
 
   deallocate(melt_potential)
+  deallocate(hmask)
 
   ! -------
   ! Sea level
@@ -709,7 +719,7 @@ subroutine State_GetImport(state, fldname, isc, iec, jsc, jec, output, do_sum, a
 end subroutine State_GetImport
 
 !> Map input array to export state
-subroutine State_SetExport(state, fldname, isc, iec, jsc, jec, input, ocean_grid, areacor, rc)
+subroutine State_SetExport(state, fldname, isc, iec, jsc, jec, input, ocean_grid, areacor, hmask, rc)
   type(ESMF_State)      , intent(inout) :: state   !< ESMF state
   character(len=*)      , intent(in)    :: fldname !< Field name
   integer             , intent(in)      :: isc     !< The start i-index of cell centers within
@@ -724,9 +734,12 @@ subroutine State_SetExport(state, fldname, isc, iec, jsc, jec, input, ocean_grid
   type(ocean_grid_type) , intent(in)    :: ocean_grid !< Ocean horizontal grid
   real (ESMF_KIND_R8), optional,  intent(in) :: areacor(:) !< flux area correction factors
                                                            !! applicable to meshes
+  real, dimension(isc:iec,jsc:jec), optional, intent(in) :: hmask !< ice shelf mass
+
   integer               , intent(out)   :: rc         !< Return code
 
   ! local variables
+  real, dimension(isc:iec,jsc:jec) :: mask
   type(ESMF_StateItem_Flag)     :: itemFlag
   integer                       :: n, i, j, i1, j1, ig,jg
   integer                       :: lbnd1,lbnd2
@@ -736,6 +749,26 @@ subroutine State_SetExport(state, fldname, isc, iec, jsc, jec, input, ocean_grid
   ! ----------------------------------------------
 
   rc = ESMF_SUCCESS
+
+  mask(:,:) = 0.
+  if (present(hmask)) then
+    do j = jsc,jec
+      jg = j + ocean_grid%jsc - jsc
+      do i = isc,iec
+        ig = i + ocean_grid%isc - isc
+        mask(i,j) = ocean_grid%mask2dT(ig,jg)
+        if (hmask(i,j) > 0.) mask(i,j) = 0.
+      enddo
+    enddo
+  else
+    do j = jsc,jec
+      jg = j + ocean_grid%jsc - jsc
+      do i = isc,iec
+        ig = i + ocean_grid%isc - isc
+        mask(i,j) = ocean_grid%mask2dT(ig,jg)
+      enddo
+    enddo
+  endif
 
   ! Indexing notes:
   ! input array from "ocean_public" uses local indexing without halos
@@ -755,7 +788,7 @@ subroutine State_SetExport(state, fldname, isc, iec, jsc, jec, input, ocean_grid
            do i = isc, iec
               ig = i + ocean_grid%isc - isc
               n = n+1
-              dataPtr1d(n) = input(i,j) * ocean_grid%mask2dT(ig,jg)
+              dataPtr1d(n) = input(i,j) * mask(i,j)
            enddo
         enddo
         if (present(areacor)) then
@@ -778,7 +811,7 @@ subroutine State_SetExport(state, fldname, isc, iec, jsc, jec, input, ocean_grid
            do i = isc, iec
               i1 = i + lbnd1 - isc
               ig = i + ocean_grid%isc - isc
-              dataPtr2d(i1,j1)  = input(i,j) * ocean_grid%mask2dT(ig,jg)
+              dataPtr2d(i1,j1)  = input(i,j) * mask(i,j)
            enddo
         enddo
 

@@ -32,6 +32,7 @@ use MOM_forcing_type,        only : forcing_diagnostics, mech_forcing_diags
 use MOM_get_input,           only : Get_MOM_Input, directories
 use MOM_grid,                only : ocean_grid_type
 use MOM_io,                  only : close_file, file_exists, read_data, write_version_number
+use MOM_io,                  only : MOM_read_data
 use MOM_marine_ice,          only : iceberg_forces, iceberg_fluxes, marine_ice_init, marine_ice_CS
 use MOM_restart,             only : MOM_restart_CS, save_restart
 use MOM_string_functions,    only : uppercase
@@ -80,6 +81,8 @@ public ice_ocn_bnd_type_chksum
 public ocean_public_type_chksum
 public get_ocean_grid
 public get_eps_omesh
+public get_ice_shelf
+public get_hmask
 
 !> This type is used for communication with other components via the FMS coupler.
 !! The element names and types can be changed only with great deliberation, hence
@@ -213,9 +216,28 @@ type, public :: ocean_state_type ; private
                               !! that will be used for MOM restart files.
   type(diag_ctrl), pointer :: &
     diag => NULL()            !< A pointer to the diagnostic regulatory structure
+
+  real, dimension(:,:), pointer :: mask => NULL() !< fraction of total area occupied
+                              !! by ice shelf [nondim]
 end type ocean_state_type
 
 contains
+
+subroutine get_hmask(CS,hmask,jsd,jed,isd,ied)
+  type(ocean_state_type),    pointer   :: CS    !< A pointer to the control structure returned
+                                                !! by a previous call to initialize_ice_shelf.
+  integer, intent(in)       :: jsd,jed,isd,ied
+  real, dimension(isd:ied,jsd:jed), intent(inout) :: hmask
+
+  ! Local variables
+  integer :: i, j
+  hmask(:,:) = 0.0
+  do j=jsd,jed ; do i=isd,ied
+    hmask(i,j) = CS%mask(i,j)
+  enddo; enddo
+
+end subroutine get_hmask
+
 
 !> ocean_model_init initializes the ocean model, including registering fields
 !! for restarts and reading restart files if appropriate.
@@ -248,7 +270,6 @@ subroutine ocean_model_init(Ocean_sfc, OS, Time_init, Time_in, gas_fields_ocn, i
                       !! min(HFrz, OBLD), where OBLD is the boundary layer depth.
                       !! If HFrz <= 0 (default), melt potential will not be computed.
   logical :: use_melt_pot!< If true, allocate melt_potential array
-
 ! This include declares and sets the variable "version".
 #include "version_variable.h"
   character(len=40)  :: mdl = "ocean_model_init"  ! This module's name.
@@ -256,6 +277,10 @@ subroutine ocean_model_init(Ocean_sfc, OS, Time_init, Time_in, gas_fields_ocn, i
   integer :: secs, days
   type(param_file_type) :: param_file !< A structure to parse for run-time parameters
   logical :: use_temperature
+  !real, pointer, dimension(:,:) :: hmask
+  character(len=200)       :: inputdir              !< directory where NetCDF input files are
+  character(len=48)  :: flnam
+  integer :: jsd, jed, isd, ied, j, i
 
   call callTree_enter("ocean_model_init(), ocean_model_MOM.F90")
   if (associated(OS)) then
@@ -349,6 +374,10 @@ subroutine ocean_model_init(Ocean_sfc, OS, Time_init, Time_in, gas_fields_ocn, i
   call get_param(param_file, mdl, "ICE_SHELF",  OS%use_ice_shelf, &
                  "If true, enables the ice shelf model.", default=.false.)
 
+  call get_param(param_file, mdl, "INPUTDIR", inputdir, &
+                 "The directory in which all input files are found.", &
+                 default=".", do_not_log=.true.)
+
   call get_param(param_file, mdl, "ICEBERGS_APPLY_RIGID_BOUNDARY",  OS%icebergs_alter_ocean, &
                  "If true, allows icebergs to change boundary condition felt by ocean", default=.false.)
 
@@ -375,6 +404,20 @@ subroutine ocean_model_init(Ocean_sfc, OS, Time_init, Time_in, gas_fields_ocn, i
                             OS%forcing_CSp, OS%restore_salinity, OS%restore_temp)
 
   if (OS%use_ice_shelf)  then
+    ! GMM, this can be deleted
+    jsd = OS%grid%jsd; jed = OS%grid%jed
+    isd = OS%grid%isd; ied = OS%grid%ied
+    allocate(OS%mask(isd:ied, jsd:jed))
+    flnam = trim(inputdir) // '/ocean_mask_no_iceshelf.nc'
+    call MOM_read_data(flnam,'mask', OS%mask, OS%grid%domain)
+
+    !allocate ( hmask (isc:iec,jsc:jec))
+    !call get_hmask(OS%ice_shelf_CSp, hmask)
+    !do j=jsc,jec; do i=isc,iec
+    !  if (hmask(i,j) > 0.5) write(*,*) 'i, j, hmask ',i, j, hmask(i,j)
+    !enddo; enddo
+    !write(*,*) 'mask ',mpp_chksum(OS%mask)
+    !deallocate(hmask)
     call initialize_ice_shelf(param_file, OS%grid, OS%Time, OS%ice_shelf_CSp, &
                               OS%diag, OS%forces, OS%fluxes)
   endif
@@ -1069,6 +1112,15 @@ subroutine ocean_public_type_chksum(id, timestep, ocn)
 100 FORMAT("   CHECKSUM::",A20," = ",Z20)
 
 end subroutine ocean_public_type_chksum
+
+subroutine get_ice_shelf(OS, CSp)
+  ! Obtain the ocean grid.
+  type(ocean_state_type) :: OS
+  type(ice_shelf_CS) , pointer :: CSp
+
+  CSp => OS%ice_shelf_CSp
+  return
+end subroutine get_ice_shelf
 
 subroutine get_ocean_grid(OS, Gridp)
   ! Obtain the ocean grid.

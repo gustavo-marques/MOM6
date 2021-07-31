@@ -30,10 +30,11 @@ use MOM_domains,              only: pass_var
 use MOM_error_handler,        only: MOM_error, FATAL, is_root_pe
 use MOM_ocean_model_nuopc,    only: ice_ocean_boundary_type
 use MOM_grid,                 only: ocean_grid_type, get_global_grid_size
+use MOM_ice_shelf,            only: ice_shelf_CS
 use MOM_ocean_model_nuopc,    only: ocean_model_restart, ocean_public_type, ocean_state_type
-use MOM_ocean_model_nuopc,    only: ocean_model_init_sfc
+use MOM_ocean_model_nuopc,    only: ocean_model_init_sfc, get_hmask
 use MOM_ocean_model_nuopc,    only: ocean_model_init, update_ocean_model, ocean_model_end
-use MOM_ocean_model_nuopc,    only: get_ocean_grid, get_eps_omesh
+use MOM_ocean_model_nuopc,    only: get_ocean_grid, get_eps_omesh, get_ice_shelf
 use MOM_cap_time,             only: AlarmInit
 use MOM_cap_methods,          only: mom_import, mom_export, mom_set_geomtype, mod2med_areacor
 use MOM_cap_methods,          only: med2mod_areacor, state_diagnose
@@ -824,6 +825,8 @@ subroutine InitializeRealize(gcomp, importState, exportState, clock, rc)
   integer, allocatable                       :: petMap(:)
   integer, allocatable                       :: deLabelList(:)
   integer, allocatable                       :: indexList(:)
+  real,    pointer, dimension(:,:)           :: hmask
+  type(ice_shelf_CS), pointer                :: ice_shelf_CSp => NULL()
   integer                                    :: ioff, joff
   integer                                    :: i, j, n, i1, j1, n1, jlast
   integer                                    :: lbnd1,ubnd1,lbnd2,ubnd2
@@ -960,6 +963,9 @@ subroutine InitializeRealize(gcomp, importState, exportState, clock, rc)
 
    !Get the ocean grid and sizes of global and computational domains
    call get_ocean_grid(ocean_state, ocean_grid)
+   !call get_ice_shelf(ocean_state, ice_shelf_CSp)
+   allocate (hmask(ocean_grid%isd:ocean_grid%ied,ocean_grid%jsd:ocean_grid%jed))
+   call get_hmask(ocean_state, hmask, ocean_grid%isd, ocean_grid%ied, ocean_grid%jsd, ocean_grid%jed)
 
   if (geomtype == ESMF_GEOMTYPE_MESH) then
 
@@ -1028,7 +1034,12 @@ subroutine InitializeRealize(gcomp, importState, exportState, clock, rc)
        do i = isc, iec
          ig = i + ocean_grid%isc - isc
          n = n+1
-         mask(n) = ocean_grid%mask2dT(ig,jg)
+         mask(n) = hmask(ig,jg)!ocean_grid%mask2dT(ig,jg)
+        ! if (hmask(ig,jg) > 0.) then
+        !   mask(n) = 0. ! under ice shelf
+           !write(*,*)'under ice shelf: hmask, i, j',hmask(ig,jg), ig, jg
+           !write(*,*)'maskMesh, n',maskMesh(n), n
+        ! endif
          lon(n)  = ocean_grid%geolonT(ig,jg)
          lat(n)  = ocean_grid%geolatT(ig,jg)
        end do
@@ -1052,12 +1063,15 @@ subroutine InitializeRealize(gcomp, importState, exportState, clock, rc)
          write(err_msg, frmt)n,latMesh(n),lat(n), diff_lat, eps_omesh
          call MOM_error(FATAL, err_msg)
         end if
-        if (abs(maskMesh(n) - mask(n)) > 0) then
-          frmt = "('ERROR: ESMF mesh and MOM6 domain masks are inconsistent! - "//&
-                 "MOM n, maskMesh(n), mask(n) = ',3(i8,2x))"
-          write(err_msg, frmt)n,maskMesh(n),mask(n)
-          call MOM_error(FATAL, err_msg)
-        end if
+        ! GMM, commenting out this because the ocn mask does not know about the ice shelf
+        !while ice shelves are masked in maskMesh
+        !if (abs(maskMesh(n) - mask(n)) > 0) then
+        !  write(*,*)'maskMesh, hmask, n',maskMesh(n), mask(n), n
+        !  frmt = "('ERROR: ESMF mesh and MOM6 domain masks are inconsistent! - "//&
+        !         "MOM n, maskMesh(n), mask(n) = ',3(i8,2x))"
+        !  write(err_msg, frmt)n,maskMesh(n),mask(n)
+        !  call MOM_error(FATAL, err_msg)
+        !end if
      end do
 
      ! realize the import and export fields using the mesh
@@ -1093,6 +1107,7 @@ subroutine InitializeRealize(gcomp, importState, exportState, clock, rc)
 
      allocate(mesh_areas(numOwnedElements))
      allocate(model_areas(numOwnedElements))
+     ! GMM, model_areas needs masking without ice shelves
      k = 0
      do j = ocean_grid%jsc, ocean_grid%jec
         do i = ocean_grid%isc, ocean_grid%iec
@@ -1129,7 +1144,7 @@ subroutine InitializeRealize(gcomp, importState, exportState, clock, rc)
      deallocate(lonMesh , lon )
      deallocate(latMesh , lat )
      deallocate(maskMesh, mask)
-
+     deallocate(hmask)
   else if (geomtype == ESMF_GEOMTYPE_GRID) then
 
      !---------------------------------
