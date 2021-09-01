@@ -620,8 +620,10 @@ subroutine step_MOM_dyn_split_RK2(u, v, h, tv, visc, Time_local, dt, forces, p_s
   endif
   call vertvisc_coef(up, vp, h, forces, visc, dt_pred, G, GV, US, CS%vertvisc_CSp, &
                      CS%OBC)
+
   call vertvisc(up, vp, h, forces, visc, dt_pred, CS%OBC, CS%ADp, CS%CDp, G, &
                 GV, US, CS%vertvisc_CSp, CS%taux_bot, CS%tauy_bot, waves=waves)
+
   if (showCallTree) call callTree_wayPoint("done with vertvisc (step_MOM_dyn_split_RK2)")
   if (G%nonblocking_updates) then
     call cpu_clock_end(id_clock_vertvisc)
@@ -819,8 +821,23 @@ subroutine step_MOM_dyn_split_RK2(u, v, h, tv, visc, Time_local, dt, forces, p_s
   ! u_av <- u_av + dt d/dz visc d/dz u_av
   call cpu_clock_begin(id_clock_vertvisc)
   call vertvisc_coef(u, v, h, forces, visc, dt, G, GV, US, CS%vertvisc_CSp, CS%OBC)
+
+  ! if update MTM with dW, copy u and v
+  u_old = u
+  v_old = v
+  ! save u_old, and v_old
+  !!!!!!
+
   call vertvisc(u, v, h, forces, visc, dt, CS%OBC, CS%ADp, CS%CDp, G, GV, US, &
                 CS%vertvisc_CSp, CS%taux_bot, CS%tauy_bot,waves=waves)
+  ! if update MTM with dW
+  call explicit_mtm(u,v, u_old, v_old, h, visc, forces, dt)
+  ! in explicit_mtm:
+  !u = u + dWu * dt/h
+  !v = v + dWv * dt/h
+  ! also, option to save the "implicit" u and v before they are updated
+
+  !!!!!
   if (G%nonblocking_updates) then
     call cpu_clock_end(id_clock_vertvisc)
     call start_group_pass(CS%pass_uv, G%Domain, clock=id_clock_pass)
