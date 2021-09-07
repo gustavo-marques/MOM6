@@ -666,6 +666,8 @@ subroutine convert_IOB_to_forces(IOB, forces, index_bounds, Time, G, US, CS)
 
     call safe_alloc_ptr(forces%p_surf,isd,ied,jsd,jed)
     call safe_alloc_ptr(forces%p_surf_full,isd,ied,jsd,jed)
+    ! GMM, allocate omega_w2x
+    call safe_alloc_ptr(forces%omega_w2x,isd,ied,jsd,jed)
 
     if (CS%rigid_sea_ice) then
       call safe_alloc_ptr(forces%rigidity_ice_u,IsdB,IedB,jsd,jed)
@@ -822,6 +824,8 @@ subroutine convert_IOB_to_forces(IOB, forces, index_bounds, Time, G, US, CS)
       if (CS%read_gust_2d .and. (G%mask2dT(i,j) > 0)) gustiness = CS%gust(i,j)
       forces%ustar(i,j) = sqrt(gustiness*Irho0 + Irho0 * G%mask2dT(i,j) * &
                                sqrt(taux_at_h(i,j)**2 + tauy_at_h(i,j)**2))
+      ! GMM, compute omega_w2x below
+      forces%omega_w2x(i,j) = atan(tauy_at_h(i,j), taux_at_h(i,j))
     enddo ; enddo
     call pass_vector(forces%taux, forces%tauy, G%Domain, halo=1)
   else ! C-grid wind stresses.
