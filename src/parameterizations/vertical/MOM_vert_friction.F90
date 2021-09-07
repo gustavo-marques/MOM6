@@ -3,6 +3,7 @@ module MOM_vert_friction
 
 ! This file is part of MOM6. See LICENSE.md for the license.
 use MOM_domains,       only : pass_var, To_All, Omit_corners
+use MOM_domains,       only : pass_vector
 use MOM_diag_mediator, only : post_data, register_diag_field, safe_alloc_ptr
 use MOM_diag_mediator, only : diag_ctrl
 use MOM_debugging, only : uvchksum, hchksum
@@ -28,7 +29,7 @@ implicit none ; private
 
 public vertvisc, vertvisc_remnant, vertvisc_coef
 public vertvisc_limit_vel, vertvisc_init, vertvisc_end
-public updateCFLtruncationValue
+public explicit_mtm, updateCFLtruncationValue
 
 ! A note on unit descriptions in comments: MOM6 uses units that can be rescaled for dimensional
 ! consistency testing. These are noted in comments with units like Z, H, L, and T, along with
@@ -141,6 +142,117 @@ type, public :: vertvisc_CS ; private
 end type vertvisc_CS
 
 contains
+
+!> Perform an explicit vertical diffusion of momentum.
+!subroutine explicit_mtm(u, v, h, forces, visc, dt, OBC, ADp, CDp, G, GV, US, CS, &
+!                        Waves)
+subroutine explicit_mtm(u, v, forces, dt, G, GV, US, CS)
+  type(ocean_grid_type),   intent(in)    :: G      !< Ocean grid structure
+  type(verticalGrid_type), intent(in)    :: GV     !< Ocean vertical grid structure
+  type(unit_scale_type),   intent(in)    :: US     !< A dimensional unit scaling type
+  real, dimension(SZIB_(G),SZJ_(G),SZK_(GV)), &
+                           intent(inout) :: u      !< Zonal velocity [L T-1 ~> m s-1]
+  real, dimension(SZI_(G),SZJB_(G),SZK_(GV)), &
+                           intent(inout) :: v      !< Meridional velocity [L T-1 ~> m s-1]
+  !real, dimension(SZI_(G),SZJ_(G),SZK_(GV)), &
+  !                         intent(in)    :: h      !< Layer thickness [H ~> m or kg m-2]
+  type(mech_forcing),    intent(in)      :: forces !< A structure with the driving mechanical forces
+  !type(vertvisc_type),   intent(inout)   :: visc   !< Viscosities and bottom drag
+  real,                  intent(in)      :: dt     !< Time increment [T ~> s]
+  !type(ocean_OBC_type),  pointer         :: OBC    !< Open boundary condition structure
+  !type(accel_diag_ptrs), intent(inout)   :: ADp    !< Accelerations in the momentum
+                                                   !! equations for diagnostics
+  !type(cont_diag_ptrs),  intent(inout)   :: CDp    !< Continuity equation terms
+  type(vertvisc_CS),     pointer         :: CS     !< Vertical viscosity control structure
+  !type(wave_parameters_CS), &
+  !                 optional, pointer     :: Waves !< Container for wave/Stokes information
+
+  !CS%a_u: cpl coeffs at u pts [m/s]
+  !CS%a_v: cpl coeffs at v pts [m/s]
+
+  real, dimension(SZIB_(G),SZJ_(G)) :: omega_u
+  real, dimension(SZI_(G),SZJB_(G)) :: omega_v
+  real, dimension(SZIB_(G),SZJ_(G),SZK_(GV)) :: v_u
+  real, dimension(SZI_(G),SZJB_(G),SZK_(GV)) :: u_v
+  real, dimension(SZIB_(G),SZJ_(G),SZK_(GV)-1) :: tau_u
+  real, dimension(SZI_(G),SZJB_(G),SZK_(GV)-1) :: tau_v
+  real :: du, dv, du_v, dv_u, du2, du_rot, du_visc, dv2, dv_rot, dv_visc
+
+  integer :: i, j, k, is, ie, js, je, Isq, Ieq, Jsq, Jeq, nz
+  is = G%isc ; ie = G%iec; js = G%jsc; je = G%jec
+  Isq = G%IscB ; Ieq = G%IecB ; Jsq = G%JscB ; Jeq = G%JecB ; nz = GV%ke
+
+  ! Interpolate to omega to u-points and v-points
+  do j = js,je
+    do I = Isq,Ieq
+      omega_u(I,j) = 0.5 * (forces%omega_w2x(i,j) + forces%omega_w2x(i+1,j))
+    enddo
+  enddo
+  do J = Jsq,Jeq
+    do i = is,ie
+      omega_v(i,J) = 0.5 * (forces%omega_w2x(i,j) + forces%omega_w2x(i,j+1))
+    enddo
+  enddo
+
+  ! Interpolate v to u points and u to v points
+  do k = 1, nz
+    ! v to u points
+    do j = js,je
+      do I = Isq,Ieq
+        v_u(I,j,k) = 0.25 * (v(i+1,J,k) + v(i,J,k) + v(i,J-1,k) + v(i+1,J-1,k))
+      enddo
+    enddo
+    ! u to v points
+    do J = Jsq,Jeq
+      do i = is,ie
+        u_v(i,J,k) = 0.25 * (u(I,j+1,k) + u(I,j,k) + u(I-1,j,k) + u(I-1,j+1,k))
+      enddo
+    enddo
+  enddo
+  call pass_vector(v_u,u_v,G%Domain)
+
+  ! tau_u and tau_v
+  do k=1,nz-1
+    do j = js,je
+      do I = Isq,Ieq
+        du = u(I,j,k+1) - u(I,j,k)
+        dv_u = v_u(I,j,k+1) - v_u(I,j,k)
+        tau_u(I,j,k) = GV%H_to_Z*CS%a_u(I,j,K+1) * sqrt(du**2 + dv_u**2)
+      enddo
+    enddo
+    do J = Jsq,Jeq
+      do i = is,ie
+        du_v = u_v(i,J,k+1) - u_v(i,J,k)
+        dv   = v(i,J,k+1) - v(i,J,k)
+        tau_v(i,J,k) = GV%H_to_Z*CS%a_v(i,J,K+1) * sqrt(du_v**2 + dv**2)
+      enddo
+    enddo
+  enddo
+
+  ! Explicit rotated increment at u- and v-points (du_rot, dv_rot)
+  ! Explicit viscosity increment at u- and v-points (du_visc, dv_visc)
+  do k=1,nz-1
+    do j = js,je
+      do I = Isq,Ieq
+        du = u(I,j,k+1) - u(I,j,k)
+        du2 = u(I,j,k+2) - u(I,j,k+1)
+        du_rot  = ((tau_u(I,j,k)*cos(omega_u(I,j))) - (tau_u(I,j,k+1)*cos(omega_u(I,j)))) * dt/CS%h_u(I,j,k+1)
+        du_visc = ((GV%H_to_Z*CS%a_u(I,j,K+1)*du) - (GV%H_to_Z*CS%a_u(I,j,K+2)*du2)) * dt/CS%h_u(I,j,k+1)
+        u(I,j,k+1) = u(I,j,k+1) - du_visc + du_rot
+      enddo
+    enddo
+    do J = Jsq,Jeq
+      do i = is,ie
+        dv   = v(i,J,k+1) - v(i,J,k)
+        dv2   = v(i,J,k+2) - v(i,J,k+1)
+        dv_rot = ((tau_v(i,J,k)*sin(omega_v(i,J))) - (tau_v(i,J,k+1)*sin(omega_v(i,J)))) * dt/CS%h_v(i,J,k+1)
+        dv_visc = ((GV%H_to_Z*CS%a_v(i,J,K+1)*dv) - (GV%H_to_Z*CS%a_v(i,J,K+2)*dv2)) * dt/CS%h_v(i,J,k+1)
+        v(i,J,k+1) = u(i,J,k+1) - dv_visc + dv_rot
+      enddo
+    enddo
+  enddo
+
+end subroutine explicit_mtm
 
 !> Perform a fully implicit vertical diffusion
 !! of momentum.  Stress top and bottom boundary conditions are used.

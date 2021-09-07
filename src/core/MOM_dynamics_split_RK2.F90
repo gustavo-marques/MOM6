@@ -63,7 +63,7 @@ use MOM_tidal_forcing,         only : tidal_forcing_init, tidal_forcing_end
 use MOM_unit_scaling,          only : unit_scale_type
 use MOM_vert_friction,         only : vertvisc, vertvisc_coef, vertvisc_remnant
 use MOM_vert_friction,         only : vertvisc_init, vertvisc_end, vertvisc_CS
-use MOM_vert_friction,         only : updateCFLtruncationValue
+use MOM_vert_friction,         only : updateCFLtruncationValue, explicit_mtm
 use MOM_verticalGrid,          only : verticalGrid_type, get_thickness_units
 use MOM_verticalGrid,          only : get_flux_units, get_tr_flux_units
 use MOM_wave_interface, only: wave_parameters_CS
@@ -160,6 +160,7 @@ type, public :: MOM_dyn_split_RK2_CS ; private
   logical :: module_is_initialized = .false. !< Record whether this mouled has been initialzed.
 
   !>@{ Diagnostic IDs
+  integer :: id_uold   = -1, id_vold   = -1
   integer :: id_uh     = -1, id_vh     = -1
   integer :: id_umo    = -1, id_vmo    = -1
   integer :: id_umo_2d = -1, id_vmo_2d = -1
@@ -822,16 +823,21 @@ subroutine step_MOM_dyn_split_RK2(u, v, h, tv, visc, Time_local, dt, forces, p_s
   call cpu_clock_begin(id_clock_vertvisc)
   call vertvisc_coef(u, v, h, forces, visc, dt, G, GV, US, CS%vertvisc_CSp, CS%OBC)
 
-  ! if update MTM with dW, copy u and v
-  u_old = u
-  v_old = v
+  !u_old = u
+  !v_old = v
   ! save u_old, and v_old
   !!!!!!
 
   call vertvisc(u, v, h, forces, visc, dt, CS%OBC, CS%ADp, CS%CDp, G, GV, US, &
                 CS%vertvisc_CSp, CS%taux_bot, CS%tauy_bot,waves=waves)
-  ! if update MTM with dW
-  call explicit_mtm(u,v, u_old, v_old, h, visc, forces, dt)
+
+  !GMM, if update MTM with dW, option to save u_old and v_old
+  if (CS%id_uold         > 0) call post_data(CS%id_uold , u, CS%diag)
+  if (CS%id_vold         > 0) call post_data(CS%id_vold , v, CS%diag)
+
+  ! GMM, if update MTM with dW
+  call explicit_mtm(u, v, forces, dt, G, GV, US, CS%vertvisc_CSp)
+  !call explicit_mtm(u,v, u_old, v_old, h, visc, forces, dt)
   ! in explicit_mtm:
   !u = u + dWu * dt/h
   !v = v + dWv * dt/h
@@ -1483,6 +1489,11 @@ subroutine initialize_dyn_split_RK2(u, v, h, uh, vh, eta, Time, G, GV, US, param
   call cpu_clock_end(id_clock_pass_init)
 
   flux_units = get_flux_units(GV)
+  CS%id_uold = register_diag_field('ocean_model', 'uold', diag%axesCuL, Time,              &
+      'Zonal velocity before explicit update', 'm s-1', conversion=US%L_T_to_m_s)
+  CS%id_vold = register_diag_field('ocean_model', 'vold', diag%axesCvL, Time,              &
+      'Meridional velocity before explicit update', 'm s-1', conversion=US%L_T_to_m_s)
+
   CS%id_uh = register_diag_field('ocean_model', 'uh', diag%axesCuL, Time, &
       'Zonal Thickness Flux', flux_units, conversion=GV%H_to_MKS*US%L_to_m**2*US%s_to_T, &
       y_cell_method='sum', v_extensive=.true.)
