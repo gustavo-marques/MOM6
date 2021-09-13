@@ -66,7 +66,7 @@ type, public :: hor_visc_CS ; private
   logical :: Leith_Ah        !< If true, use a biharmonic form of 2D Leith
                              !! nonlinear eddy viscosity. AH is the background.
   logical :: use_QG_Leith_visc    !< If true, use QG Leith nonlinear eddy viscosity.
-                             !! KH is the background value.
+                             !! This can be enabled with either Laplacian or biharmonic.
   logical :: bound_Coriolis  !< If true & SMAGORINSKY_AH is used, the biharmonic
                              !! viscosity is modified to include a term that
                              !! scales quadratically with the velocity shears.
@@ -769,17 +769,6 @@ subroutine horizontal_viscosity(u, v, h, diffu, diffv, MEKE, VarMix, G, GV, US, 
         vort_xy_dy(I,j) = DX_dyBu * (vort_xy(I,J) * G%IdxCv(i,J) - vort_xy(I,J-1) * G%IdxCv(i,J-1))
       enddo ; enddo
 
-      ! Laplacian of vorticity
-      do J=Jsq-1,Jeq+1 ; do I=Isq-1,Ieq+1
-        DY_dxBu = G%dyBu(I,J) * G%IdxBu(I,J)
-        DX_dyBu = G%dxBu(I,J) * G%IdyBu(I,J)
-
-        Del2vort_q(I,J) = DY_dxBu * (vort_xy_dx(i+1,J) * G%IdyCv(i+1,J) - vort_xy_dx(i,J) * G%IdyCv(i,J)) + &
-                        DX_dyBu * (vort_xy_dy(I,j+1) * G%IdyCu(I,j+1) - vort_xy_dy(I,j) * G%IdyCu(I,j))
-      enddo ; enddo
-      do J=Jsq,Jeq+1 ; do I=Isq,Ieq+1
-        Del2vort_h(i,j) = 0.25*(Del2vort_q(I,J) + Del2vort_q(I-1,J) + Del2vort_q(I,J-1) + Del2vort_q(I-1,J-1))
-      enddo ; enddo
 
       if (CS%modified_Leith) then
 
@@ -844,6 +833,18 @@ subroutine horizontal_viscosity(u, v, h, diffu, diffv, MEKE, VarMix, G, GV, US, 
                                      vort_xy_dx, vort_xy_dy)
 
       endif
+
+      ! Laplacian of vorticity or QG-PV when QG-Leith is enabled
+      do J=Jsq-1,Jeq+1 ; do I=Isq-1,Ieq+1
+        DY_dxBu = G%dyBu(I,J) * G%IdxBu(I,J)
+        DX_dyBu = G%dxBu(I,J) * G%IdyBu(I,J)
+
+        Del2vort_q(I,J) = DY_dxBu * (vort_xy_dx(i+1,J) * G%IdyCv(i+1,J) - vort_xy_dx(i,J) * G%IdyCv(i,J)) + &
+                        DX_dyBu * (vort_xy_dy(I,j+1) * G%IdyCu(I,j+1) - vort_xy_dy(I,j) * G%IdyCu(I,j))
+      enddo ; enddo
+      do J=Jsq,Jeq+1 ; do I=Isq,Ieq+1
+        Del2vort_h(i,j) = 0.25*(Del2vort_q(I,J) + Del2vort_q(I-1,J) + Del2vort_q(I,J-1) + Del2vort_q(I-1,J-1))
+      enddo ; enddo
 
       do j=Jsq,Jeq+1 ; do i=Isq,Ieq+1
         grad_vort_mag_h(i,j) = SQRT((0.5*(vort_xy_dx(i,J) + vort_xy_dx(i,J-1)))**2 + &
@@ -1879,12 +1880,6 @@ subroutine hor_visc_init(Time, G, GV, US, param_file, diag, CS, MEKE, ADp)
                  "The nondimensional Laplacian Leith constant, "//&
                  "often set to 1.0", units="nondim", default=0.0, &
                   fail_if_missing = CS%Leith_Kh)
-      call get_param(param_file, mdl, "USE_QG_LEITH_VISC", CS%use_QG_Leith_visc, &
-                 "If true, use QG Leith nonlinear eddy viscosity.", &
-                 default=.false.)
-      if (CS%use_QG_Leith_visc .and. .not. CS%Leith_Kh) call MOM_error(FATAL, &
-                 "MOM_lateral_mixing_coeffs.F90, VarMix_init:"//&
-                 "LEITH_KH must be True when USE_QG_LEITH_VISC=True.")
     endif
     if (CS%Leith_Kh .or. CS%Leith_Ah .or. get_all) then
       call get_param(param_file, mdl, "USE_BETA_IN_LEITH", CS%use_beta_in_Leith, &
@@ -1894,6 +1889,12 @@ subroutine hor_visc_init(Time, G, GV, US, param_file, diag, CS, MEKE, ADp)
                  "If true, add a term to Leith viscosity which is \n"//&
                  "proportional to the gradient of divergence.", &
                  default=.false.)
+      call get_param(param_file, mdl, "USE_QG_LEITH_VISC", CS%use_QG_Leith_visc, &
+                 "If true, use QG Leith nonlinear eddy viscosity.", &
+                 default=.false.)
+      if (CS%use_QG_Leith_visc .and. .not. (CS%Leith_Kh .or. CS%Leith_Ah)) call MOM_error(FATAL, &
+                 "MOM_lateral_mixing_coeffs.F90, VarMix_init:"//&
+                 "LEITH_KH or LEITH_AH must be True when USE_QG_LEITH_VISC=True.")
     endif
     call get_param(param_file, mdl, "BOUND_KH", CS%bound_Kh, &
                  "If true, the Laplacian coefficient is locally limited "//&
