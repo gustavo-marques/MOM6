@@ -296,6 +296,9 @@ subroutine convert_IOB_to_fluxes(IOB, fluxes, index_bounds, Time, valid_time, G,
     call allocate_forcing_type(G, fluxes, water=.true., heat=.true., ustar=.true., &
                                press=.true., fix_accum_bug=CS%fix_ustar_gustless_bug)
 
+    ! GMM, allocate omega_w2x
+    call safe_alloc_ptr(fluxes%omega_w2x,isd,ied,jsd,jed)
+
     call safe_alloc_ptr(fluxes%sw_vis_dir,isd,ied,jsd,jed)
     call safe_alloc_ptr(fluxes%sw_vis_dif,isd,ied,jsd,jed)
     call safe_alloc_ptr(fluxes%sw_nir_dir,isd,ied,jsd,jed)

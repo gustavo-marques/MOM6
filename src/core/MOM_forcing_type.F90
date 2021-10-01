@@ -2232,6 +2232,12 @@ subroutine copy_back_forcing_fields(fluxes, forces, G)
     enddo ; enddo
   endif
 
+  if (associated(forces%omega_w2x) .and. associated(fluxes%omega_w2x)) then
+    do j=js,je ; do i=is,ie
+      forces%omega_w2x(i,j) = fluxes%omega_w2x(i,j)
+    enddo ; enddo
+  endif
+
 end subroutine copy_back_forcing_fields
 
 !> Offer mechanical forcing fields for diagnostics for those
@@ -3160,6 +3166,7 @@ end subroutine myAlloc
 subroutine deallocate_forcing_type(fluxes)
   type(forcing), intent(inout) :: fluxes !< Forcing fields structure
 
+  if (associated(fluxes%omega_w2x))            deallocate(fluxes%omega_w2x)
   if (associated(fluxes%ustar))                deallocate(fluxes%ustar)
   if (associated(fluxes%ustar_gustless))       deallocate(fluxes%ustar_gustless)
   if (associated(fluxes%buoy))                 deallocate(fluxes%buoy)
