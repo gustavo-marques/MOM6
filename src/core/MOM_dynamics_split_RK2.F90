@@ -1,4 +1,3 @@
-!> Time step the adiabatic dynamic core of MOM using RK2 method.
 module MOM_dynamics_split_RK2
 
 ! This file is part of MOM6. See LICENSE.md for the license.
@@ -18,6 +17,7 @@ use MOM_diag_mediator,     only : register_diag_field, register_static_field
 use MOM_diag_mediator,     only : set_diag_mediator_grid, diag_ctrl, diag_update_remap_grids
 use MOM_domains,           only : To_South, To_West, To_All, CGRID_NE, SCALAR_PAIR
 use MOM_domains,           only : To_North, To_East, Omit_Corners
+use MOM_domains,           only : pass_vector
 use MOM_domains,           only : create_group_pass, do_group_pass, group_pass_type
 use MOM_domains,           only : start_group_pass, complete_group_pass, pass_var
 use MOM_debugging,         only : hchksum, uvchksum
@@ -63,7 +63,7 @@ use MOM_tidal_forcing,         only : tidal_forcing_init, tidal_forcing_end
 use MOM_unit_scaling,          only : unit_scale_type
 use MOM_vert_friction,         only : vertvisc, vertvisc_coef, vertvisc_remnant
 use MOM_vert_friction,         only : vertvisc_init, vertvisc_end, vertvisc_CS
-use MOM_vert_friction,         only : updateCFLtruncationValue, explicit_mtm
+use MOM_vert_friction,         only : updateCFLtruncationValue, explicit_mtm, rotate_increment
 use MOM_verticalGrid,          only : verticalGrid_type, get_thickness_units
 use MOM_verticalGrid,          only : get_flux_units, get_tr_flux_units
 use MOM_wave_interface, only: wave_parameters_CS
@@ -319,6 +319,8 @@ subroutine step_MOM_dyn_split_RK2(u, v, h, tv, visc, Time_local, dt, forces, p_s
     ! eta_pred is the predictor value of the free surface height or column mass,
     ! [H ~> m or kg m-2].
 
+  real, dimension(SZIB_(G),SZJ_(G),SZK_(GV)) :: uold
+  real, dimension(SZI_(G),SZJB_(G),SZK_(GV)) :: vold
   real, dimension(SZIB_(G),SZJ_(G),SZK_(GV)) :: u_old_rad_OBC
   real, dimension(SZI_(G),SZJB_(G),SZK_(GV)) :: v_old_rad_OBC
     ! u_old_rad_OBC and v_old_rad_OBC are the starting velocities, which are
@@ -807,6 +809,24 @@ subroutine step_MOM_dyn_split_RK2(u, v, h, tv, visc, Time_local, dt, forces, p_s
   enddo
   call cpu_clock_end(id_clock_mom_update)
 
+  ! GMM, up is updated with BC = PGF + Coriolis + Horizontal divergence
+  ! BT = barotropic
+  ! uold = un + (BT + BC) * dt
+  uold(:,:,:) = 0.0
+  vold(:,:,:) = 0.0
+  do k=1,nz
+    do j = js,je
+      do I = Isq,Ieq
+        uold(I,j,k) = u(I,j,k)
+      enddo
+    enddo
+    do J = Jsq,Jeq
+      do i = is,ie
+        vold(i,J,k) = v(i,J,k)
+      enddo
+    enddo
+  enddo
+
   if (CS%debug) then
     call uvchksum("Corrector 1 [uv]", u, v, G%HI,haloshift=0, symmetric=sym, scale=US%L_T_to_m_s)
     call hchksum(h, "Corrector 1 h", G%HI, haloshift=2, scale=GV%H_to_m)
@@ -823,27 +843,9 @@ subroutine step_MOM_dyn_split_RK2(u, v, h, tv, visc, Time_local, dt, forces, p_s
   call cpu_clock_begin(id_clock_vertvisc)
   call vertvisc_coef(u, v, h, forces, visc, dt, G, GV, US, CS%vertvisc_CSp, CS%OBC)
 
-  !u_old = u
-  !v_old = v
-  ! save u_old, and v_old
-  !!!!!!
-
   call vertvisc(u, v, h, forces, visc, dt, CS%OBC, CS%ADp, CS%CDp, G, GV, US, &
                 CS%vertvisc_CSp, CS%taux_bot, CS%tauy_bot,waves=waves)
 
-  !GMM, if update MTM with dW, option to save u_old and v_old
-  if (CS%id_uold         > 0) call post_data(CS%id_uold , u, CS%diag)
-  if (CS%id_vold         > 0) call post_data(CS%id_vold , v, CS%diag)
-
-  ! GMM, if update MTM with dW
-  call explicit_mtm(u, v, forces, dt, G, GV, US, CS%vertvisc_CSp)
-  !call explicit_mtm(u,v, u_old, v_old, h, visc, forces, dt)
-  ! in explicit_mtm:
-  !u = u + dWu * dt/h
-  !v = v + dWv * dt/h
-  ! also, option to save the "implicit" u and v before they are updated
-
-  !!!!!
   if (G%nonblocking_updates) then
     call cpu_clock_end(id_clock_vertvisc)
     call start_group_pass(CS%pass_uv, G%Domain, clock=id_clock_pass)
@@ -852,6 +854,14 @@ subroutine step_MOM_dyn_split_RK2(u, v, h, tv, visc, Time_local, dt, forces, p_s
   call vertvisc_remnant(visc, CS%visc_rem_u, CS%visc_rem_v, dt, G, GV, US, CS%vertvisc_CSp)
   call cpu_clock_end(id_clock_vertvisc)
   if (showCallTree) call callTree_wayPoint("done with vertvisc (step_MOM_dyn_split_RK2)")
+
+  ! GMM, TODO
+  ! if (CS%add_explicit_mtm) then
+  call pass_vector(uold,vold,G%Domain)
+  ! GMM, if update MTM with explicit viscosity and rotated terms
+  ! call explicit_mtm(u, v, uold, vold, forces, dt, G, GV, US, CS%vertvisc_CSp)
+  !endif
+  call rotate_increment(u, v, uold, vold, forces, dt, G, GV, US, CS%vertvisc_CSp)
 
 ! Later, h_av = (h_in + h_out)/2, but for now use h_av to store h_in.
   !$OMP parallel do default(shared)
@@ -865,6 +875,7 @@ subroutine step_MOM_dyn_split_RK2(u, v, h, tv, visc, Time_local, dt, forces, p_s
   else
     call do_group_pass(CS%pass_uv, G%Domain, clock=id_clock_pass)
   endif
+
 
   ! uh = u_av * h
   ! h  = h + dt * div . uh
@@ -908,6 +919,8 @@ subroutine step_MOM_dyn_split_RK2(u, v, h, tv, visc, Time_local, dt, forces, p_s
     enddo ; enddo
   enddo
 
+  if (CS%id_uold > 0) call post_data(CS%id_uold , uold, CS%diag)
+  if (CS%id_vold > 0) call post_data(CS%id_vold , vold, CS%diag)
   !   The time-averaged free surface height has already been set by the last
   !  call to btstep.
 

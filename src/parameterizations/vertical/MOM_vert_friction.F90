@@ -29,7 +29,7 @@ implicit none ; private
 
 public vertvisc, vertvisc_remnant, vertvisc_coef
 public vertvisc_limit_vel, vertvisc_init, vertvisc_end
-public explicit_mtm, updateCFLtruncationValue
+public explicit_mtm, updateCFLtruncationValue, rotate_increment
 
 ! A note on unit descriptions in comments: MOM6 uses units that can be rescaled for dimensional
 ! consistency testing. These are noted in comments with units like Z, H, L, and T, along with
@@ -144,16 +144,18 @@ end type vertvisc_CS
 contains
 
 !> Perform an explicit vertical diffusion of momentum.
-!subroutine explicit_mtm(u, v, h, forces, visc, dt, OBC, ADp, CDp, G, GV, US, CS, &
-!                        Waves)
-subroutine explicit_mtm(u, v, forces, dt, G, GV, US, CS)
+subroutine explicit_mtm(ui, vi, u, v, forces, dt, G, GV, US, CS)
   type(ocean_grid_type),   intent(in)    :: G      !< Ocean grid structure
   type(verticalGrid_type), intent(in)    :: GV     !< Ocean vertical grid structure
   type(unit_scale_type),   intent(in)    :: US     !< A dimensional unit scaling type
   real, dimension(SZIB_(G),SZJ_(G),SZK_(GV)), &
-                           intent(inout) :: u      !< Zonal velocity [L T-1 ~> m s-1]
+                           intent(in) :: ui      !< Zonal velocity after vertvisc [L T-1 ~> m s-1]
   real, dimension(SZI_(G),SZJB_(G),SZK_(GV)), &
-                           intent(inout) :: v      !< Meridional velocity [L T-1 ~> m s-1]
+                           intent(in) :: vi      !< Meridional velocity after vertvisc [L T-1 ~> m s-1]
+  real, dimension(SZIB_(G),SZJ_(G),SZK_(GV)), &
+                           intent(inout) :: u   !< Old Zonal velocity [L T-1 ~> m s-1]
+  real, dimension(SZI_(G),SZJB_(G),SZK_(GV)), &
+                           intent(inout) :: v   !< Old Meridional velocity [L T-1 ~> m s-1]
   !real, dimension(SZI_(G),SZJ_(G),SZK_(GV)), &
   !                         intent(in)    :: h      !< Layer thickness [H ~> m or kg m-2]
   type(mech_forcing),    intent(in)      :: forces !< A structure with the driving mechanical forces
@@ -167,22 +169,38 @@ subroutine explicit_mtm(u, v, forces, dt, G, GV, US, CS)
   !type(wave_parameters_CS), &
   !                 optional, pointer     :: Waves !< Container for wave/Stokes information
 
+  ! Local varibles
+
   !CS%a_u: cpl coeffs at u pts [m/s]
   !CS%a_v: cpl coeffs at v pts [m/s]
 
   real, dimension(SZIB_(G),SZJ_(G)) :: omega_u
   real, dimension(SZI_(G),SZJB_(G)) :: omega_v
+  ! explicit
+  real, dimension(SZIB_(G),SZJ_(G),SZK_(GV)) :: du_viscX
+  real, dimension(SZI_(G),SZJB_(G),SZK_(GV)) :: dv_viscX
+  ! implicit
+  real, dimension(SZIB_(G),SZJ_(G),SZK_(GV)) :: du_viscI
+  real, dimension(SZI_(G),SZJB_(G),SZK_(GV)) :: dv_viscI
+  ! rotated
+  real, dimension(SZIB_(G),SZJ_(G),SZK_(GV)) :: du_rot
+  real, dimension(SZI_(G),SZJB_(G),SZK_(GV)) :: dv_rot
+  ! others
   real, dimension(SZIB_(G),SZJ_(G),SZK_(GV)) :: v_u
   real, dimension(SZI_(G),SZJB_(G),SZK_(GV)) :: u_v
-  real, dimension(SZIB_(G),SZJ_(G),SZK_(GV)-1) :: tau_u
-  real, dimension(SZI_(G),SZJB_(G),SZK_(GV)-1) :: tau_v
-  real :: du, dv, du_v, dv_u, du2, du_rot, du_visc, dv2, dv_rot, dv_visc
-
+  real, dimension(SZIB_(G),SZJ_(G),SZK_(GV)) :: tau_u
+  real, dimension(SZI_(G),SZJB_(G),SZK_(GV)) :: tau_v
+  real :: du, dv, du_v, dv_u, du2, dv2
+  real :: a_u, a_v
   integer :: i, j, k, is, ie, js, je, Isq, Ieq, Jsq, Jeq, nz
   is = G%isc ; ie = G%iec; js = G%jsc; je = G%jec
   Isq = G%IscB ; Ieq = G%IecB ; Jsq = G%JscB ; Jeq = G%JecB ; nz = GV%ke
 
   ! Interpolate to omega to u-points and v-points
+  ! TODO: make omega a function of depth
+  omega_u(:,:) = 0.
+  omega_v(:,:) = 0.
+  !call pass_var(forces%omega_w2x,G%Domain)
   do j = js,je
     do I = Isq,Ieq
       omega_u(I,j) = 0.5 * (forces%omega_w2x(i,j) + forces%omega_w2x(i+1,j))
@@ -193,66 +211,296 @@ subroutine explicit_mtm(u, v, forces, dt, G, GV, US, CS)
       omega_v(i,J) = 0.5 * (forces%omega_w2x(i,j) + forces%omega_w2x(i,j+1))
     enddo
   enddo
+  call pass_vector(omega_u,omega_v,G%Domain)
 
+  if (CS%debug) then
+    call uvchksum("omega_[uv]", omega_u, omega_v, G%HI, haloshift=0, scalar_pair=.true.)
+    call uvchksum("CS%h_[uv]", CS%h_u, CS%h_v, G%HI, haloshift=0, scalar_pair=.true.)
+    call uvchksum("CS%a_[uv]", CS%a_u, CS%a_v, G%HI, haloshift=0, scalar_pair=.true.)
+  endif
+
+  call pass_vector(u,v,G%Domain)
+  v_u(:,:,:) = 0.
+  u_v(:,:,:) = 0.
+  du_viscI(:,:,:) = 0.0
+  dv_viscI(:,:,:) = 0.0
   ! Interpolate v to u points and u to v points
   do k = 1, nz
     ! v to u points
     do j = js,je
       do I = Isq,Ieq
-        v_u(I,j,k) = 0.25 * (v(i+1,J,k) + v(i,J,k) + v(i,J-1,k) + v(i+1,J-1,k))
+        if (G%mask2dCu(I,j) > 0.5) then
+          !v_u(I,j,k) = ((v(i+1,J,k) * G%mask2dCv(i+1,J)) + (v(i,J,k)*G%mask2dCv(i,J)) + &
+          !             (v(i,J-1,k)*G%mask2dCv(i,J-1)) + (v(i+1,J-1,k)*G%mask2dCv(i+1,J-1)))/ &
+          !             (G%mask2dCv(i+1,J)+ G%mask2dCv(i,J) + G%mask2dCv(i,J-1) + G%mask2dCv(i+1,J-1))
+          v_u(I,j,k) = 0.25 * (v(i+1,J,k) + v(i,J,k) + v(i,J-1,k) + v(i+1,J-1,k))
+          du_viscI(I,j,k) = ui(I,j,k) - u(I,j,k)
+        endif
       enddo
     enddo
     ! u to v points
     do J = Jsq,Jeq
       do i = is,ie
-        u_v(i,J,k) = 0.25 * (u(I,j+1,k) + u(I,j,k) + u(I-1,j,k) + u(I-1,j+1,k))
+        if (G%mask2dCv(i,J) > 0.5) then
+          !u_v(i,J,k) = ((u(I,j+1,k)*G%mask2dCu(I,j+1)) + (u(I,j,k)*G%mask2dCu(I,j)) + &
+          !             (u(I-1,j,k)*G%mask2dCu(I-1,j)) + (u(I-1,j+1,k)*G%mask2dCu(I-1,j+1)))/ &
+          !             (G%mask2dCu(I,j+1) + G%mask2dCu(I,j) + G%mask2dCu(I-1,j) + G%mask2dCu(I-1,j+1))
+          u_v(i,J,k) = 0.25 * (u(I,j+1,k) + u(I,j,k) + u(I-1,j,k) + u(I-1,j+1,k))
+          dv_viscI(i,J,k) = vi(i,J,k) - v(i,J,k)
+        endif
       enddo
     enddo
   enddo
+
   call pass_vector(v_u,u_v,G%Domain)
 
+  tau_u(:,:,:) = 0.0
+  tau_v(:,:,:) = 0.0
   ! tau_u and tau_v
   do k=1,nz-1
     do j = js,je
       do I = Isq,Ieq
-        du = u(I,j,k+1) - u(I,j,k)
-        dv_u = v_u(I,j,k+1) - v_u(I,j,k)
-        tau_u(I,j,k) = GV%H_to_Z*CS%a_u(I,j,K+1) * sqrt(du**2 + dv_u**2)
+        if ((G%mask2dCu(I,j) > 0.5) .and. (CS%a_u(I,j,k+1) < 0.05)) then
+          du = u(I,j,k+1) - u(I,j,k)
+          dv_u = v_u(I,j,k+1) - v_u(I,j,k)
+          if ((abs(dv_u) < 1.) .and. (abs(du) < 1.))  tau_u(I,j,k) = CS%a_u(I,j,K+1) * sqrt(du**2 + dv_u**2)
+        endif
       enddo
     enddo
     do J = Jsq,Jeq
       do i = is,ie
-        du_v = u_v(i,J,k+1) - u_v(i,J,k)
-        dv   = v(i,J,k+1) - v(i,J,k)
-        tau_v(i,J,k) = GV%H_to_Z*CS%a_v(i,J,K+1) * sqrt(du_v**2 + dv**2)
+        if ((G%mask2dCv(i,J) > 0.5) .and. (CS%a_v(i,J,k+1) < 0.05)) then
+          du_v = u_v(i,J,k+1) - u_v(i,J,k)
+          dv   = v(i,J,k+1) - v(i,J,k)
+          !du_v = 0.01
+          !dv = 0.01
+          if ((abs(du_v) < 1.) .and. (abs(dv) < 1.)) tau_v(i,J,k) = CS%a_v(i,J,K+1) * sqrt(du_v**2 + dv**2)
+        endif
       enddo
     enddo
   enddo
 
+  if (CS%debug) then
+    call uvchksum("tau_[uv]", tau_u, tau_v, G%HI, haloshift=0, scalar_pair=.true.)
+    call uvchksum("before [uv]", u, v, G%HI, haloshift=0, scalar_pair=.true.)
+  endif
+
+  du_rot(:,:,:) = 0.0
+  dv_rot(:,:,:) = 0.0
+  du_viscX(:,:,:) = 0.0
+  dv_viscX(:,:,:) = 0.0
   ! Explicit rotated increment at u- and v-points (du_rot, dv_rot)
   ! Explicit viscosity increment at u- and v-points (du_visc, dv_visc)
-  do k=1,nz-1
+  do k=1,nz-40
     do j = js,je
       do I = Isq,Ieq
-        du = u(I,j,k+1) - u(I,j,k)
-        du2 = u(I,j,k+2) - u(I,j,k+1)
-        du_rot  = ((tau_u(I,j,k)*cos(omega_u(I,j))) - (tau_u(I,j,k+1)*cos(omega_u(I,j)))) * dt/CS%h_u(I,j,k+1)
-        du_visc = ((GV%H_to_Z*CS%a_u(I,j,K+1)*du) - (GV%H_to_Z*CS%a_u(I,j,K+2)*du2)) * dt/CS%h_u(I,j,k+1)
-        u(I,j,k+1) = u(I,j,k+1) - du_visc + du_rot
+        if (G%mask2dCu(I,j) > 0.5) then
+          if ((CS%h_u(I,j,k+1) > 2.) .and. (CS%a_u(I,j,k+1) < 0.05) .and.  (CS%a_u(I,j,k+2) < 0.05))then
+            du  = u(I,j,k+1) - u(I,j,k)
+            du2 = u(I,j,k+2) - u(I,j,k+1)
+            if ((abs(du) < 1.) .and. (abs(du2) < 1.)) then
+              du_rot(I,j,k+1)  = ((tau_u(I,j,k)*cos(omega_u(I,j))) - (tau_u(I,j,k+1)*cos(omega_u(I,j)))) * &
+                        (dt/(CS%h_u(I,j,k+1) + GV%H_subroundoff))
+              !du_visc = 0.0
+              !a_u = 0.0001 ! m/s
+              du_viscX(I,j,k+1) = ((CS%a_u(I,j,k+1)*du) - (CS%a_u(I,j,k+2)*du2)) * &
+                        (dt/(CS%h_u(I,j,k+1) + GV%H_subroundoff))
+              !du_visc = ((a_u*du) - (a_u*du2)) * &
+              !          (dt/(CS%h_u(I,j,k+1) + GV%H_subroundoff))
+              !u(I,j,k+1) = ui(I,j,k+1) - du_viscX(I,j,k+1) + du_rot(I,j,k+1)
+              u(I,j,k+1) = u(I,j,k+1) + du_viscX(I,j,k+1)
+            endif
+          endif
+        endif
       enddo
     enddo
     do J = Jsq,Jeq
       do i = is,ie
-        dv   = v(i,J,k+1) - v(i,J,k)
-        dv2   = v(i,J,k+2) - v(i,J,k+1)
-        dv_rot = ((tau_v(i,J,k)*sin(omega_v(i,J))) - (tau_v(i,J,k+1)*sin(omega_v(i,J)))) * dt/CS%h_v(i,J,k+1)
-        dv_visc = ((GV%H_to_Z*CS%a_v(i,J,K+1)*dv) - (GV%H_to_Z*CS%a_v(i,J,K+2)*dv2)) * dt/CS%h_v(i,J,k+1)
-        v(i,J,k+1) = u(i,J,k+1) - dv_visc + dv_rot
+        if (G%mask2dCv(i,J) > 0.5) then
+          if ((CS%h_v(j,J,k+1) > 0.1) .and. (CS%a_v(i,J,k+1) < 0.05) .and. (CS%a_v(i,J,k+2) < 0.05)) then
+            dv   = v(i,J,k+1) - v(i,J,k)
+            dv2  = v(i,J,k+2) - v(i,J,k+1)
+            if ((abs(dv) < 1.) .and. (abs(dv2) < 1.)) then
+              dv_rot(i,J,k+1) = ((tau_v(i,J,k)*sin(omega_v(i,J))) - (tau_v(i,J,k+1)*sin(omega_v(i,J)))) * &
+                       (dt/(CS%h_v(i,J,k+1) + GV%H_subroundoff))
+              !dv_visc = 0.0
+              !a_v = 0.000001 ! m/s
+              dv_viscX(i,J,k+1) = ((CS%a_v(i,J,k+1)*dv) - (CS%a_v(i,J,k+2)*dv2)) * &
+                       (dt/(CS%h_v(i,J,k+1) + GV%H_subroundoff))
+              !dv_visc = ((a_v*dv) - (a_v*dv2)) * &
+              !         (dt/(CS%h_v(i,J,k+1) + GV%H_subroundoff))
+              !v(i,J,k+1) = vi(i,J,k+1) - dv_viscX(i,J,k+1) + dv_rot(i,J,k+1)
+              v(i,J,k+1) = v(i,J,k+1) + dv_viscX(i,J,k+1)
+            endif
+          endif
+        endif
       enddo
     enddo
   enddo
 
+  if (CS%debug) then
+    call uvchksum("after [uv]", u, v, G%HI, haloshift=0, scalar_pair=.true.)
+    call uvchksum("[uv] after vertvisc", ui, vi, G%HI, haloshift=0, scalar_pair=.true.)
+    call uvchksum("v_u, u_v", v_u, u_v, G%HI, haloshift=0, scalar_pair=.true.)
+    call uvchksum("d[uv]_rot", du_rot, dv_rot, G%HI, haloshift=0, scalar_pair=.true.)
+    call uvchksum("d[uv]_viscX", du_viscX, dv_viscX, G%HI, haloshift=0, scalar_pair=.true.)
+    call uvchksum("d[uv]_viscI", du_viscI, dv_viscI, G%HI, haloshift=0, scalar_pair=.true.)
+  endif
+
 end subroutine explicit_mtm
+
+!> Rotate increment to the mtm eqs.
+subroutine rotate_increment(ui, vi, u, v, forces, dt, G, GV, US, CS)
+  type(ocean_grid_type),   intent(in)    :: G      !< Ocean grid structure
+  type(verticalGrid_type), intent(in)    :: GV     !< Ocean vertical grid structure
+  type(unit_scale_type),   intent(in)    :: US     !< A dimensional unit scaling type
+  real, dimension(SZIB_(G),SZJ_(G),SZK_(GV)), &
+                           intent(inout) :: ui      !< Zonal velocity after vertvisc [L T-1 ~> m s-1]
+  real, dimension(SZI_(G),SZJB_(G),SZK_(GV)), &
+                           intent(inout) :: vi      !< Meridional velocity after vertvisc [L T-1 ~> m s-1]
+  real, dimension(SZIB_(G),SZJ_(G),SZK_(GV)), &
+                           intent(inout) :: u   !< Old Zonal velocity [L T-1 ~> m s-1]
+  real, dimension(SZI_(G),SZJB_(G),SZK_(GV)), &
+                           intent(inout) :: v   !< Old Meridional velocity [L T-1 ~> m s-1]
+  type(mech_forcing),    intent(in)   :: forces !< A structure with the driving mechanical forces
+  real,                  intent(in)      :: dt     !< Time increment [T ~> s]
+  type(vertvisc_CS),     pointer         :: CS     !< Vertical viscosity control structure
+
+  ! Local varibles
+
+  real, dimension(SZI_(G),SZJ_(G))  :: omega_h
+  real, dimension(SZIB_(G),SZJ_(G)) :: omega_u
+  real, dimension(SZI_(G),SZJB_(G)) :: omega_v
+  ! rotated
+  real, dimension(SZIB_(G),SZJ_(G),SZK_(GV)) :: du_rot
+  real, dimension(SZI_(G),SZJB_(G),SZK_(GV)) :: dv_rot
+  ! others
+  real, dimension(SZIB_(G),SZJ_(G),SZK_(GV)) :: v_u
+  real, dimension(SZI_(G),SZJB_(G),SZK_(GV)) :: u_v
+  real, dimension(SZIB_(G),SZJ_(G),SZK_(GV)) :: vi_u
+  real, dimension(SZI_(G),SZJB_(G),SZK_(GV)) :: ui_v
+  real, dimension(SZIB_(G),SZJ_(G),SZK_(GV)) :: tau_div_u
+  real, dimension(SZI_(G),SZJB_(G),SZK_(GV)) :: tau_div_v
+  real :: tmp
+  integer :: i, j, k, is, ie, js, je, Isq, Ieq, Jsq, Jeq, nz
+  is = G%isc ; ie = G%iec; js = G%jsc; je = G%jec
+  Isq = G%IscB ; Ieq = G%IecB ; Jsq = G%JscB ; Jeq = G%JecB ; nz = GV%ke
+
+  ! copy omega_w2x to omega_h
+  omega_h(:,:) = 0.
+  do j = js,je
+    do i = is,ie
+      omega_h(i,j) = forces%omega_w2x(i,j)
+    enddo
+  enddo
+
+  ! update halos
+  call pass_var(omega_h,G%Domain)
+
+  ! Interpolate to omega to u-points and v-points
+  ! TODO: make omega a function of depth
+  omega_u(:,:) = 0.
+  omega_v(:,:) = 0.
+  do j = js-1,je+1
+    do I = Isq-2,Ieq+2
+      omega_u(I,j) = 0.5 * (omega_h(i,j) + omega_h(i+1,j))
+    enddo
+  enddo
+  do J = Jsq-2,Jeq+2
+    do i = is-1,ie+1
+      omega_v(i,J) = 0.5 * (omega_h(i,j) + omega_h(i,j+1))
+    enddo
+  enddo
+  call pass_vector(omega_u,omega_v,G%Domain)
+
+  if (CS%debug) then
+    call uvchksum("omega_[uv]", omega_u, omega_v, G%HI, haloshift=0, scalar_pair=.true.)
+  endif
+
+  call pass_vector(u,v,G%Domain)
+  call pass_vector(ui,vi,G%Domain)
+  v_u(:,:,:) = 0.
+  u_v(:,:,:) = 0.
+  vi_u(:,:,:) = 0.
+  ui_v(:,:,:) = 0.
+  ! Interpolate v to u points and u to v points
+  do k = 1, nz
+    ! v to u points
+    do j = js,je
+      do I = Isq,Ieq
+        if (G%mask2dCu(I,j) > 0.5) then
+          v_u(I,j,k) = 0.25 * (v(i+1,J,k) + v(i,J,k) + v(i,J-1,k) + v(i+1,J-1,k))
+          vi_u(I,j,k) = 0.25 * (vi(i+1,J,k) + vi(i,J,k) + vi(i,J-1,k) + vi(i+1,J-1,k))
+        endif
+      enddo
+    enddo
+    ! u to v points
+    do J = Jsq,Jeq
+      do i = is,ie
+        if (G%mask2dCv(i,J) > 0.5) then
+          u_v(i,J,k) = 0.25 * (u(I,j+1,k) + u(I,j,k) + u(I-1,j,k) + u(I-1,j+1,k))
+          ui_v(i,J,k) = 0.25 * (ui(I,j+1,k) + ui(I,j,k) + ui(I-1,j,k) + ui(I-1,j+1,k))
+        endif
+      enddo
+    enddo
+  enddo
+
+  call pass_vector(v_u,u_v,G%Domain)
+  call pass_vector(vi_u,ui_v,G%Domain)
+
+  if (CS%debug) then
+    call uvchksum("interpolated [v_u,u_v]", v_u, u_v, G%HI, haloshift=0, scalar_pair=.true.)
+    call uvchksum("interpolated [vi_u,ui_v]", vi_u, ui_v, G%HI, haloshift=0, scalar_pair=.true.)
+    call uvchksum("before [u,v]", u, v, G%HI, haloshift=0, scalar_pair=.true.)
+    call uvchksum("before [ui,vi]", ui, vi, G%HI, haloshift=0, scalar_pair=.true.)
+  endif
+
+  tau_div_u(:,:,:) = 0.0
+  tau_div_v(:,:,:) = 0.0
+  du_rot(:,:,:)    = 0.0
+  dv_rot(:,:,:)    = 0.0
+
+  ! Rotated increment at u- and v-points (du_rot, dv_rot)
+  do k=1,nz
+    do j = js,je
+      do I = Isq,Ieq
+        if ((G%mask2dCu(I,j) > 0.5) .and. (CS%h_u(I,j,k)>1.5)) then
+          ! line below aligns stress to shear as the implicit step assumes
+          !omega_u(I,j) = atan2((vi_u(I,j,k) - v_u(I,j,k)), (ui(I,j,k) - u(I,j,k)))
+          tau_div_u(I,j,k) = sqrt((ui(I,j,k) - u(I,j,k))**2 + (vi_u(I,j,k) - v_u(I,j,k))**2)
+          du_rot(I,j,k)  = tau_div_u(I,j,k) * cos(omega_u(I,j))
+          if (abs(du_rot(I,j,k)) < 0.05) then
+            tmp = ui(I,j,k)
+            ui(I,j,k) = u(I,j,k) + du_rot(I,j,k)
+            u(I,j,k) = tmp
+          endif
+        endif
+      enddo
+    enddo
+    do J = Jsq,Jeq
+      do i = is,ie
+        if ((G%mask2dCv(i,J) > 0.5) .and. (CS%h_v(i,J,k)>1.5)) then
+          !omega_v(i,J) = atan2((vi(i,J,k) - v(i,J,k)), (ui_v(i,J,k) - u_v(i,J,k)))
+          tau_div_v(i,J,k) = sqrt((vi(i,J,k) - v(i,J,k))**2 + (ui_v(i,J,k) - u_v(i,J,k))**2)
+          dv_rot(i,J,k) = tau_div_v(i,J,k) * sin(omega_v(i,J))
+          if (abs(dv_rot(i,J,k)) <  0.05) then
+            tmp = vi(i,J,k)
+            vi(i,J,k) = v(i,J,k) + dv_rot(i,J,k)
+            v(i,J,k) = tmp
+          endif
+        endif
+      enddo
+    enddo
+  enddo
+
+  if (CS%debug) then
+    call uvchksum("after [uv]", u, v, G%HI, haloshift=0, scalar_pair=.true.)
+    call uvchksum("[ui,vi]", ui, vi, G%HI, haloshift=0, scalar_pair=.true.)
+    call uvchksum("d[uv]_rot", du_rot, dv_rot, G%HI, haloshift=0, scalar_pair=.true.)
+    call uvchksum("tau_div_[uv]", tau_div_u, tau_div_v, G%HI, haloshift=0, scalar_pair=.true.)
+  endif
+
+end subroutine rotate_increment
 
 !> Perform a fully implicit vertical diffusion
 !! of momentum.  Stress top and bottom boundary conditions are used.
@@ -592,7 +840,17 @@ subroutine vertvisc(u, v, h, forces, visc, dt, OBC, ADp, CDp, G, GV, US, CS, &
 
   enddo ! end of v-component J loop
 
+  if (CS%debug) then
+    call uvchksum("[uv] before vertvisc_limit_vel ", u, v, G%HI, haloshift=0, &
+                  scalar_pair=.true.)
+  endif
+
   call vertvisc_limit_vel(u, v, h, ADp, CDp, forces, visc, dt, G, GV, US, CS)
+
+  if (CS%debug) then
+    call uvchksum("[uv] after vertvisc_limit_vel ", u, v, G%HI, haloshift=0, &
+                  scalar_pair=.true.)
+  endif
 
   ! Here the velocities associated with open boundary conditions are applied.
   if (associated(OBC)) then
