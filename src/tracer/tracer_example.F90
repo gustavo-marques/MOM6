@@ -15,6 +15,8 @@ use MOM_open_boundary, only : ocean_OBC_type
 use MOM_restart, only : MOM_restart_CS
 use MOM_sponge, only : set_up_sponge_field, sponge_CS
 use MOM_time_manager, only : time_type
+use MOM_interpolate,      only : init_external_field, time_interp_external
+use MOM_interpolate,      only : time_interp_external_init
 use MOM_tracer_registry, only : register_tracer, tracer_registry_type
 use MOM_unit_scaling, only : unit_scale_type
 use MOM_variables, only : surface
@@ -27,16 +29,22 @@ implicit none ; private
 public USER_register_tracer_example, USER_initialize_tracer, USER_tracer_stock
 public tracer_column_physics, USER_tracer_surface_state, USER_tracer_example_end
 
-integer, parameter :: NTR = 1 !< The number of tracers in this module.
+integer, parameter :: NTR = 3 !< The number of tracers in this module.
 
 !> The control structure for the USER_tracer_example module
 type, public :: USER_tracer_example_CS ; private
   logical :: coupled_tracers = .false. !< These tracers are not offered to the coupler.
   character(len=200) :: tracer_IC_file !< The full path to the IC file, or " "
                                        !! to initialize internally.
+  !character(len=200) :: tracer_BC_file !< The full path to the BC file, or " "
+  !                                     !! to initialize to zero.
+  !integer            :: id_tracer1 = -1 !< id number for time_interp_external.
+  !integer            :: id_tracer2 = -1 !< id number for time_interp_external.
+  !integer            :: id_tracer3 = -1 !< id number for time_interp_external.
   type(time_type), pointer :: Time => NULL() !< A pointer to the ocean model's clock.
   type(tracer_registry_type), pointer :: tr_Reg => NULL() !< A pointer to the tracer registry
   real, pointer :: tr(:,:,:,:) => NULL()  !< The array of tracers used in this subroutine, in g m-3?
+  !real, pointer :: tr_sfc(:,:,:) => NULL()!< The array of tracers used to restore the surface state.
   real :: land_val(NTR) = -1.0 !< The value of tr that is used where land is masked out.
   logical :: use_sponge    !< If true, sponges may be applied somewhere in the domain.
 
@@ -99,11 +107,21 @@ function USER_register_tracer_example(HI, GV, param_file, CS, tr_Reg, restart_CS
                  "The exact location and properties of those sponges are "//&
                  "specified from MOM_initialization.F90.", default=.false.)
 
+  ! BC file
+  !call get_param(param_file, mdl, "TRACER_BC_FILE", CS%tracer_BC_file, &
+  !               "The file in which the surface BCs tracer concentrations can be "//&
+  !               "found, or an empty string for setting the BCs to zeros", default=" ")
+  !if (len_trim(CS%tracer_BC_file) > 0) then
+  !  call get_param(param_file, mdl, "INPUTDIR", inputdir, default=".")
+  !  CS%tracer_BC_file = trim(slasher(inputdir))//trim(CS%tracer_BC_file)
+  !endif
+
   allocate(CS%tr(isd:ied,jsd:jed,nz,NTR), source=0.0)
+  !allocate(CS%tr_sfc(isd:ied,jsd:jed,NTR), source=0.0)
 
   do m=1,NTR
-    if (m < 10) then ; write(name,'("tr",I1.1)') m
-    else ; write(name,'("tr",I2.2)') m ; endif
+    if (m < 10) then ; write(name,'("tracer",I1)') m
+    else ; write(name,'("tracer",I2.2)') m ; endif
     write(longname,'("Concentration of Tracer ",I2.2)') m
     CS%tr_desc(m) = var_desc(name, units="kg kg-1", longname=longname, caller=mdl)
 
@@ -176,9 +194,16 @@ subroutine USER_initialize_tracer(restart, day, G, GV, h, diag, OBC, CS, &
   CS%Time => day
   CS%diag => diag
 
+  !if (len_trim(CS%tracer_BC_file) > 0) then
+  !  call time_interp_external_init()
+  !  CS%id_tracer1 = init_external_field(CS%Tracer_BC_file, 'tracer1', MOM_domain=G%Domain)
+  !  CS%id_tracer2 = init_external_field(CS%Tracer_BC_file, 'tracer2', MOM_domain=G%Domain)
+  !  CS%id_tracer2 = init_external_field(CS%Tracer_BC_file, 'tracer3', MOM_domain=G%Domain)
+  !endif
+
   if (.not.restart) then
     if (len_trim(CS%tracer_IC_file) >= 1) then
-!  Read the tracer concentrations from a netcdf file.
+    !  Read the tracer concentrations from a netcdf file.
       if (.not.file_exists(CS%tracer_IC_file, G%Domain)) &
         call MOM_error(FATAL, "USER_initialize_tracer: Unable to open "// &
                         CS%tracer_IC_file)
@@ -191,19 +216,6 @@ subroutine USER_initialize_tracer(restart, day, G, GV, h, diag, OBC, CS, &
         do k=1,nz ; do j=js,je ; do i=is,ie
           CS%tr(i,j,k,m) = 1.0e-20 ! This could just as well be 0.
         enddo ; enddo ; enddo
-      enddo
-
-!    This sets a stripe of tracer across the basin.
-      PI = 4.0*atan(1.0)
-      do j=js,je
-        dist2 = (G%Rad_Earth * PI / 180.0)**2 * &
-               (G%geoLatT(i,j) - 40.0) * (G%geoLatT(i,j) - 40.0)
-        tr_y = 0.5*exp(-dist2/(1.0e5*1.0e5))
-
-        do k=1,nz ; do i=is,ie
-!      This adds the stripes of tracer to every layer.
-          CS%tr(i,j,k,1) = CS%tr(i,j,k,1) + tr_y
-        enddo ; enddo
       enddo
     endif
   endif ! restart
@@ -407,7 +419,7 @@ end function USER_tracer_stock
 subroutine USER_tracer_surface_state(sfc_state, h, G, GV, CS)
   type(ocean_grid_type),        intent(in)    :: G     !< The ocean's grid structure
   type(verticalGrid_type),      intent(in)    :: GV    !< The ocean's vertical grid structure
-  type(surface),                intent(inout) :: sfc_state !< A structure containing fields that
+  type(surface),                intent(in)    :: sfc_state !< A structure containing fields that
                                                        !! describe the surface state of the ocean.
   real, dimension(SZI_(G),SZJ_(G),SZK_(GV)), &
                                 intent(in)    :: h  !< Layer thicknesses [H ~> m or kg m-2]
@@ -417,20 +429,26 @@ subroutine USER_tracer_surface_state(sfc_state, h, G, GV, CS)
   ! This particular tracer package does not report anything back to the coupler.
   ! The code that is here is just a rough guide for packages that would.
 
-  integer :: m, is, ie, js, je, isd, ied, jsd, jed
+  character(len=32) :: name     ! A variable's name in a NetCDF file.
+  real, dimension(SZI_(G),SZJ_(G), SZK_(GV),NTR) :: tr ! temporary array for tracers
+  integer :: m, is, ie, js, je, isd, ied, jsd, jed, i, j
   is = G%isc ; ie = G%iec ; js = G%jsc ; je = G%jec
   isd = G%isd ; ied = G%ied ; jsd = G%jsd ; jed = G%jed
 
   if (.not.associated(CS)) return
 
-  if (CS%coupled_tracers) then
-    do m=1,ntr
-      !   This call loads the surface values into the appropriate array in the
-      ! coupler-type structure.
-      call set_coupler_type_data(CS%tr(:,:,1,m), CS%ind_tr(m), sfc_state%tr_fields, &
-                   idim=(/isd, is, ie, ied/), jdim=(/jsd, js, je, jed/) )
-    enddo
-  endif
+  tr(:,:,:,:) = 0.0
+  !if (CS%id_tracer1 > 0.) call time_interp_external(CS%id_tracer1, CS%Time, tr(:,:,1))
+  !if (CS%id_tracer2 > 0.) call time_interp_external(CS%id_tracer2, CS%Time, tr(:,:,2))
+  !if (CS%id_tracer3 > 0.) call time_interp_external(CS%id_tracer3, CS%Time, tr(:,:,3))
+  do m = 1,NTR
+    call query_vardesc(CS%tr_desc(m), name, caller="USER_tracer_surface_state")
+    call MOM_read_data(CS%tracer_IC_file, trim(name), tr(:,:,:,m), G%Domain)
+    do j=js,je ; do i=is,ie
+       ! only update where tr > 0.
+       if (tr(i,j,1,m) > 0. ) CS%tr(i,j,1,m) = tr(i,j,1,m)
+    enddo; enddo
+  enddo
 
 end subroutine USER_tracer_surface_state
 
