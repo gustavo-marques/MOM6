@@ -778,8 +778,9 @@ subroutine call_tracer_surface_state(sfc_state, h, G, GV, CS)
          "Module must be initialized via call_tracer_register before it is used.")
 
 !  Add other user-provided calls here.
-  if (CS%use_USER_tracer_example) &
-    call USER_tracer_surface_state(sfc_state, h, G, GV, CS%USER_tracer_example_CSp)
+  ! GMM, this call is not needed
+  !if (CS%use_USER_tracer_example) &
+  !  call USER_tracer_surface_state(sfc_state, h, G, GV, CS%USER_tracer_example_CSp)
   if (CS%use_DOME_tracer) &
     call DOME_tracer_surface_state(sfc_state, h, G, GV, CS%DOME_tracer_CSp)
   if (CS%use_ISOMIP_tracer) &

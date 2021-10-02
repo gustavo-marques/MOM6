@@ -44,7 +44,7 @@ type, public :: USER_tracer_example_CS ; private
   type(time_type), pointer :: Time => NULL() !< A pointer to the ocean model's clock.
   type(tracer_registry_type), pointer :: tr_Reg => NULL() !< A pointer to the tracer registry
   real, pointer :: tr(:,:,:,:) => NULL()  !< The array of tracers used in this subroutine, in g m-3?
-  !real, pointer :: tr_sfc(:,:,:) => NULL()!< The array of tracers used to restore the surface state.
+  real, pointer :: tr_sfc(:,:,:) => NULL()!< The array of tracers used to restore the surface state.
   real :: land_val(NTR) = -1.0 !< The value of tr that is used where land is masked out.
   logical :: use_sponge    !< If true, sponges may be applied somewhere in the domain.
 
@@ -117,7 +117,6 @@ function USER_register_tracer_example(HI, GV, param_file, CS, tr_Reg, restart_CS
   !endif
 
   allocate(CS%tr(isd:ied,jsd:jed,nz,NTR), source=0.0)
-  !allocate(CS%tr_sfc(isd:ied,jsd:jed,NTR), source=0.0)
 
   do m=1,NTR
     if (m < 10) then ; write(name,'("tracer",I1)') m
@@ -172,13 +171,12 @@ subroutine USER_initialize_tracer(restart, day, G, GV, h, diag, OBC, CS, &
                                                                   !! for the sponges, if they are in use.
 
 ! Local variables
-  real, allocatable :: temp(:,:,:)
+  real, pointer :: tr_tmp(:,:,:,:) => NULL()  !< Temporary tracers to be used in this subroutine
   character(len=32) :: name     ! A variable's name in a NetCDF file.
   character(len=72) :: longname ! The long name of that variable.
   character(len=48) :: units    ! The dimensions of the variable.
   character(len=48) :: flux_units ! The units for tracer fluxes, usually
                             ! kg(tracer) kg(water)-1 m3 s-1 or kg(tracer) s-1.
-  real, pointer :: tr_ptr(:,:,:) => NULL()
   real :: PI     ! 3.1415926... calculated as 4*atan(1)
   real :: tr_y   ! Initial zonally uniform tracer concentrations.
   real :: dist2  ! The distance squared from a line [m2].
@@ -194,6 +192,9 @@ subroutine USER_initialize_tracer(restart, day, G, GV, h, diag, OBC, CS, &
   CS%Time => day
   CS%diag => diag
 
+  allocate(CS%tr_sfc(isd:ied,jsd:jed,NTR), source=0.0)
+  allocate(tr_tmp(isd:ied,jsd:jed,1:nz,NTR), source=0.0)
+
   !if (len_trim(CS%tracer_BC_file) > 0) then
   !  call time_interp_external_init()
   !  CS%id_tracer1 = init_external_field(CS%Tracer_BC_file, 'tracer1', MOM_domain=G%Domain)
@@ -201,67 +202,40 @@ subroutine USER_initialize_tracer(restart, day, G, GV, h, diag, OBC, CS, &
   !  CS%id_tracer2 = init_external_field(CS%Tracer_BC_file, 'tracer3', MOM_domain=G%Domain)
   !endif
 
-  if (.not.restart) then
-    if (len_trim(CS%tracer_IC_file) >= 1) then
-    !  Read the tracer concentrations from a netcdf file.
-      if (.not.file_exists(CS%tracer_IC_file, G%Domain)) &
-        call MOM_error(FATAL, "USER_initialize_tracer: Unable to open "// &
-                        CS%tracer_IC_file)
-      do m=1,NTR
-        call query_vardesc(CS%tr_desc(m), name, caller="USER_initialize_tracer")
-        call MOM_read_data(CS%tracer_IC_file, trim(name), CS%tr(:,:,:,m), G%Domain)
-      enddo
-    else
-      do m=1,NTR
-        do k=1,nz ; do j=js,je ; do i=is,ie
-          CS%tr(i,j,k,m) = 1.0e-20 ! This could just as well be 0.
-        enddo ; enddo ; enddo
-      enddo
-    endif
-  endif ! restart
-
-  if ( CS%use_sponge ) then
-!   If sponges are used, this example damps tracers in sponges in the
-! northern half of the domain to 1 and tracers in the southern half
-! to 0.  For any tracers that are not damped in the sponge, the call
-! to set_up_sponge_field can simply be omitted.
-    if (.not.associated(sponge_CSp)) &
-      call MOM_error(FATAL, "USER_initialize_tracer: "// &
-        "The pointer to sponge_CSp must be associated if SPONGE is defined.")
-
-    allocate(temp(G%isd:G%ied,G%jsd:G%jed,nz))
-    do k=1,nz ; do j=js,je ; do i=is,ie
-      if (G%geoLatT(i,j) > 700.0 .and. (k > nz/2)) then
-        temp(i,j,k) = 1.0
-      else
-        temp(i,j,k) = 0.0
-      endif
-    enddo ; enddo ; enddo
-
-!   do m=1,NTR
-    do m=1,1
-      ! This is needed to force the compiler not to do a copy in the sponge
-      ! calls.  Curses on the designers and implementers of Fortran90.
-      tr_ptr => CS%tr(:,:,:,m)
-      call set_up_sponge_field(temp, tr_ptr, G, GV, nz, sponge_CSp)
-    enddo
-    deallocate(temp)
-  endif
-
-  if (associated(OBC)) then
-    call query_vardesc(CS%tr_desc(1), name, caller="USER_initialize_tracer")
-    if (OBC%specified_v_BCs_exist_globally) then
-      ! Steal from updated DOME in the fullness of time.
-    else
-      ! Steal from updated DOME in the fullness of time.
-    endif
-    ! All tracers but the first have 0 concentration in their inflows. As this
-    ! is the default value, the following calls are unnecessary.
-    do m=2,lntr
+  if (len_trim(CS%tracer_IC_file) >= 1) then
+  !  Read the tracer concentrations from a netcdf file.
+    if (.not.file_exists(CS%tracer_IC_file, G%Domain)) &
+      call MOM_error(FATAL, "USER_initialize_tracer: Unable to open "// &
+                      CS%tracer_IC_file)
+    do m=1,NTR
       call query_vardesc(CS%tr_desc(m), name, caller="USER_initialize_tracer")
-      ! Steal from updated DOME in the fullness of time.
+      call MOM_read_data(CS%tracer_IC_file, trim(name), tr_tmp(:,:,:,m), G%Domain)
+    enddo
+  else
+    do m=1,NTR
+      do k=1,nz ; do j=js,je ; do i=is,ie
+        tr_tmp(i,j,k,m) = 1.0e-20 ! This could just as well be 0.
+      enddo ; enddo ; enddo
     enddo
   endif
+
+  if (.not.restart) then
+    ! set initial tracer values
+    do m=1,NTR
+      do k=1,nz ; do j=js,je ; do i=is,ie
+        CS%tr(i,j,k,m) = tr_tmp(i,j,k,m) ! This could just as well be 0.
+      enddo ; enddo ; enddo
+    enddo
+  endif
+
+  ! store sfc values to be used as restoring
+  do m=1,NTR
+    do j=js,je ; do i=is,ie
+      CS%tr_sfc(i,j,m) = CS%tr(i,j,1,m)
+    enddo ; enddo
+  enddo
+
+  deallocate(tr_tmp)
 
 end subroutine USER_initialize_tracer
 
@@ -327,6 +301,7 @@ subroutine tracer_column_physics(h_old, h_new,  ea,  eb, fluxes, dt, G, GV, US, 
   if (.not.associated(CS)) return
   h_neglect = GV%H_subroundoff
 
+
   do j=js,je
     do i=is,ie
 !   The following line is appropriate for quantities like salinity
@@ -364,6 +339,13 @@ subroutine tracer_column_physics(h_old, h_new,  ea,  eb, fluxes, dt, G, GV, US, 
     enddo ; enddo ; enddo
   enddo
 
+  ! restore sfc values
+  do m = 1,NTR
+    do j=js,je ; do i=is,ie
+       ! only update where tr_sfc > 0.
+       if (CS%tr_sfc(i,j,m) > 0. ) CS%tr(i,j,1,m) = G%mask2dT(i,j) * CS%tr_sfc(i,j,m)
+    enddo; enddo
+  enddo
 end subroutine tracer_column_physics
 
 !> This function calculates the mass-weighted integral of all tracer stocks,
@@ -437,18 +419,18 @@ subroutine USER_tracer_surface_state(sfc_state, h, G, GV, CS)
 
   if (.not.associated(CS)) return
 
-  tr(:,:,:,:) = 0.0
+  !tr(:,:,:,:) = 0.0
   !if (CS%id_tracer1 > 0.) call time_interp_external(CS%id_tracer1, CS%Time, tr(:,:,1))
   !if (CS%id_tracer2 > 0.) call time_interp_external(CS%id_tracer2, CS%Time, tr(:,:,2))
   !if (CS%id_tracer3 > 0.) call time_interp_external(CS%id_tracer3, CS%Time, tr(:,:,3))
-  do m = 1,NTR
-    call query_vardesc(CS%tr_desc(m), name, caller="USER_tracer_surface_state")
-    call MOM_read_data(CS%tracer_IC_file, trim(name), tr(:,:,:,m), G%Domain)
-    do j=js,je ; do i=is,ie
-       ! only update where tr > 0.
-       if (tr(i,j,1,m) > 0. ) CS%tr(i,j,1,m) = tr(i,j,1,m)
-    enddo; enddo
-  enddo
+  !do m = 1,NTR
+  !  call query_vardesc(CS%tr_desc(m), name, caller="USER_tracer_surface_state")
+  !  call MOM_read_data(CS%tracer_IC_file, trim(name), tr(:,:,:,m), G%Domain)
+  !  do j=js,je ; do i=is,ie
+  !     ! only update where tr > 0.
+  !     if (tr(i,j,1,m) > 0. ) CS%tr(i,j,1,m) = tr(i,j,1,m)
+  !  enddo; enddo
+  !enddo
 
 end subroutine USER_tracer_surface_state
 
@@ -460,6 +442,7 @@ subroutine USER_tracer_example_end(CS)
 
   if (associated(CS)) then
     if (associated(CS%tr)) deallocate(CS%tr)
+    if (associated(CS%tr_sfc)) deallocate(CS%tr_sfc)
     deallocate(CS)
   endif
 end subroutine USER_tracer_example_end
