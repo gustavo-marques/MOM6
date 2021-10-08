@@ -190,6 +190,7 @@ type, public :: hor_visc_CS ; private
   integer :: id_h_diffu  = -1, id_h_diffv      = -1
   integer :: id_hf_diffu_2d = -1, id_hf_diffv_2d = -1
   integer :: id_intz_diffu_2d = -1, id_intz_diffv_2d = -1
+  integer :: id_diffu_visc_rem = -1, id_diffv_visc_rem = -1
   integer :: id_Ah_h      = -1, id_Ah_q          = -1
   integer :: id_Kh_h      = -1, id_Kh_q          = -1
   integer :: id_GME_coeff_h = -1, id_GME_coeff_q = -1
@@ -280,6 +281,8 @@ subroutine horizontal_viscosity(u, v, h, diffu, diffv, MEKE, VarMix, G, GV, US, 
 
   real, allocatable, dimension(:,:,:) :: h_diffu ! h x diffu [H L T-2 ~> m2 s-2]
   real, allocatable, dimension(:,:,:) :: h_diffv ! h x diffv [H L T-2 ~> m2 s-2]
+  real, allocatable, dimension(:,:,:) :: diffu_visc_rem ! diffu x visc_rem_u [L T-2 ~> m s-2]
+  real, allocatable, dimension(:,:,:) :: diffv_visc_rem ! diffv x visc_rem_v [L T-2 ~> m s-2]
 
   real, dimension(SZIB_(G),SZJB_(G)) :: &
     dvdx, dudy, & ! components in the shearing strain [T-1 ~> s-1]
@@ -1704,6 +1707,25 @@ subroutine horizontal_viscosity(u, v, h, diffu, diffv, MEKE, VarMix, G, GV, US, 
     deallocate(h_diffv)
   endif
 
+  if (present(ADp) .and. (CS%id_diffu_visc_rem > 0)) then
+    allocate(diffu_visc_rem(G%IsdB:G%IedB,G%jsd:G%jed,GV%ke))
+    diffu_visc_rem(:,:,:) = 0.0
+    do k=1,nz ; do j=js,je ; do I=Isq,Ieq
+      diffu_visc_rem(I,j,k) = diffu(I,j,k) * ADp%visc_rem_u(I,j,k)
+    enddo ; enddo ; enddo
+    call post_data(CS%id_diffu_visc_rem, diffu_visc_rem, CS%diag)
+    deallocate(diffu_visc_rem)
+  endif
+  if (present(ADp) .and. (CS%id_diffv_visc_rem > 0)) then
+    allocate(diffv_visc_rem(G%isd:G%ied,G%JsdB:G%JedB,GV%ke))
+    diffv_visc_rem(:,:,:) = 0.0
+    do k=1,nz ; do J=Jsq,Jeq ; do i=is,ie
+      diffv_visc_rem(i,J,k) = diffv(i,J,k) * ADp%visc_rem_v(i,J,k)
+    enddo ; enddo ; enddo
+    call post_data(CS%id_diffv_visc_rem, diffv_visc_rem, CS%diag)
+    deallocate(diffv_visc_rem)
+  endif
+
 end subroutine horizontal_viscosity
 
 !> Allocates space for and calculates static variables used by horizontal_viscosity().
@@ -2448,6 +2470,20 @@ subroutine hor_visc_init(Time, G, GV, US, param_file, diag, CS, MEKE, ADp)
     call safe_alloc_ptr(ADp%diag_hv,G%isd,G%ied,G%JsdB,G%JedB,GV%ke)
   endif
 
+  CS%id_diffu_visc_rem = register_diag_field('ocean_model', 'diffu_visc_rem', diag%axesCuL, Time, &
+      'Zonal Acceleration from Horizontal Viscosity multiplied by viscous remnant', 'm s-2', &
+      conversion=US%L_T2_to_m_s2)
+  if ((CS%id_diffu_visc_rem > 0) .and. (present(ADp))) then
+    call safe_alloc_ptr(ADp%visc_rem_u,G%IsdB,G%IedB,G%jsd,G%jed,GV%ke)
+  endif
+
+  CS%id_diffv_visc_rem = register_diag_field('ocean_model', 'diffv_visc_rem', diag%axesCvL, Time, &
+      'Meridional Acceleration from Horizontal Viscosity multiplied by viscous remnant', 'm s-2', &
+      conversion=US%L_T2_to_m_s2)
+  if ((CS%id_diffv_visc_rem > 0) .and. (present(ADp))) then
+    call safe_alloc_ptr(ADp%visc_rem_v,G%isd,G%ied,G%JsdB,G%JedB,GV%ke)
+  endif
+
   if (CS%biharmonic) then
     CS%id_Ah_h = register_diag_field('ocean_model', 'Ahh', diag%axesTL, Time,    &
         'Biharmonic Horizontal Viscosity at h Points', 'm4 s-1', conversion=US%L_to_m**4*US%s_to_T, &
@@ -2509,6 +2545,7 @@ subroutine hor_visc_init(Time, G, GV, US, param_file, diag, CS, MEKE, ADp)
   if (CS%Laplacian .or. get_all) then
   endif
 end subroutine hor_visc_init
+
 !> Calculates factors in the anisotropic orientation tensor to be align with the grid.
 !! With n1=1 and n2=0, this recovers the approach of Large et al, 2001.
 subroutine align_aniso_tensor_to_grid(CS, n1, n2)
@@ -2525,6 +2562,7 @@ subroutine align_aniso_tensor_to_grid(CS, n1, n2)
   CS%n1n1_m_n2n2_h(:,:) = ( n1 * n1 - n2 * n2 ) * recip_n2_norm
   CS%n1n1_m_n2n2_q(:,:) = ( n1 * n1 - n2 * n2 ) * recip_n2_norm
 end subroutine align_aniso_tensor_to_grid
+
 !> Apply a 1-1-4-1-1 Laplacian filter one time on GME diffusive flux to reduce any
 !! horizontal two-grid-point noise
 subroutine smooth_GME(CS,G,GME_flux_h,GME_flux_q)
@@ -2589,6 +2627,7 @@ subroutine smooth_GME(CS,G,GME_flux_h,GME_flux_q)
     endif
   enddo ! s-loop
 end subroutine smooth_GME
+
 !> Deallocates any variables allocated in hor_visc_init.
 subroutine hor_visc_end(CS)
   type(hor_visc_CS), pointer :: CS !< The control structure returned by a
@@ -2620,10 +2659,10 @@ subroutine hor_visc_end(CS)
       DEALLOC_(CS%Ah_Max_xx) ; DEALLOC_(CS%Ah_Max_xy)
     endif
     if (CS%Smagorinsky_Ah) then
-      DEALLOC_(CS%Biharm6_const_xx) ; DEALLOC_(CS%Biharm6_const_xy)
+      DEALLOC_(CS%Biharm_const_xx) ; DEALLOC_(CS%Biharm_const_xy)
     endif
     if (CS%Leith_Ah) then
-      DEALLOC_(CS%Biharm_const_xx) ; DEALLOC_(CS%Biharm_const_xy)
+      DEALLOC_(CS%Biharm6_const_xx) ; DEALLOC_(CS%Biharm6_const_xy)
     endif
     if (CS%Re_Ah > 0.0) then
       DEALLOC_(CS%Re_Ah_const_xx) ; DEALLOC_(CS%Re_Ah_const_xy)
