@@ -149,7 +149,6 @@ type, public :: VarMix_CS
                                !! and especially 2 are coded to be more efficient.
   real :: Visbeck_S_max   !< Upper bound on slope used in Eady growth rate [nondim].
   real :: dm07_min_ratio  !< Minimum ratio (N2/N2_ref) to be in the Danabasoglu and Marshall 2007 [nondim].
-  real :: n2_ref_ratio    !< Fraction used to estimate N2_ref in Danabasoglu and Marshall 2007 [nondim].
   ! Leith parameters
   logical :: use_QG_Leith_GM      !< If true, uses the QG Leith viscosity as the GM coefficient
   logical :: use_beta_in_QG_Leith !< If true, includes the beta term in the QG Leith GM coefficient
@@ -539,9 +538,6 @@ subroutine calc_dm07(N2_u, N2_v, G, GV, US, CS)
   type(VarMix_CS),                              pointer       :: CS !< Variable mixing coefficients
 
   ! Local variables
-  real :: N2_ref                         ! Reference N2 [T-1 ~> s-1]
-  real :: depth_uv                       ! depth at u or vpoints [H ~> m]
-  real :: g_prime_surf, g_prime_bot      ! reduced gravity and the surface and bottom [H T-2 ~> m s-2]
   integer :: is, ie, js, je, nz, i, j, k ! useful indices
 
   is = G%isc ; ie = G%iec ; js = G%jsc ; je = G%jec ; nz = GV%ke
@@ -553,11 +549,9 @@ subroutine calc_dm07(N2_u, N2_v, G, GV, US, CS)
   do j = js,je
     do I=is-1,ie
       if (G%mask2dCu(I,j) > 0.5) then
-        depth_uv = 0.5 * (G%bathyT(I,j) + G%bathyT(I+1,j))
-        g_prime_surf = -0.5 * (CS%Rho_f(I,j,1)+CS%Rho_f(I+1,j,1))*GV%g_Earth/GV%Rho0
-        g_prime_bot = -0.5 * (CS%Rho_f(I,j,nz)+CS%Rho_f(I+1,j,nz))*GV%g_Earth/GV%Rho0
-        CS%N2_ref_u(I,j) = MAX(0.0, MAXVAL(N2_u(I,j,:))) !CS%n2_ref_ratio * (g_prime_surf - g_prime_bot)/depth_uv
-        do K=1,nz+1
+        CS%N2_ref_u(I,j) = MAX(1.0e-10, MAXVAL(N2_u(I,j,:)))
+        CS%dm07_ratio_u(I,j,1) = 1.0
+        do K=2,nz+1
           CS%dm07_ratio_u(I,j,K) = MAX((N2_u(I,j,K)/CS%N2_ref_u(I,j)),CS%dm07_min_ratio)
         enddo
       endif
@@ -568,11 +562,9 @@ subroutine calc_dm07(N2_u, N2_v, G, GV, US, CS)
   do J = js-1,je
     do i=is,ie
       if (G%mask2dCv(i,J) > 0.5) then
-        depth_uv = 0.5 * (G%bathyT(i,J) + G%bathyT(i,J+1))
-        g_prime_surf = -0.5 * (CS%Rho_f(i,J,1)+CS%Rho_f(i,J+1,1))*GV%g_Earth/GV%Rho0
-        g_prime_bot = -0.5 * (CS%Rho_f(i,J,nz)+CS%Rho_f(i,J+1,nz))*GV%g_Earth/GV%Rho0
-        CS%N2_ref_v(i,J) =  MAX(0.0, MAXVAL(N2_v(i,J,:))) !CS%n2_ref_ratio * (g_prime_surf - g_prime_bot)/depth_uv
-        do K=1,nz+1
+        CS%N2_ref_v(i,J) =  MAX(1.0e-10, MAXVAL(N2_v(i,J,:)))
+        CS%dm07_ratio_v(i,J,1) = 1.0
+        do K=2,nz+1
           CS%dm07_ratio_v(i,J,K) = MAX((N2_v(i,J,K)/CS%N2_ref_v(i,J)),CS%dm07_min_ratio)
         enddo
       endif
@@ -1396,8 +1388,8 @@ subroutine VarMix_init(Time, G, GV, US, param_file, diag, CS)
     allocate(CS%N2_ref_u(IsdB:IedB,jsd:jed)) ; CS%N2_ref_u(:,:) = 0.0
     allocate(CS%N2_ref_v(isd:ied,JsdB:JedB)) ; CS%N2_ref_v(:,:) = 0.0
 
-    CS%id_Rho_f = register_diag_field('ocean_model', 'Rho_f', diag%axesTl, Time, &
-       'Rho filled', 'kg m-3')
+    CS%id_Rho_f = register_diag_field('ocean_model', 'rho_filled', diag%axesTl, Time, &
+       'Target potential density with massless layers filled with sensible values.', 'kg m-3')
 
     CS%id_dm07_ratio_u = register_diag_field('ocean_model', 'dm07_ratio_u', diag%axesCui, Time, &
        'Ratio of (N2/N2_ref), at u-points, used in the thickness diffusivity parameterization of '//&
@@ -1415,11 +1407,6 @@ subroutine VarMix_init(Time, G, GV, US, param_file, diag, CS)
     call get_param(param_file, mdl, "DM07_MIN_RATIO", CS%dm07_min_ratio,&
                  "Minimum ratio (N^2/N_ref) to be used in the Danabasoglu and Marshall (2007) \n"//&
                  "formula.", default=0.1, units="nondim")
-
-    call get_param(param_file, mdl, "N2_REF_RATIO", CS%n2_ref_ratio,&
-                 "A fraction used to determine the reference N^2 (N_ref) to be used in the Danabasoglu and Marshall \n"//&
-                 "(2007) formula. N_ref = N2_REF_RATIO * (g_prime(1) - g_prime(nz))/D, where D is the total depth.", &
-                 default=0.25, units="nondim")
 
     call get_param(param_file, mdl, "FILL_RHO", CS%fill_rho,&
                  "If true, returns RHO arrays with massless layers filled with \n"//&
