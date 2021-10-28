@@ -63,7 +63,8 @@ use MOM_tidal_forcing,         only : tidal_forcing_init, tidal_forcing_end
 use MOM_unit_scaling,          only : unit_scale_type
 use MOM_vert_friction,         only : vertvisc, vertvisc_coef, vertvisc_remnant
 use MOM_vert_friction,         only : vertvisc_init, vertvisc_end, vertvisc_CS
-use MOM_vert_friction,         only : updateCFLtruncationValue, explicit_mtm, rotate_increment
+use MOM_vert_friction,         only : updateCFLtruncationValue, explicit_mtm
+use MOM_vert_friction,         only : vertvisc_limit_vel, rotate_increment
 use MOM_verticalGrid,          only : verticalGrid_type, get_thickness_units
 use MOM_verticalGrid,          only : get_flux_units, get_tr_flux_units
 use MOM_wave_interface, only: wave_parameters_CS
@@ -862,6 +863,18 @@ subroutine step_MOM_dyn_split_RK2(u, v, h, tv, visc, Time_local, dt, forces, p_s
   ! call explicit_mtm(u, v, uold, vold, forces, dt, G, GV, US, CS%vertvisc_CSp)
   !endif
   call rotate_increment(u, v, uold, vold, forces, dt, G, GV, US, CS%vertvisc_CSp)
+
+  if (CS%debug) then
+    call uvchksum("[uv] before vertvisc_limit_vel in RK2 ", u, v, G%HI, haloshift=0, &
+                  scalar_pair=.true.)
+  endif
+
+  call vertvisc_limit_vel(u, v, h, CS%ADp, CS%CDp, forces, visc, dt, G, GV, US, CS%vertvisc_CSp)
+
+  if (CS%debug) then
+    call uvchksum("[uv] after vertvisc_limit_vel in RK2", u, v, G%HI, haloshift=0, &
+                  scalar_pair=.true.)
+  endif
 
 ! Later, h_av = (h_in + h_out)/2, but for now use h_av to store h_in.
   !$OMP parallel do default(shared)

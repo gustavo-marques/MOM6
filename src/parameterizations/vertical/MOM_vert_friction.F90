@@ -174,8 +174,8 @@ subroutine explicit_mtm(ui, vi, u, v, forces, dt, G, GV, US, CS)
   !CS%a_u: cpl coeffs at u pts [m/s]
   !CS%a_v: cpl coeffs at v pts [m/s]
 
-  real, dimension(SZIB_(G),SZJ_(G)) :: omega_u
-  real, dimension(SZI_(G),SZJB_(G)) :: omega_v
+  real, dimension(SZIB_(G),SZJ_(G)) :: omega_w2x_u
+  real, dimension(SZI_(G),SZJB_(G)) :: omega_w2x_v
   ! explicit
   real, dimension(SZIB_(G),SZJ_(G),SZK_(GV)) :: du_viscX
   real, dimension(SZI_(G),SZJB_(G),SZK_(GV)) :: dv_viscX
@@ -198,23 +198,23 @@ subroutine explicit_mtm(ui, vi, u, v, forces, dt, G, GV, US, CS)
 
   ! Interpolate to omega to u-points and v-points
   ! TODO: make omega a function of depth
-  omega_u(:,:) = 0.
-  omega_v(:,:) = 0.
+  omega_w2x_u(:,:) = 0.
+  omega_w2x_v(:,:) = 0.
   !call pass_var(forces%omega_w2x,G%Domain)
   do j = js,je
     do I = Isq,Ieq
-      omega_u(I,j) = 0.5 * (forces%omega_w2x(i,j) + forces%omega_w2x(i+1,j))
+      omega_w2x_u(I,j) = 0.5 * (forces%omega_w2x(i,j) + forces%omega_w2x(i+1,j))
     enddo
   enddo
   do J = Jsq,Jeq
     do i = is,ie
-      omega_v(i,J) = 0.5 * (forces%omega_w2x(i,j) + forces%omega_w2x(i,j+1))
+      omega_w2x_v(i,J) = 0.5 * (forces%omega_w2x(i,j) + forces%omega_w2x(i,j+1))
     enddo
   enddo
-  call pass_vector(omega_u,omega_v,G%Domain)
+  call pass_vector(omega_w2x_u,omega_w2x_v,G%Domain)
 
   if (CS%debug) then
-    call uvchksum("omega_[uv]", omega_u, omega_v, G%HI, haloshift=0, scalar_pair=.true.)
+    call uvchksum("omega_[uv]", omega_w2x_u, omega_w2x_v, G%HI, haloshift=0, scalar_pair=.true.)
     call uvchksum("CS%h_[uv]", CS%h_u, CS%h_v, G%HI, haloshift=0, scalar_pair=.true.)
     call uvchksum("CS%a_[uv]", CS%a_u, CS%a_v, G%HI, haloshift=0, scalar_pair=.true.)
   endif
@@ -299,7 +299,7 @@ subroutine explicit_mtm(ui, vi, u, v, forces, dt, G, GV, US, CS)
             du  = u(I,j,k+1) - u(I,j,k)
             du2 = u(I,j,k+2) - u(I,j,k+1)
             if ((abs(du) < 1.) .and. (abs(du2) < 1.)) then
-              du_rot(I,j,k+1)  = ((tau_u(I,j,k)*cos(omega_u(I,j))) - (tau_u(I,j,k+1)*cos(omega_u(I,j)))) * &
+              du_rot(I,j,k+1)  = ((tau_u(I,j,k)*cos(omega_w2x_u(I,j))) - (tau_u(I,j,k+1)*cos(omega_w2x_u(I,j)))) * &
                         (dt/(CS%h_u(I,j,k+1) + GV%H_subroundoff))
               !du_visc = 0.0
               !a_u = 0.0001 ! m/s
@@ -321,7 +321,7 @@ subroutine explicit_mtm(ui, vi, u, v, forces, dt, G, GV, US, CS)
             dv   = v(i,J,k+1) - v(i,J,k)
             dv2  = v(i,J,k+2) - v(i,J,k+1)
             if ((abs(dv) < 1.) .and. (abs(dv2) < 1.)) then
-              dv_rot(i,J,k+1) = ((tau_v(i,J,k)*sin(omega_v(i,J))) - (tau_v(i,J,k+1)*sin(omega_v(i,J)))) * &
+              dv_rot(i,J,k+1) = ((tau_v(i,J,k)*sin(omega_w2x_v(i,J))) - (tau_v(i,J,k+1)*sin(omega_w2x_v(i,J)))) * &
                        (dt/(CS%h_v(i,J,k+1) + GV%H_subroundoff))
               !dv_visc = 0.0
               !a_v = 0.000001 ! m/s
@@ -368,9 +368,11 @@ subroutine rotate_increment(ui, vi, u, v, forces, dt, G, GV, US, CS)
 
   ! Local varibles
 
-  real, dimension(SZI_(G),SZJ_(G))  :: omega_h
-  real, dimension(SZIB_(G),SZJ_(G)) :: omega_u
-  real, dimension(SZI_(G),SZJB_(G)) :: omega_v
+  real, dimension(SZI_(G),SZJ_(G))  :: omega_w2x_h
+  real, dimension(SZIB_(G),SZJ_(G)) :: omega_w2x_u
+  real, dimension(SZI_(G),SZJB_(G)) :: omega_w2x_v
+  real, dimension(SZIB_(G),SZJ_(G)) :: omega_tau2s_u
+  real, dimension(SZI_(G),SZJB_(G)) :: omega_tau2s_v
   ! rotated
   real, dimension(SZIB_(G),SZJ_(G),SZK_(GV)) :: du_rot
   real, dimension(SZI_(G),SZJB_(G),SZK_(GV)) :: dv_rot
@@ -382,39 +384,40 @@ subroutine rotate_increment(ui, vi, u, v, forces, dt, G, GV, US, CS)
   real, dimension(SZIB_(G),SZJ_(G),SZK_(GV)) :: tau_div_u
   real, dimension(SZI_(G),SZJB_(G),SZK_(GV)) :: tau_div_v
   real :: tmp
+  real, parameter :: Cshear = 0.5 ! weight applied to shear direction
   integer :: i, j, k, is, ie, js, je, Isq, Ieq, Jsq, Jeq, nz
   is = G%isc ; ie = G%iec; js = G%jsc; je = G%jec
   Isq = G%IscB ; Ieq = G%IecB ; Jsq = G%JscB ; Jeq = G%JecB ; nz = GV%ke
 
-  ! copy omega_w2x to omega_h
-  omega_h(:,:) = 0.
+  ! copy omega_w2x to omega_w2x_h
+  omega_w2x_h(:,:) = 0.
   do j = js,je
     do i = is,ie
-      omega_h(i,j) = forces%omega_w2x(i,j)
+      omega_w2x_h(i,j) = forces%omega_w2x(i,j)
     enddo
   enddo
 
   ! update halos
-  call pass_var(omega_h,G%Domain)
+  call pass_var(omega_w2x_h,G%Domain)
 
   ! Interpolate to omega to u-points and v-points
   ! TODO: make omega a function of depth
-  omega_u(:,:) = 0.
-  omega_v(:,:) = 0.
+  omega_w2x_u(:,:) = 0.
+  omega_w2x_v(:,:) = 0.
   do j = js-1,je+1
     do I = Isq-2,Ieq+2
-      omega_u(I,j) = 0.5 * (omega_h(i,j) + omega_h(i+1,j))
+      omega_w2x_u(I,j) = 0.5 * (omega_w2x_h(i,j) + omega_w2x_h(i+1,j))
     enddo
   enddo
   do J = Jsq-2,Jeq+2
     do i = is-1,ie+1
-      omega_v(i,J) = 0.5 * (omega_h(i,j) + omega_h(i,j+1))
+      omega_w2x_v(i,J) = 0.5 * (omega_w2x_h(i,j) + omega_w2x_h(i,j+1))
     enddo
   enddo
-  call pass_vector(omega_u,omega_v,G%Domain)
+  call pass_vector(omega_w2x_u,omega_w2x_v,G%Domain)
 
   if (CS%debug) then
-    call uvchksum("omega_[uv]", omega_u, omega_v, G%HI, haloshift=0, scalar_pair=.true.)
+    call uvchksum("omega_[uv]", omega_w2x_u, omega_w2x_v, G%HI, haloshift=0, scalar_pair=.true.)
   endif
 
   call pass_vector(u,v,G%Domain)
@@ -459,6 +462,8 @@ subroutine rotate_increment(ui, vi, u, v, forces, dt, G, GV, US, CS)
   tau_div_v(:,:,:) = 0.0
   du_rot(:,:,:)    = 0.0
   dv_rot(:,:,:)    = 0.0
+  omega_tau2s_u(:,:) = 0.0
+  omega_tau2s_v(:,:) = 0.0
 
   ! Rotated increment at u- and v-points (du_rot, dv_rot)
   do k=1,nz
@@ -466,28 +471,30 @@ subroutine rotate_increment(ui, vi, u, v, forces, dt, G, GV, US, CS)
       do I = Isq,Ieq
         if ((G%mask2dCu(I,j) > 0.5) .and. (CS%h_u(I,j,k)>1.5)) then
           ! line below aligns stress to shear as the implicit step assumes
-          !omega_u(I,j) = atan2((vi_u(I,j,k) - v_u(I,j,k)), (ui(I,j,k) - u(I,j,k)))
+          !omega_w2x_u(I,j) = atan2((vi_u(I,j,k) - v_u(I,j,k)), (ui(I,j,k) - u(I,j,k)))
+          omega_tau2s_u(I,j) = atan2((vi_u(I,j,k) - v_u(I,j,k)), (ui(I,j,k) - u(I,j,k)))
           tau_div_u(I,j,k) = sqrt((ui(I,j,k) - u(I,j,k))**2 + (vi_u(I,j,k) - v_u(I,j,k))**2)
-          du_rot(I,j,k)  = tau_div_u(I,j,k) * cos(omega_u(I,j))
-          if (abs(du_rot(I,j,k)) < 0.05) then
-            tmp = ui(I,j,k)
-            ui(I,j,k) = u(I,j,k) + du_rot(I,j,k)
-            u(I,j,k) = tmp
-          endif
+          du_rot(I,j,k)  = tau_div_u(I,j,k) * (Cshear * cos(omega_tau2s_u(I,j)) + (1.0 - Cshear) * cos(omega_w2x_u(I,j)))
+          !if (abs(du_rot(I,j,k)) < 0.05) then
+          tmp = ui(I,j,k)
+          ui(I,j,k) = u(I,j,k) + du_rot(I,j,k)
+          u(I,j,k) = tmp
+          !endif
         endif
       enddo
     enddo
     do J = Jsq,Jeq
       do i = is,ie
         if ((G%mask2dCv(i,J) > 0.5) .and. (CS%h_v(i,J,k)>1.5)) then
-          !omega_v(i,J) = atan2((vi(i,J,k) - v(i,J,k)), (ui_v(i,J,k) - u_v(i,J,k)))
+          !omega_w2x_v(i,J) = atan2((vi(i,J,k) - v(i,J,k)), (ui_v(i,J,k) - u_v(i,J,k)))
+          omega_tau2s_v(i,J) = atan2((vi(i,J,k) - v(i,J,k)), (ui_v(i,J,k) - u_v(i,J,k)))
           tau_div_v(i,J,k) = sqrt((vi(i,J,k) - v(i,J,k))**2 + (ui_v(i,J,k) - u_v(i,J,k))**2)
-          dv_rot(i,J,k) = tau_div_v(i,J,k) * sin(omega_v(i,J))
-          if (abs(dv_rot(i,J,k)) <  0.05) then
-            tmp = vi(i,J,k)
-            vi(i,J,k) = v(i,J,k) + dv_rot(i,J,k)
-            v(i,J,k) = tmp
-          endif
+          dv_rot(i,J,k)  = tau_div_v(i,J,k) * (Cshear * sin(omega_tau2s_v(i,J)) + (1.0 - Cshear) * sin(omega_w2x_v(i,J)))
+          !if (abs(dv_rot(i,J,k)) <  0.05) then
+          tmp = vi(i,J,k)
+          vi(i,J,k) = v(i,J,k) + dv_rot(i,J,k)
+          v(i,J,k) = tmp
+          !endif
         endif
       enddo
     enddo
