@@ -73,10 +73,10 @@ type, public :: MOM_restart_CS ; private
                         !! file.  Otherwise some fields must be initialized approximately.
   integer :: novars = 0 !< The number of restart fields that have been registered.
   integer :: num_obsolete_vars = 0  !< The number of obsolete restart fields that have been registered.
-  logical :: parallel_restartfiles  !< If true, each PE writes its own restart file,
-                                    !! otherwise they are combined internally.
-  logical :: large_file_support     !< If true, NetCDF 3.6 or later is being used
-                                    !! and large-file-support is enabled.
+  logical :: parallel_restartfiles  !< If true, the IO layout is used to group processors that write
+                                    !! to the same restart file or each processor writes its own
+                                    !! (numbered) restart file.  If false, a single restart file is
+                                    !! generated after internally combining output from all PEs.
   logical :: new_run                !< If true, the input filenames and restart file existence will
                                     !! result in a new run that is not initialized from restart files.
   logical :: new_run_set = .false.  !< If true, new_run has been determined for this restart_CS.
@@ -885,9 +885,10 @@ subroutine save_restart(directory, time, G, CS, time_stamped, filename, GV, num_
                                         ! to the name of files after the first.
   integer(kind=8) :: var_sz, size_in_file ! The size in bytes of each variable
                                         ! and the variables already in a file.
-  integer(kind=8) :: max_file_size = 2147483647_8 ! The maximum size in bytes
-                                        ! for any one file.  With NetCDF3,
-                                        ! this should be 2 Gb or less.
+  integer(kind=8), parameter :: max_file_size = 4294967292_8 ! The maximum size in bytes for the
+                                        ! starting position of each variable in a file's record,
+                                        ! based on the use of NetCDF 3.6 or later.  For earlier
+                                        ! versions of NetCDF, the value was 2147483647_8.
   integer :: start_var, next_var        ! The starting variables of the
                                         ! current and next files.
   type(file_type) :: IO_handle          ! The I/O handle of the open fileset
@@ -910,10 +911,6 @@ subroutine save_restart(directory, time, G, CS, time_stamped, filename, GV, num_
   if (CS%novars > CS%max_fields) call restart_error(CS)
 
   ! With parallel read & write, it is possible to disable the following...
-
-  ! The maximum file size is 4294967292, according to the NetCDF documentation.
-  if (CS%large_file_support) max_file_size = 4294967292_8
-
   num_files = 0
   next_var = 0
   nz = 1 ; if (present(GV)) nz = GV%ke
@@ -1136,7 +1133,6 @@ subroutine restore_state(filename, directory, day, G, CS)
 
   ! Check the remaining files for different times and issue a warning
   ! if they differ from the first time.
-  if (is_root_pe()) then
     do m = n+1,num_file
       call get_file_times(IO_handles(n), time_vals, ntime)
       if (ntime < 1) cycle
@@ -1144,14 +1140,13 @@ subroutine restore_state(filename, directory, day, G, CS)
       t2 = time_vals(1)
       deallocate(time_vals)
 
-      if (t1 /= t2) then
+      if (t1 /= t2 .and. is_root_PE()) then
         write(mesg,'("WARNING: Restart file ",I2," has time ",F10.4,"whereas &
          &simulation is restarted at ",F10.4," (differing by ",F10.4,").")')&
                m,t1,t2,t1-t2
         call MOM_error(WARNING, "MOM_restart: "//mesg)
       endif
     enddo
-  endif
 
   ! Read each variable from the first file in which it is found.
   do n=1,num_file
@@ -1543,13 +1538,11 @@ subroutine restart_init(param_file, CS, restart_root)
   ! Determine whether all paramters are set to their default values.
   call get_param(param_file, mdl, "PARALLEL_RESTARTFILES", CS%parallel_restartfiles, &
                  default=.false., do_not_log=.true.)
-  call get_param(param_file, mdl, "LARGE_FILE_SUPPORT", CS%large_file_support, &
-                 default=.true., do_not_log=.true.)
   call get_param(param_file, mdl, "MAX_FIELDS", CS%max_fields, default=100, do_not_log=.true.)
   call get_param(param_file, mdl, "RESTART_CHECKSUMS_REQUIRED", CS%checksum_required, &
                  default=.true., do_not_log=.true.)
-  all_default = ((.not.CS%parallel_restartfiles) .and. (CS%large_file_support) .and. &
-                 (CS%max_fields == 100) .and. (CS%checksum_required))
+  all_default = ((.not.CS%parallel_restartfiles) .and. (CS%max_fields == 100) .and. &
+                 (CS%checksum_required))
   if (.not.present(restart_root)) then
     call get_param(param_file, mdl, "RESTARTFILE", CS%restartfile, &
                    default="MOM.res", do_not_log=.true.)
@@ -1559,8 +1552,9 @@ subroutine restart_init(param_file, CS, restart_root)
   ! Read all relevant parameters and write them to the model log.
   call log_version(param_file, mdl, version, "", all_default=all_default)
   call get_param(param_file, mdl, "PARALLEL_RESTARTFILES", CS%parallel_restartfiles, &
-                 "If true, each processor writes its own restart file, "//&
-                 "otherwise a single restart file is generated", &
+                 "If true, the IO layout is used to group processors that write to the same "//&
+                 "restart file or each processor writes its own (numbered) restart file. "//&
+                 "If false, a single restart file is generated combining output from all PEs.", &
                  default=.false.)
 
   if (present(restart_root)) then
@@ -1570,10 +1564,6 @@ subroutine restart_init(param_file, CS, restart_root)
     call get_param(param_file, mdl, "RESTARTFILE", CS%restartfile, &
                  "The name-root of the restart file.", default="MOM.res")
   endif
-  call get_param(param_file, mdl, "LARGE_FILE_SUPPORT", CS%large_file_support, &
-                 "If true, use the file-size limits with NetCDF large "//&
-                 "file support (4Gb), otherwise the limit is 2Gb.", &
-                 default=.true.)
   call get_param(param_file, mdl, "MAX_FIELDS", CS%max_fields, &
                  "The maximum number of restart fields that can be used.", &
                  default=100)

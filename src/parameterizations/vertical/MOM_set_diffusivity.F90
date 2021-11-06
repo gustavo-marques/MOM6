@@ -198,16 +198,6 @@ integer :: id_clock_kappaShear, id_clock_CVMix_ddiff
 
 contains
 
-!> Sets the interior vertical diffusion of scalars due to the following processes:
-!! 1. Shear-driven mixing: two options, Jackson et at. and KPP interior;
-!! 2. Background mixing via CVMix (Bryan-Lewis profile) or the scheme described by
-!!    Harrison & Hallberg, JPO 2008;
-!! 3. Double-diffusion, old method and new method via CVMix;
-!! 4. Tidal mixing: many options available, see MOM_tidal_mixing.F90;
-!! In addition, this subroutine has the option to set the interior vertical
-!! viscosity associated with processes 1,2 and 4 listed above, which is stored in
-!! visc%Kv_slow. Vertical viscosity due to shear-driven mixing is passed via
-!! visc%Kv_shear
 subroutine set_diffusivity(u, v, h, u_h, v_h, tv, fluxes, optics, visc, dt, &
                            G, GV, US, CS, Kd_lay, Kd_int, Kd_extra_T, Kd_extra_S)
   type(ocean_grid_type),     intent(in)    :: G    !< The ocean's grid structure.
@@ -319,40 +309,20 @@ subroutine set_diffusivity(u, v, h, u_h, v_h, tv, fluxes, optics, visc, dt, &
 
   ! Set up arrays for diagnostics.
 
-  if (CS%id_N2 > 0) then
-    allocate(dd%N2_3d(isd:ied,jsd:jed,nz+1)) ; dd%N2_3d(:,:,:) = 0.0
-  endif
-  if (CS%id_Kd_user > 0) then
-    allocate(dd%Kd_user(isd:ied,jsd:jed,nz+1)) ; dd%Kd_user(:,:,:) = 0.0
-  endif
-  if (CS%id_Kd_work > 0) then
-    allocate(dd%Kd_work(isd:ied,jsd:jed,nz)) ; dd%Kd_work(:,:,:) = 0.0
-  endif
-  if (CS%id_maxTKE > 0) then
-    allocate(dd%maxTKE(isd:ied,jsd:jed,nz)) ; dd%maxTKE(:,:,:) = 0.0
-  endif
-  if (CS%id_TKE_to_Kd > 0) then
-    allocate(dd%TKE_to_Kd(isd:ied,jsd:jed,nz)) ; dd%TKE_to_Kd(:,:,:) = 0.0
-  endif
-  if ((CS%double_diffusion) .and. (CS%id_KT_extra > 0)) then
-    allocate(dd%KT_extra(isd:ied,jsd:jed,nz+1)) ; dd%KT_extra(:,:,:) = 0.0
-  endif
-  if ((CS%double_diffusion) .and. (CS%id_KS_extra > 0)) then
-    allocate(dd%KS_extra(isd:ied,jsd:jed,nz+1)) ; dd%KS_extra(:,:,:) = 0.0
-  endif
-  if (CS%id_R_rho > 0) then
-    allocate(dd%drho_rat(isd:ied,jsd:jed,nz+1)) ; dd%drho_rat(:,:,:) = 0.0
-  endif
-  if (CS%id_Kd_BBL > 0) then
-    allocate(dd%Kd_BBL(isd:ied,jsd:jed,nz+1)) ; dd%Kd_BBL(:,:,:) = 0.0
-  endif
+  if (CS%id_N2 > 0) allocate(dd%N2_3d(isd:ied,jsd:jed,nz+1), source=0.0)
+  if (CS%id_Kd_user > 0) allocate(dd%Kd_user(isd:ied,jsd:jed,nz+1), source=0.0)
+  if (CS%id_Kd_work > 0) allocate(dd%Kd_work(isd:ied,jsd:jed,nz), source=0.0)
+  if (CS%id_maxTKE > 0) allocate(dd%maxTKE(isd:ied,jsd:jed,nz), source=0.0)
+  if (CS%id_TKE_to_Kd > 0) allocate(dd%TKE_to_Kd(isd:ied,jsd:jed,nz), source=0.0)
+  if ((CS%double_diffusion) .and. (CS%id_KT_extra > 0)) &
+    allocate(dd%KT_extra(isd:ied,jsd:jed,nz+1), source=0.0)
+  if ((CS%double_diffusion) .and. (CS%id_KS_extra > 0)) &
+    allocate(dd%KS_extra(isd:ied,jsd:jed,nz+1), source=0.0)
+  if (CS%id_R_rho > 0) allocate(dd%drho_rat(isd:ied,jsd:jed,nz+1), source=0.0)
+  if (CS%id_Kd_BBL > 0) allocate(dd%Kd_BBL(isd:ied,jsd:jed,nz+1), source=0.0)
 
-  if (CS%id_Kd_bkgnd > 0) then
-    allocate(dd%Kd_bkgnd(isd:ied,jsd:jed,nz+1)) ; dd%Kd_bkgnd(:,:,:) = 0.
-  endif
-  if (CS%id_Kv_bkgnd > 0) then
-    allocate(dd%Kv_bkgnd(isd:ied,jsd:jed,nz+1)) ; dd%Kv_bkgnd(:,:,:) = 0.
-  endif
+  if (CS%id_Kd_bkgnd > 0) allocate(dd%Kd_bkgnd(isd:ied,jsd:jed,nz+1), source=0.)
+  if (CS%id_Kv_bkgnd > 0) allocate(dd%Kv_bkgnd(isd:ied,jsd:jed,nz+1), source=0.)
 
   ! set up arrays for tidal mixing diagnostics
   if (CS%use_tidal_mixing) &
@@ -1735,7 +1705,7 @@ subroutine set_BBL_TKE(u, v, h, fluxes, visc, G, GV, US, CS, OBC)
   type(vertvisc_type),      intent(in)    :: visc !< Structure containing vertical viscosities, bottom
                                                   !! boundary layer properies, and related fields.
   type(set_diffusivity_CS), pointer       :: CS   !< Diffusivity control structure
-  type(ocean_OBC_type), optional, pointer :: OBC  !< Open boundaries control structure.
+  type(ocean_OBC_type),     pointer       :: OBC  !< Open boundaries control structure.
 
   ! This subroutine calculates several properties related to bottom
   ! boundary layer turbulence.
@@ -1766,10 +1736,10 @@ subroutine set_BBL_TKE(u, v, h, fluxes, visc, G, GV, US, CS, OBC)
 
   local_open_u_BC = .false.
   local_open_v_BC = .false.
-  if (present(OBC)) then ; if (associated(OBC)) then
+  if (associated(OBC)) then
     local_open_u_BC = OBC%open_u_BCs_exist_globally
     local_open_v_BC = OBC%open_v_BCs_exist_globally
-  endif ; endif
+  endif
 
   is = G%isc ; ie = G%iec ; js = G%jsc ; je = G%jec ; nz = GV%ke
 
@@ -2037,9 +2007,14 @@ subroutine set_diffusivity_init(Time, G, GV, US, param_file, diag, CS, int_tide_
   ! This include declares and sets the variable "version".
 # include "version_variable.h"
   character(len=40)  :: mdl = "MOM_set_diffusivity"  ! This module's name.
-  real :: omega_frac_dflt
+  real    :: omega_frac_dflt ! The default value for the fraction of the absolute rotation rate
+                             ! that is used in place of the absolute value of the local Coriolis
+                             ! parameter in the denominator of some expressions [nondim]
   logical :: Bryan_Lewis_diffusivity ! If true, the background diapycnal diffusivity uses
                                      ! the Bryan-Lewis (1979) style tanh profile.
+  logical :: use_regridding  ! If true, use the ALE algorithm rather than layered
+                             ! isopycnal or stacked shallow water mode.
+  logical :: TKE_to_Kd_used  ! If true, TKE_to_Kd and maxTKE need to be calculated.
   integer :: i, j, is, ie, js, je
   integer :: isd, ied, jsd, jed
 
@@ -2083,8 +2058,8 @@ subroutine set_diffusivity_init(Time, G, GV, US, param_file, diag, CS, int_tide_
                  "forms of the same expressions.", default=default_2018_answers)
 
   ! CS%use_tidal_mixing is set to True if an internal tidal dissipation scheme is to be used.
-  CS%use_tidal_mixing = tidal_mixing_init(Time, G, GV, US, param_file, diag, &
-                                          CS%tidal_mixing_CSp)
+  CS%use_tidal_mixing = tidal_mixing_init(Time, G, GV, US, param_file, &
+                                          CS%int_tide_CSp, diag, CS%tidal_mixing_CSp)
 
   call get_param(param_file, mdl, "ML_RADIATION", CS%ML_radiation, &
                  "If true, allow a fraction of TKE available from wind "//&
@@ -2181,11 +2156,15 @@ subroutine set_diffusivity_init(Time, G, GV, US, param_file, diag, CS, int_tide_
   endif
   CS%id_Kd_BBL = register_diag_field('ocean_model', 'Kd_BBL', diag%axesTi, Time, &
                  'Bottom Boundary Layer Diffusivity', 'm2 s-1', conversion=US%Z2_T_to_m2_s)
+
+  TKE_to_Kd_used = (CS%use_tidal_mixing .or. CS%ML_radiation .or. &
+                   (CS%bottomdraglaw .and. .not.CS%use_LOTW_BBL_diffusivity))
   call get_param(param_file, mdl, "SIMPLE_TKE_TO_KD", CS%simple_TKE_to_Kd, &
                  "If true, uses a simple estimate of Kd/TKE that will "//&
                  "work for arbitrary vertical coordinates. If false, "//&
                  "calculates Kd/TKE and bounds based on exact energetics "//&
-                 "for an isopycnal layer-formulation.", default=.false.)
+                 "for an isopycnal layer-formulation.", &
+                 default=.false., do_not_log=.not.TKE_to_Kd_used)
 
   ! set params related to the background mixing
   call bkgnd_mixing_init(Time, G, GV, US, param_file, CS%diag, CS%bkgnd_mixing_csp)
@@ -2206,8 +2185,15 @@ subroutine set_diffusivity_init(Time, G, GV, US, param_file, diag, CS, int_tide_
                  "The maximum permitted increment for the diapycnal "//&
                  "diffusivity from TKE-based parameterizations, or a negative "//&
                  "value for no limit.", units="m2 s-1", default=-1.0, scale=US%m2_s_to_Z2_T)
-  if (CS%simple_TKE_to_Kd .and. CS%Kd_max<=0.) call MOM_error(FATAL, &
+  if (CS%simple_TKE_to_Kd) then
+    if (CS%Kd_max<=0.) call MOM_error(FATAL, &
          "set_diffusivity_init: To use SIMPLE_TKE_TO_KD, KD_MAX must be set to >0.")
+    call get_param(param_file, mdl, "USE_REGRIDDING", use_regridding, &
+                 do_not_log=.true., default=.false.)
+    if (use_regridding) call MOM_error(WARNING, &
+         "set_diffusivity_init: SIMPLE_TKE_TO_KD can not be used reliably with USE_REGRIDDING.")
+  endif
+
   call get_param(param_file, mdl, "KD_ADD", CS%Kd_add, &
                  "A uniform diapycnal diffusivity that is added "//&
                  "everywhere without any filtering or scaling.", &

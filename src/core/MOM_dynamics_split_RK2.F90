@@ -527,8 +527,7 @@ subroutine step_MOM_dyn_split_RK2(u, v, h, tv, visc, Time_local, dt, forces, p_s
   enddo
 
   call enable_averages(dt, Time_local, CS%diag)
-  call set_viscous_ML(u, v, h, tv, forces, visc, dt, G, GV, US, &
-                      CS%set_visc_CSp)
+  call set_viscous_ML(u, v, h, tv, forces, visc, dt, G, GV, US, CS%set_visc_CSp)
   call disable_averaging(CS%diag)
 
   if (CS%debug) then
@@ -563,8 +562,8 @@ subroutine step_MOM_dyn_split_RK2(u, v, h, tv, visc, Time_local, dt, forces, p_s
 ! u_accel_bt = layer accelerations due to barotropic solver
   if (associated(CS%BT_cont) .or. CS%BT_use_layer_fluxes) then
     call cpu_clock_begin(id_clock_continuity)
-    call continuity(u, v, h, hp, uh_in, vh_in, dt, G, GV, US, CS%continuity_CSp, &
-                    OBC=CS%OBC, visc_rem_u=CS%visc_rem_u, visc_rem_v=CS%visc_rem_v, BT_cont=CS%BT_cont)
+    call continuity(u, v, h, hp, uh_in, vh_in, dt, G, GV, US, CS%continuity_CSp, CS%OBC, &
+                    visc_rem_u=CS%visc_rem_u, visc_rem_v=CS%visc_rem_v, BT_cont=CS%BT_cont)
     call cpu_clock_end(id_clock_continuity)
     if (BT_cont_BT_thick) then
       call btcalc(h, G, GV, CS%barotropic_CSp, CS%BT_cont%h_u, CS%BT_cont%h_v, &
@@ -581,12 +580,10 @@ subroutine step_MOM_dyn_split_RK2(u, v, h, tv, visc, Time_local, dt, forces, p_s
   if (calc_dtbt) call set_dtbt(G, GV, US, CS%barotropic_CSp, eta, CS%pbce)
   if (showCallTree) call callTree_enter("btstep(), MOM_barotropic.F90")
   ! This is the predictor step call to btstep.
-  call btstep(u, v, eta, dt, u_bc_accel, v_bc_accel, forces, CS%pbce, CS%eta_PF, &
-              u_av, v_av, CS%u_accel_bt, CS%v_accel_bt, eta_pred, CS%uhbt, CS%vhbt, &
-              G, GV, US, CS%barotropic_CSp, CS%visc_rem_u, CS%visc_rem_v, ADp=CS%ADp, &
-              OBC=CS%OBC, BT_cont=CS%BT_cont, eta_PF_start=eta_PF_start, &
-              taux_bot=taux_bot, tauy_bot=tauy_bot, &
-              uh0=uh_ptr, vh0=vh_ptr, u_uh0=u_ptr, v_vh0=v_ptr)
+  call btstep(u, v, eta, dt, u_bc_accel, v_bc_accel, forces, CS%pbce, CS%eta_PF, u_av, v_av, &
+              CS%u_accel_bt, CS%v_accel_bt, eta_pred, CS%uhbt, CS%vhbt, G, GV, US, &
+              CS%barotropic_CSp, CS%visc_rem_u, CS%visc_rem_v, CS%ADp, CS%OBC, CS%BT_cont, &
+              eta_PF_start, taux_bot, tauy_bot, uh_ptr, vh_ptr, u_ptr, v_ptr)
   if (showCallTree) call callTree_leave("btstep()")
   call cpu_clock_end(id_clock_btstep)
 
@@ -650,8 +647,8 @@ subroutine step_MOM_dyn_split_RK2(u, v, h, tv, visc, Time_local, dt, forces, p_s
   ! uh = u_av * h
   ! hp = h + dt * div . uh
   call cpu_clock_begin(id_clock_continuity)
-  call continuity(up, vp, h, hp, uh, vh, dt, G, GV, US, CS%continuity_CSp, &
-                  CS%uhbt, CS%vhbt, CS%OBC, CS%visc_rem_u, CS%visc_rem_v, &
+  call continuity(up, vp, h, hp, uh, vh, dt, G, GV, US, CS%continuity_CSp, CS%OBC, &
+                  CS%uhbt, CS%vhbt, CS%visc_rem_u, CS%visc_rem_v, &
                   u_av, v_av, BT_cont=CS%BT_cont)
   call cpu_clock_end(id_clock_continuity)
   if (showCallTree) call callTree_wayPoint("done with continuity (step_MOM_dyn_split_RK2)")
@@ -782,13 +779,10 @@ subroutine step_MOM_dyn_split_RK2(u, v, h, tv, visc, Time_local, dt, forces, p_s
 
   if (showCallTree) call callTree_enter("btstep(), MOM_barotropic.F90")
   ! This is the corrector step call to btstep.
-  call btstep(u, v, eta, dt, u_bc_accel, v_bc_accel, forces, CS%pbce, &
-              CS%eta_PF, u_av, v_av, CS%u_accel_bt, CS%v_accel_bt, &
-              eta_pred, CS%uhbt, CS%vhbt, G, GV, US, CS%barotropic_CSp, &
-              CS%visc_rem_u, CS%visc_rem_v, etaav=eta_av, ADp=CS%ADp, &
-              OBC=CS%OBC, BT_cont = CS%BT_cont, eta_PF_start=eta_PF_start, &
-              taux_bot=taux_bot, tauy_bot=tauy_bot, &
-              uh0=uh_ptr, vh0=vh_ptr, u_uh0=u_ptr, v_vh0=v_ptr)
+  call btstep(u, v, eta, dt, u_bc_accel, v_bc_accel, forces, CS%pbce, CS%eta_PF, u_av, v_av, &
+              CS%u_accel_bt, CS%v_accel_bt, eta_pred, CS%uhbt, CS%vhbt, G, GV, US, &
+              CS%barotropic_CSp, CS%visc_rem_u, CS%visc_rem_v, CS%ADp, CS%OBC, CS%BT_cont, &
+              eta_PF_start, taux_bot, tauy_bot, uh_ptr, vh_ptr, u_ptr, v_ptr, etaav=eta_av)
   do j=js,je ; do i=is,ie ; eta(i,j) = eta_pred(i,j) ; enddo ; enddo
 
   call cpu_clock_end(id_clock_btstep)
@@ -856,8 +850,8 @@ subroutine step_MOM_dyn_split_RK2(u, v, h, tv, visc, Time_local, dt, forces, p_s
   ! h  = h + dt * div . uh
   ! u_av and v_av adjusted so their mass transports match uhbt and vhbt.
   call cpu_clock_begin(id_clock_continuity)
-  call continuity(u, v, h, h, uh, vh, dt, G, GV, US, CS%continuity_CSp, &
-                  CS%uhbt, CS%vhbt, CS%OBC, CS%visc_rem_u, CS%visc_rem_v, u_av, v_av)
+  call continuity(u, v, h, h, uh, vh, dt, G, GV, US, CS%continuity_CSp, CS%OBC, &
+                  CS%uhbt, CS%vhbt, CS%visc_rem_u, CS%visc_rem_v, u_av, v_av)
   call cpu_clock_end(id_clock_continuity)
   call do_group_pass(CS%pass_h, G%Domain, clock=id_clock_pass)
   ! Whenever thickness changes let the diag manager know, target grids
@@ -946,8 +940,7 @@ subroutine step_MOM_dyn_split_RK2(u, v, h, tv, visc, Time_local, dt, forces, p_s
   endif
 
   if (CS%id_hf_PFu_2d > 0) then
-    allocate(hf_PFu_2d(G%IsdB:G%IedB,G%jsd:G%jed))
-    hf_PFu_2d(:,:) = 0.0
+    allocate(hf_PFu_2d(G%IsdB:G%IedB,G%jsd:G%jed), source=0.0)
     do k=1,nz ; do j=js,je ; do I=Isq,Ieq
       hf_PFu_2d(I,j) = hf_PFu_2d(I,j) + CS%PFu(I,j,k) * CS%ADp%diag_hfrac_u(I,j,k)
     enddo ; enddo ; enddo
@@ -955,8 +948,7 @@ subroutine step_MOM_dyn_split_RK2(u, v, h, tv, visc, Time_local, dt, forces, p_s
     deallocate(hf_PFu_2d)
   endif
   if (CS%id_hf_PFv_2d > 0) then
-    allocate(hf_PFv_2d(G%isd:G%ied,G%JsdB:G%JedB))
-    hf_PFv_2d(:,:) = 0.0
+    allocate(hf_PFv_2d(G%isd:G%ied,G%JsdB:G%JedB), source=0.0)
     do k=1,nz ; do J=Jsq,Jeq ; do i=is,ie
       hf_PFv_2d(i,J) = hf_PFv_2d(i,J) + CS%PFv(i,J,k) * CS%ADp%diag_hfrac_v(i,J,k)
     enddo ; enddo ; enddo
@@ -965,8 +957,7 @@ subroutine step_MOM_dyn_split_RK2(u, v, h, tv, visc, Time_local, dt, forces, p_s
   endif
 
   if (CS%id_h_PFu > 0) then
-    allocate(h_PFu(G%IsdB:G%IedB,G%jsd:G%jed,GV%ke))
-    h_PFu(:,:,:) = 0.0
+    allocate(h_PFu(G%IsdB:G%IedB,G%jsd:G%jed,GV%ke), source=0.0)
     do k=1,nz ; do j=js,je ; do I=Isq,Ieq
       h_PFu(I,j,k) = CS%PFu(I,j,k) * CS%ADp%diag_hu(I,j,k)
     enddo ; enddo ; enddo
@@ -974,8 +965,7 @@ subroutine step_MOM_dyn_split_RK2(u, v, h, tv, visc, Time_local, dt, forces, p_s
     deallocate(h_PFu)
   endif
   if (CS%id_h_PFv > 0) then
-    allocate(h_PFv(G%isd:G%ied,G%JsdB:G%JedB,GV%ke))
-    h_PFv(:,:,:) = 0.0
+    allocate(h_PFv(G%isd:G%ied,G%JsdB:G%JedB,GV%ke), source=0.0)
     do k=1,nz ; do J=Jsq,Jeq ; do i=is,ie
       h_PFv(i,J,k) = CS%PFv(i,J,k) * CS%ADp%diag_hv(i,J,k)
     enddo ; enddo ; enddo
@@ -1013,8 +1003,7 @@ subroutine step_MOM_dyn_split_RK2(u, v, h, tv, visc, Time_local, dt, forces, p_s
   endif
 
   if (CS%id_hf_CAu_2d > 0) then
-    allocate(hf_CAu_2d(G%IsdB:G%IedB,G%jsd:G%jed))
-    hf_CAu_2d(:,:) = 0.0
+    allocate(hf_CAu_2d(G%IsdB:G%IedB,G%jsd:G%jed), source=0.0)
     do k=1,nz ; do j=js,je ; do I=Isq,Ieq
       hf_CAu_2d(I,j) = hf_CAu_2d(I,j) + CS%CAu(I,j,k) * CS%ADp%diag_hfrac_u(I,j,k)
     enddo ; enddo ; enddo
@@ -1022,8 +1011,7 @@ subroutine step_MOM_dyn_split_RK2(u, v, h, tv, visc, Time_local, dt, forces, p_s
     deallocate(hf_CAu_2d)
   endif
   if (CS%id_hf_CAv_2d > 0) then
-    allocate(hf_CAv_2d(G%isd:G%ied,G%JsdB:G%JedB))
-    hf_CAv_2d(:,:) = 0.0
+    allocate(hf_CAv_2d(G%isd:G%ied,G%JsdB:G%JedB), source=0.0)
     do k=1,nz ; do J=Jsq,Jeq ; do i=is,ie
       hf_CAv_2d(i,J) = hf_CAv_2d(i,J) + CS%CAv(i,J,k) * CS%ADp%diag_hfrac_v(i,J,k)
     enddo ; enddo ; enddo
@@ -1032,8 +1020,7 @@ subroutine step_MOM_dyn_split_RK2(u, v, h, tv, visc, Time_local, dt, forces, p_s
   endif
 
   if (CS%id_h_CAu > 0) then
-    allocate(h_CAu(G%IsdB:G%IedB,G%jsd:G%jed,GV%ke))
-    h_CAu(:,:,:) = 0.0
+    allocate(h_CAu(G%IsdB:G%IedB,G%jsd:G%jed,GV%ke), source=0.0)
     do k=1,nz ; do j=js,je ; do I=Isq,Ieq
       h_CAu(I,j,k) = CS%CAu(I,j,k) * CS%ADp%diag_hu(I,j,k)
     enddo ; enddo ; enddo
@@ -1041,8 +1028,7 @@ subroutine step_MOM_dyn_split_RK2(u, v, h, tv, visc, Time_local, dt, forces, p_s
     deallocate(h_CAu)
   endif
   if (CS%id_h_CAv > 0) then
-    allocate(h_CAv(G%isd:G%ied,G%JsdB:G%JedB,GV%ke))
-    h_CAv(:,:,:) = 0.0
+    allocate(h_CAv(G%isd:G%ied,G%JsdB:G%JedB,GV%ke), source=0.0)
     do k=1,nz ; do J=Jsq,Jeq ; do i=is,ie
       h_CAv(i,J,k) = CS%CAv(i,J,k) * CS%ADp%diag_hv(i,J,k)
     enddo ; enddo ; enddo
@@ -1080,8 +1066,7 @@ subroutine step_MOM_dyn_split_RK2(u, v, h, tv, visc, Time_local, dt, forces, p_s
   endif
 
   if (CS%id_hf_u_BT_accel_2d > 0) then
-    allocate(hf_u_BT_accel_2d(G%IsdB:G%IedB,G%jsd:G%jed))
-    hf_u_BT_accel_2d(:,:) = 0.0
+    allocate(hf_u_BT_accel_2d(G%IsdB:G%IedB,G%jsd:G%jed), source=0.0)
     do k=1,nz ; do j=js,je ; do I=Isq,Ieq
       hf_u_BT_accel_2d(I,j) = hf_u_BT_accel_2d(I,j) + CS%u_accel_bt(I,j,k) * CS%ADp%diag_hfrac_u(I,j,k)
     enddo ; enddo ; enddo
@@ -1089,8 +1074,7 @@ subroutine step_MOM_dyn_split_RK2(u, v, h, tv, visc, Time_local, dt, forces, p_s
     deallocate(hf_u_BT_accel_2d)
   endif
   if (CS%id_hf_v_BT_accel_2d > 0) then
-    allocate(hf_v_BT_accel_2d(G%isd:G%ied,G%JsdB:G%JedB))
-    hf_v_BT_accel_2d(:,:) = 0.0
+    allocate(hf_v_BT_accel_2d(G%isd:G%ied,G%JsdB:G%JedB), source=0.0)
     do k=1,nz ; do J=Jsq,Jeq ; do i=is,ie
       hf_v_BT_accel_2d(i,J) = hf_v_BT_accel_2d(i,J) + CS%v_accel_bt(i,J,k) * CS%ADp%diag_hfrac_v(i,J,k)
     enddo ; enddo ; enddo
@@ -1099,8 +1083,7 @@ subroutine step_MOM_dyn_split_RK2(u, v, h, tv, visc, Time_local, dt, forces, p_s
   endif
 
   if (CS%id_h_u_BT_accel > 0) then
-    allocate(h_u_BT_accel(G%IsdB:G%IedB,G%jsd:G%jed,GV%ke))
-    h_u_BT_accel(:,:,:) = 0.0
+    allocate(h_u_BT_accel(G%IsdB:G%IedB,G%jsd:G%jed,GV%ke), source=0.0)
     do k=1,nz ; do j=js,je ; do I=Isq,Ieq
       h_u_BT_accel(I,j,k) = CS%u_accel_bt(I,j,k) * CS%ADp%diag_hu(I,j,k)
     enddo ; enddo ; enddo
@@ -1108,8 +1091,7 @@ subroutine step_MOM_dyn_split_RK2(u, v, h, tv, visc, Time_local, dt, forces, p_s
     deallocate(h_u_BT_accel)
   endif
   if (CS%id_h_v_BT_accel > 0) then
-    allocate(h_v_BT_accel(G%isd:G%ied,G%JsdB:G%JedB,GV%ke))
-    h_v_BT_accel(:,:,:) = 0.0
+    allocate(h_v_BT_accel(G%isd:G%ied,G%JsdB:G%JedB,GV%ke), source=0.0)
     do k=1,nz ; do J=Jsq,Jeq ; do i=is,ie
       h_v_BT_accel(i,J,k) = CS%v_accel_bt(i,J,k) * CS%ADp%diag_hv(i,J,k)
     enddo ; enddo ; enddo
@@ -1118,8 +1100,7 @@ subroutine step_MOM_dyn_split_RK2(u, v, h, tv, visc, Time_local, dt, forces, p_s
   endif
 
   if (CS%id_PFu_visc_rem > 0) then
-    allocate(PFu_visc_rem(G%IsdB:G%IedB,G%jsd:G%jed,GV%ke))
-    PFu_visc_rem(:,:,:) = 0.0
+    allocate(PFu_visc_rem(G%IsdB:G%IedB,G%jsd:G%jed,GV%ke), source=0.0)
     do k=1,nz ; do j=js,je ; do I=Isq,Ieq
       PFu_visc_rem(I,j,k) = CS%PFu(I,j,k) * CS%ADp%visc_rem_u(I,j,k)
     enddo ; enddo ; enddo
@@ -1127,8 +1108,7 @@ subroutine step_MOM_dyn_split_RK2(u, v, h, tv, visc, Time_local, dt, forces, p_s
     deallocate(PFu_visc_rem)
   endif
   if (CS%id_PFv_visc_rem > 0) then
-    allocate(PFv_visc_rem(G%isd:G%ied,G%JsdB:G%JedB,GV%ke))
-    PFv_visc_rem(:,:,:) = 0.0
+    allocate(PFv_visc_rem(G%isd:G%ied,G%JsdB:G%JedB,GV%ke), source=0.0)
     do k=1,nz ; do J=Jsq,Jeq ; do i=is,ie
       PFv_visc_rem(i,J,k) = CS%PFv(i,J,k) * CS%ADp%visc_rem_v(i,J,k)
     enddo ; enddo ; enddo
@@ -1136,8 +1116,7 @@ subroutine step_MOM_dyn_split_RK2(u, v, h, tv, visc, Time_local, dt, forces, p_s
     deallocate(PFv_visc_rem)
   endif
   if (CS%id_CAu_visc_rem > 0) then
-    allocate(CAu_visc_rem(G%IsdB:G%IedB,G%jsd:G%jed,GV%ke))
-    CAu_visc_rem(:,:,:) = 0.0
+    allocate(CAu_visc_rem(G%IsdB:G%IedB,G%jsd:G%jed,GV%ke), source=0.0)
     do k=1,nz ; do j=js,je ; do I=Isq,Ieq
       CAu_visc_rem(I,j,k) = CS%CAu(I,j,k) * CS%ADp%visc_rem_u(I,j,k)
     enddo ; enddo ; enddo
@@ -1145,8 +1124,7 @@ subroutine step_MOM_dyn_split_RK2(u, v, h, tv, visc, Time_local, dt, forces, p_s
     deallocate(CAu_visc_rem)
   endif
   if (CS%id_CAv_visc_rem > 0) then
-    allocate(CAv_visc_rem(G%isd:G%ied,G%JsdB:G%JedB,GV%ke))
-    CAv_visc_rem(:,:,:) = 0.0
+    allocate(CAv_visc_rem(G%isd:G%ied,G%JsdB:G%JedB,GV%ke), source=0.0)
     do k=1,nz ; do J=Jsq,Jeq ; do i=is,ie
       CAv_visc_rem(i,J,k) = CS%CAv(i,J,k) * CS%ADp%visc_rem_v(i,J,k)
     enddo ; enddo ; enddo
@@ -1154,8 +1132,7 @@ subroutine step_MOM_dyn_split_RK2(u, v, h, tv, visc, Time_local, dt, forces, p_s
     deallocate(CAv_visc_rem)
   endif
   if (CS%id_u_BT_accel_visc_rem > 0) then
-    allocate(u_BT_accel_visc_rem(G%IsdB:G%IedB,G%jsd:G%jed,GV%ke))
-    u_BT_accel_visc_rem(:,:,:) = 0.0
+    allocate(u_BT_accel_visc_rem(G%IsdB:G%IedB,G%jsd:G%jed,GV%ke), source=0.0)
     do k=1,nz ; do j=js,je ; do I=Isq,Ieq
       u_BT_accel_visc_rem(I,j,k) = CS%u_accel_bt(I,j,k) * CS%ADp%visc_rem_u(I,j,k)
     enddo ; enddo ; enddo
@@ -1163,8 +1140,7 @@ subroutine step_MOM_dyn_split_RK2(u, v, h, tv, visc, Time_local, dt, forces, p_s
     deallocate(u_BT_accel_visc_rem)
   endif
   if (CS%id_v_BT_accel_visc_rem > 0) then
-    allocate(v_BT_accel_visc_rem(G%isd:G%ied,G%JsdB:G%JedB,GV%ke))
-    v_BT_accel_visc_rem(:,:,:) = 0.0
+    allocate(v_BT_accel_visc_rem(G%isd:G%ied,G%JsdB:G%JedB,GV%ke), source=0.0)
     do k=1,nz ; do J=Jsq,Jeq ; do i=is,ie
       v_BT_accel_visc_rem(i,J,k) = CS%v_accel_bt(i,J,k) * CS%ADp%visc_rem_v(i,J,k)
     enddo ; enddo ; enddo
@@ -1290,8 +1266,6 @@ subroutine initialize_dyn_split_RK2(u, v, h, uh, vh, eta, Time, G, GV, US, param
                                                                 !! diagnostic pointers
   type(VarMix_CS),                  pointer       :: VarMix     !< points to spatially variable viscosities
   type(MEKE_type),                  pointer       :: MEKE       !< points to mesoscale eddy kinetic energy fields
-!  type(Barotropic_CS),              pointer       :: Barotropic_CSp !< Pointer to the control structure for
-!                                                                !! the barotropic module
   type(thickness_diffuse_CS),       pointer       :: thickness_diffuse_CSp !< Pointer to the control structure
                                                   !! used for the isopycnal height diffusive transport.
   type(ocean_OBC_type),             pointer       :: OBC        !< points to OBC related fields
@@ -1304,7 +1278,7 @@ subroutine initialize_dyn_split_RK2(u, v, h, uh, vh, eta, Time, G, GV, US, param
                                                                 !! the number of times the velocity is
                                                                 !! truncated (this should be 0).
   logical,                          intent(out)   :: calc_dtbt  !< If true, recalculate the barotropic time step
-  integer,                optional, intent(out)   :: cont_stencil !< The stencil for thickness
+  integer,                          intent(out)   :: cont_stencil !< The stencil for thickness
                                                                 !! from the continuity solver.
 
   ! local variables
@@ -1375,8 +1349,8 @@ subroutine initialize_dyn_split_RK2(u, v, h, uh, vh, eta, Time, G, GV, US, param
   call get_param(param_file, mdl, "DEBUG_TRUNCATIONS", debug_truncations, &
                  default=.false.)
 
-  allocate(CS%taux_bot(IsdB:IedB,jsd:jed)) ; CS%taux_bot(:,:) = 0.0
-  allocate(CS%tauy_bot(isd:ied,JsdB:JedB)) ; CS%tauy_bot(:,:) = 0.0
+  allocate(CS%taux_bot(IsdB:IedB,jsd:jed), source=0.0)
+  allocate(CS%tauy_bot(isd:ied,JsdB:JedB), source=0.0)
 
   ALLOC_(CS%uhbt(IsdB:IedB,jsd:jed))          ; CS%uhbt(:,:)         = 0.0
   ALLOC_(CS%vhbt(isd:ied,JsdB:JedB))          ; CS%vhbt(:,:)         = 0.0
@@ -1420,7 +1394,7 @@ subroutine initialize_dyn_split_RK2(u, v, h, uh, vh, eta, Time, G, GV, US, param
                                      grain=CLOCK_ROUTINE)
 
   call continuity_init(Time, G, GV, US, param_file, diag, CS%continuity_CSp)
-  if (present(cont_stencil)) cont_stencil = continuity_stencil(CS%continuity_CSp)
+  cont_stencil = continuity_stencil(CS%continuity_CSp)
   call CoriolisAdv_init(Time, G, GV, US, param_file, diag, CS%ADp, CS%CoriolisAdv_CSp)
   if (use_tides) call tidal_forcing_init(Time, G, param_file, CS%tides_CSp)
   call PressureForce_init(Time, G, GV, US, param_file, diag, CS%PressureForce_CSp, &
@@ -1500,7 +1474,7 @@ subroutine initialize_dyn_split_RK2(u, v, h, uh, vh, eta, Time, G, GV, US, param
   if (.not. query_initialized(uh,"uh",restart_CS) .or. &
       .not. query_initialized(vh,"vh",restart_CS)) then
     do k=1,nz ; do j=jsd,jed ; do i=isd,ied ; h_tmp(i,j,k) = h(i,j,k) ; enddo ; enddo ; enddo
-    call continuity(u, v, h, h_tmp, uh, vh, dt, G, GV, US, CS%continuity_CSp, OBC=CS%OBC)
+    call continuity(u, v, h, h_tmp, uh, vh, dt, G, GV, US, CS%continuity_CSp, CS%OBC)
     call pass_var(h_tmp, G%Domain, clock=id_clock_pass_init)
     do k=1,nz ; do j=jsd,jed ; do i=isd,ied
       CS%h_av(i,j,k) = 0.5*(h(i,j,k) + h_tmp(i,j,k))

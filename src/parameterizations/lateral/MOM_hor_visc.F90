@@ -277,6 +277,8 @@ subroutine horizontal_viscosity(u, v, h, diffu, diffv, MEKE, VarMix, G, GV, US, 
     grad_vel_mag_h, & ! Magnitude of the velocity gradient tensor squared at h-points [T-2 ~> s-2]
     grad_vel_mag_bt_h, & ! Magnitude of the barotropic velocity gradient tensor squared at h-points [T-2 ~> s-2]
     grad_d2vel_mag_h, & ! Magnitude of the Laplacian of the velocity vector, squared [L-2 T-2 ~> m-2 s-2]
+    GME_effic_h, &  ! The filtered efficiency of the GME terms at h points [nondim]
+    htot, &         ! The total thickness of all layers [Z ~> m]
     boundary_mask_h ! A mask that zeroes out cells with at least one land edge [nondim]
 
   real, allocatable, dimension(:,:,:) :: h_diffu ! h x diffu [H L T-2 ~> m2 s-2]
@@ -304,6 +306,7 @@ subroutine horizontal_viscosity(u, v, h, diffu, diffv, MEKE, VarMix, G, GV, US, 
     hq, &         ! harmonic mean of the harmonic means of the u- & v point thicknesses [H ~> m or kg m-2]
                   ! This form guarantees that hq/hu < 4.
     grad_vel_mag_bt_q, &  ! Magnitude of the barotropic velocity gradient tensor squared at q-points [T-2 ~> s-2]
+    GME_effic_q, &  ! The filtered efficiency of the GME terms at q points [nondim]
     boundary_mask_q ! A mask that zeroes out cells with at least one land edge [nondim]
 
   real, dimension(SZIB_(G),SZJB_(G),SZK_(GV)) :: &
@@ -341,6 +344,10 @@ subroutine horizontal_viscosity(u, v, h, diffu, diffv, MEKE, VarMix, G, GV, US, 
   real :: hu, hv     ! Thicknesses interpolated by arithmetic means to corner
                      ! points; these are first interpolated to u or v velocity
                      ! points where masks are applied [H ~> m or kg m-2].
+  real :: h_arith_q  ! The arithmetic mean total thickness at q points [Z ~> m]
+  real :: h_harm_q   ! The harmonic mean total thickness at q points [Z ~> m]
+  real :: I_hq       ! The inverse of the arithmetic mean total thickness at q points [Z-1 ~> m-1]
+  real :: I_GME_h0   ! The inverse of GME tapering scale [Z-1 ~> m-1]
   real :: h_neglect  ! thickness so small it can be lost in roundoff and so neglected [H ~> m or kg m-2]
   real :: h_neglect3 ! h_neglect^3 [H3 ~> m3 or kg3 m-6]
   real :: h_min      ! Minimum h at the 4 neighboring velocity points [H ~> m]
@@ -426,20 +433,28 @@ subroutine horizontal_viscosity(u, v, h, diffu, diffv, MEKE, VarMix, G, GV, US, 
       backscat_subround = (1.0e-16/MEKE%backscatter_Ro_c)**(1.0/MEKE%backscatter_Ro_Pow)
   endif
 
+  ! Toggle whether to use a Laplacian viscosity derived from MEKE
+  if (associated(MEKE)) then
+    use_MEKE_Ku = associated(MEKE%Ku)
+    use_MEKE_Au = associated(MEKE%Au)
+  else
+    use_MEKE_Ku = .false. ; use_MEKE_Au = .false.
+  endif
+
   rescale_Kh = .false.
   if (associated(VarMix)) then
     rescale_Kh = VarMix%Resoln_scaled_Kh
-    if (rescale_Kh .and. &
+    if ((rescale_Kh .or. CS%res_scale_MEKE) .and. &
     (.not.associated(VarMix%Res_fn_h) .or. .not.associated(VarMix%Res_fn_q))) &
-      call MOM_error(FATAL, "MOM_hor_visc: VarMix%Res_fn_h and " //&
-        "VarMix%Res_fn_q both need to be associated with Resoln_scaled_Kh.")
+      call MOM_error(FATAL, "MOM_hor_visc: VarMix%Res_fn_h and VarMix%Res_fn_q "//&
+        "both need to be associated with Resoln_scaled_Kh or RES_SCALE_MEKE_VISC.")
+  elseif (CS%res_scale_MEKE) then
+    call MOM_error(FATAL, "MOM_hor_visc: VarMix needs to be associated if "//&
+                          "RES_SCALE_MEKE_VISC is True.")
   endif
+
   legacy_bound = (CS%Smagorinsky_Kh .or. CS%Leith_Kh) .and. &
                  (CS%bound_Kh .and. .not.CS%better_bound_Kh)
-
-  ! Toggle whether to use a Laplacian viscosity derived from MEKE
-  use_MEKE_Ku = associated(MEKE%Ku)
-  use_MEKE_Au = associated(MEKE%Au)
 
   if (CS%use_GME) then
     do j=Jsq-1,Jeq+2 ; do i=Isq-1,Ieq+2
@@ -499,9 +514,38 @@ subroutine horizontal_viscosity(u, v, h, diffu, diffv, MEKE, VarMix, G, GV, US, 
     enddo ; enddo
 
     do J=js-2,Jeq+1 ; do I=is-2,Ieq+1
-      grad_vel_mag_bt_q(I,J) = boundary_mask_q(I,J) * (dvdx_bt(i,j)**2 + dudy_bt(i,j)**2 + &
+      grad_vel_mag_bt_q(I,J) = boundary_mask_q(I,J) * (dvdx_bt(I,J)**2 + dudy_bt(I,J)**2 + &
             (0.25*((dudx_bt(i,j)+dudx_bt(i+1,j+1))+(dudx_bt(i,j+1)+dudx_bt(i+1,j))))**2 + &
             (0.25*((dvdy_bt(i,j)+dvdy_bt(i+1,j+1))+(dvdy_bt(i,j+1)+dvdy_bt(i+1,j))))**2)
+    enddo ; enddo
+
+    do j=js-1,je+1 ; do i=is-1,ie+1
+      htot(i,j) = 0.0
+    enddo ; enddo
+    do k=1,nz ; do j=js-1,je+1 ; do i=is-1,ie+1
+      htot(i,j) = htot(i,j) + GV%H_to_Z*h(i,j,k)
+    enddo ; enddo ; enddo
+
+    I_GME_h0 = 1.0 / CS%GME_h0
+    do j=Jsq,Jeq+1 ; do i=Isq,Ieq+1
+      if (grad_vel_mag_bt_h(i,j)>0) then
+        GME_effic_h(i,j) = CS%GME_efficiency * boundary_mask_h(i,j) * &
+            (MIN(htot(i,j) * I_GME_h0, 1.0)**2)
+      else
+        GME_effic_h(i,j) = 0.0
+      endif
+    enddo ; enddo
+
+    do J=js-1,Jeq ; do I=is-1,Ieq
+      if (grad_vel_mag_bt_q(I,J)>0) then
+        h_arith_q = 0.25 * ((htot(i,j) + htot(i+1,j+1)) + (htot(i+1,j) + htot(i,j+1)))
+        I_hq = 1.0 / h_arith_q
+        h_harm_q = 0.25 * h_arith_q * ((htot(i,j)*I_hq + htot(i+1,j+1)*I_hq) + &
+                                       (htot(i+1,j)*I_hq + htot(i,j+1)*I_hq))
+        GME_effic_q(I,J) = CS%GME_efficiency * boundary_mask_q(I,J) * (MIN(h_harm_q * I_GME_h0, 1.0)**2)
+      else
+        GME_effic_q(I,J) = 0.0
+      endif
     enddo ; enddo
 
   endif ! use_GME
@@ -512,7 +556,7 @@ subroutine horizontal_viscosity(u, v, h, diffu, diffv, MEKE, VarMix, G, GV, US, 
   !$OMP   is, ie, js, je, Isq, Ieq, Jsq, Jeq, nz, &
   !$OMP   apply_OBC, rescale_Kh, legacy_bound, find_FrictWork, &
   !$OMP   use_MEKE_Ku, use_MEKE_Au, boundary_mask_h, boundary_mask_q, &
-  !$OMP   backscat_subround, GME_coeff_limiter, &
+  !$OMP   backscat_subround, GME_coeff_limiter, GME_effic_h, GME_effic_q, &
   !$OMP   h_neglect, h_neglect3, FWfrac, inv_PI3, inv_PI6, H0_GME, &
   !$OMP   diffu, diffv, Kh_h, Kh_q, Ah_h, Ah_q, FrictWork, FrictWork_GME, &
   !$OMP   div_xx_h, sh_xx_h, vort_xy_q, sh_xy_q, GME_coeff_h, GME_coeff_q, &
@@ -775,7 +819,7 @@ subroutine horizontal_viscosity(u, v, h, diffu, diffv, MEKE, VarMix, G, GV, US, 
         DX_dyBu = G%dxBu(I,J) * G%IdyBu(I,J)
 
         Del2vort_q(I,J) = DY_dxBu * (vort_xy_dx(i+1,J) * G%IdyCv(i+1,J) - vort_xy_dx(i,J) * G%IdyCv(i,J)) + &
-                        DX_dyBu * (vort_xy_dy(I,j+1) * G%IdyCu(I,j+1) - vort_xy_dy(I,j) * G%IdyCu(I,j))
+                          DX_dyBu * (vort_xy_dy(I,j+1) * G%IdyCu(I,j+1) - vort_xy_dy(I,j) * G%IdyCu(I,j))
       enddo ; enddo
       do J=Jsq,Jeq+1 ; do I=Isq,Ieq+1
         Del2vort_h(i,j) = 0.25*(Del2vort_q(I,J) + Del2vort_q(I-1,J) + Del2vort_q(I,J-1) + Del2vort_q(I-1,J-1))
@@ -793,12 +837,12 @@ subroutine horizontal_viscosity(u, v, h, diffu, diffv, MEKE, VarMix, G, GV, US, 
 
         ! Magnitude of divergence gradient
         do j=Jsq,Jeq+1 ; do i=Isq,Ieq+1
-          grad_div_mag_h(i,j) =sqrt((0.5*(div_xx_dx(I,j) + div_xx_dx(I-1,j)))**2 + &
-          (0.5 * (div_xx_dy(i,J) + div_xx_dy(i,J-1)))**2)
+          grad_div_mag_h(i,j) = sqrt((0.5*(div_xx_dx(I,j) + div_xx_dx(I-1,j)))**2 + &
+                                     (0.5*(div_xx_dy(i,J) + div_xx_dy(i,J-1)))**2)
         enddo ; enddo
         do j=Jsq-1,Jeq+1 ; do i=Isq-1,Ieq+1
-          grad_div_mag_q(I,J) =sqrt((0.5*(div_xx_dx(I,j) + div_xx_dx(I,j+1)))**2 + &
-          (0.5 * (div_xx_dy(i,J) + div_xx_dy(i+1,J)))**2)
+          grad_div_mag_q(I,J) = sqrt((0.5*(div_xx_dx(I,j) + div_xx_dx(I,j+1)))**2 + &
+                                     (0.5*(div_xx_dy(i,J) + div_xx_dy(i+1,J)))**2)
         enddo ; enddo
 
       else
@@ -856,15 +900,11 @@ subroutine horizontal_viscosity(u, v, h, diffu, diffv, MEKE, VarMix, G, GV, US, 
 
     endif ! CS%Leith_Kh
 
-    meke_res_fn = 1.
-
     if ((CS%Smagorinsky_Kh) .or. (CS%Smagorinsky_Ah)) then
       do j=Jsq,Jeq+1 ; do i=Isq,Ieq+1
-        sh_xx_sq = sh_xx(i,j) * sh_xx(i,j)
-        sh_xy_sq = 0.25 * ( &
-            (sh_xy(I-1,J-1) * sh_xy(I-1,J-1) + sh_xy(I,J) * sh_xy(I,J)) &
-            + (sh_xy(I-1,J) * sh_xy(I-1,J) + sh_xy(I,J-1) * sh_xy(I,J-1)) &
-        )
+        sh_xx_sq = sh_xx(i,j)**2
+        sh_xy_sq = 0.25 * ( (sh_xy(I-1,J-1)**2 + sh_xy(I,J)**2) &
+                          + (sh_xy(I-1,J)**2 + sh_xy(I,J-1)**2) )
         Shear_mag(i,j) = sqrt(sh_xx_sq + sh_xy_sq)
       enddo ; enddo
     endif
@@ -941,13 +981,18 @@ subroutine horizontal_viscosity(u, v, h, diffu, diffv, MEKE, VarMix, G, GV, US, 
         Kh(i,j) = max(Kh(i,j), CS%Kh_bg_min)
       enddo ; enddo
 
-      do j=Jsq,Jeq+1 ; do i=Isq,Ieq+1
-        if (CS%res_scale_MEKE) meke_res_fn = VarMix%Res_fn_h(i,j)
-
-        if (use_MEKE_Ku) &
-          ! *Add* the MEKE contribution (might be negative)
-          Kh(i,j) = Kh(i,j) + MEKE%Ku(i,j) * meke_res_fn
-      enddo ; enddo
+      if (use_MEKE_Ku) then
+        ! *Add* the MEKE contribution (which might be negative)
+        if (CS%res_scale_MEKE) then
+          do j=Jsq,Jeq+1 ; do i=Isq,Ieq+1
+            Kh(i,j) = Kh(i,j) + MEKE%Ku(i,j) * VarMix%Res_fn_h(i,j)
+          enddo ; enddo
+        else
+          do j=Jsq,Jeq+1 ; do i=Isq,Ieq+1
+            Kh(i,j) = Kh(i,j) + MEKE%Ku(i,j)
+          enddo ; enddo
+        endif
+      endif
 
       if (CS%anisotropic) then
         do j=Jsq,Jeq+1 ; do i=Isq,Ieq+1
@@ -1137,12 +1182,10 @@ subroutine horizontal_viscosity(u, v, h, diffu, diffv, MEKE, VarMix, G, GV, US, 
 
     if ((CS%Smagorinsky_Kh) .or. (CS%Smagorinsky_Ah)) then
       do J=js-1,Jeq ; do I=is-1,Ieq
-        sh_xy_sq = sh_xy(I,J) * sh_xy(I,J)
-        sh_xx_sq = 0.25 * ( &
-            (sh_xx(i,j) * sh_xx(i,j) + sh_xx(i+1,j+1) * sh_xx(i+1,j+1)) &
-            + (sh_xx(i,j+1) * sh_xx(i,j+1) + sh_xx(i+1,j) * sh_xx(i+1,j)) &
-        )
-        Shear_mag(i,j) = sqrt(sh_xy_sq + sh_xx_sq)
+        sh_xy_sq = sh_xy(I,J)**2
+        sh_xx_sq = 0.25 * ( (sh_xx(i,j)**2 + sh_xx(i+1,j+1)**2) &
+                          + (sh_xx(i,j+1)**2 + sh_xx(i+1,j)**2) )
+        Shear_mag(I,J) = sqrt(sh_xy_sq + sh_xx_sq)
       enddo ; enddo
     endif
 
@@ -1387,19 +1430,15 @@ subroutine horizontal_viscosity(u, v, h, diffu, diffv, MEKE, VarMix, G, GV, US, 
     endif
 
     if (CS%use_GME) then
+      !### This call to get the 3-d GME diffusivity arrays and the subsequent blocking halo update
+      !    should occur outside of the k-loop, and perhaps the halo update should occur outside of
+      !    this routine altogether!
       call thickness_diffuse_get_KH(TD, KH_u_GME, KH_v_GME, G, GV)
       call pass_vector(KH_u_GME, KH_v_GME, G%Domain)
 
       do j=Jsq,Jeq+1 ; do i=Isq,Ieq+1
-        if (grad_vel_mag_bt_h(i,j)>0) then
-          GME_coeff = CS%GME_efficiency * (MIN(G%bathyT(i,j)/CS%GME_h0,1.0)**2) * &
-            (0.25*(KH_u_GME(I,j,k)+KH_u_GME(I-1,j,k)+KH_v_GME(i,J,k)+KH_v_GME(i,J-1,k)))
-        else
-          GME_coeff = 0.0
-        endif
-
-        ! apply mask
-        GME_coeff = GME_coeff * boundary_mask_h(i,j)
+        GME_coeff = GME_effic_h(i,j) * 0.25 * &
+            ((KH_u_GME(I,j,k)+KH_u_GME(I-1,j,k)) + (KH_v_GME(i,J,k)+KH_v_GME(i,J-1,k)))
         GME_coeff = MIN(GME_coeff, CS%GME_limiter)
 
         if ((CS%id_GME_coeff_h>0) .or. find_FrictWork) GME_coeff_h(i,j,k) = GME_coeff
@@ -1408,15 +1447,8 @@ subroutine horizontal_viscosity(u, v, h, diffu, diffv, MEKE, VarMix, G, GV, US, 
       enddo ; enddo
 
       do J=js-1,Jeq ; do I=is-1,Ieq
-        if (grad_vel_mag_bt_q(i,j)>0) then
-          GME_coeff = CS%GME_efficiency * (MIN(G%bathyT(i,j)/CS%GME_h0,1.0)**2) * &
-              (0.25*(KH_u_GME(I,j,k)+KH_u_GME(I,j+1,k)+KH_v_GME(i,J,k)+KH_v_GME(i+1,J,k)))
-        else
-          GME_coeff = 0.0
-        endif
-
-        ! apply mask
-        GME_coeff = GME_coeff * boundary_mask_q(I,J)
+        GME_coeff = GME_effic_q(I,J) * 0.25 * &
+            ((KH_u_GME(I,j,k)+KH_u_GME(I,j+1,k)) + (KH_v_GME(i,J,k)+KH_v_GME(i+1,J,k)))
         GME_coeff = MIN(GME_coeff, CS%GME_limiter)
 
         if (CS%id_GME_coeff_q>0) GME_coeff_q(I,J,k) = GME_coeff
@@ -1425,8 +1457,11 @@ subroutine horizontal_viscosity(u, v, h, diffu, diffv, MEKE, VarMix, G, GV, US, 
       enddo ; enddo
 
       ! Applying GME diagonal term.  This is linear and the arguments can be rescaled.
-      call smooth_GME(CS,G,GME_flux_h=str_xx_GME)
-      call smooth_GME(CS,G,GME_flux_q=str_xy_GME)
+      !### This smoothing is only applied at computational grid points, but is used in extra halo points!
+      !### There are blocking halo updates in the smooth_GME routines, which could be avoided by expanding
+      !    the loop ranges by a point in the code setting str_xx_GME and str_xy_GME a few lines above.
+      call smooth_GME(CS, G, GME_flux_h=str_xx_GME)
+      call smooth_GME(CS, G, GME_flux_q=str_xy_GME)
 
       do J=Jsq,Jeq+1 ; do i=Isq,Ieq+1
         str_xx(i,j) = (str_xx(i,j) + str_xx_GME(i,j)) * (h(i,j,k) * CS%reduction_xx(i,j))
@@ -1447,7 +1482,7 @@ subroutine horizontal_viscosity(u, v, h, diffu, diffv, MEKE, VarMix, G, GV, US, 
         enddo ; enddo
       endif
 
-    else ! use_GME
+    else ! .not. use_GME
       do J=Jsq,Jeq+1 ; do i=Isq,Ieq+1
         str_xx(i,j) = str_xx(i,j) * (h(i,j,k) * CS%reduction_xx(i,j))
       enddo ; enddo
@@ -1689,8 +1724,7 @@ subroutine horizontal_viscosity(u, v, h, diffu, diffv, MEKE, VarMix, G, GV, US, 
   endif
 
   if (present(ADp) .and. (CS%id_h_diffu > 0)) then
-    allocate(h_diffu(G%IsdB:G%IedB,G%jsd:G%jed,GV%ke))
-    h_diffu(:,:,:) = 0.0
+    allocate(h_diffu(G%IsdB:G%IedB,G%jsd:G%jed,GV%ke), source=0.0)
     do k=1,nz ; do j=js,je ; do I=Isq,Ieq
       h_diffu(I,j,k) = diffu(I,j,k) * ADp%diag_hu(I,j,k)
     enddo ; enddo ; enddo
@@ -1698,8 +1732,7 @@ subroutine horizontal_viscosity(u, v, h, diffu, diffv, MEKE, VarMix, G, GV, US, 
     deallocate(h_diffu)
   endif
   if (present(ADp) .and. (CS%id_h_diffv > 0)) then
-    allocate(h_diffv(G%isd:G%ied,G%JsdB:G%JedB,GV%ke))
-    h_diffv(:,:,:) = 0.0
+    allocate(h_diffv(G%isd:G%ied,G%JsdB:G%JedB,GV%ke), source=0.0)
     do k=1,nz ; do J=Jsq,Jeq ; do i=is,ie
       h_diffv(i,J,k) = diffv(i,J,k) * ADp%diag_hv(i,J,k)
     enddo ; enddo ; enddo
@@ -1708,8 +1741,7 @@ subroutine horizontal_viscosity(u, v, h, diffu, diffv, MEKE, VarMix, G, GV, US, 
   endif
 
   if (present(ADp) .and. (CS%id_diffu_visc_rem > 0)) then
-    allocate(diffu_visc_rem(G%IsdB:G%IedB,G%jsd:G%jed,GV%ke))
-    diffu_visc_rem(:,:,:) = 0.0
+    allocate(diffu_visc_rem(G%IsdB:G%IedB,G%jsd:G%jed,GV%ke), source=0.0)
     do k=1,nz ; do j=js,je ; do I=Isq,Ieq
       diffu_visc_rem(I,j,k) = diffu(I,j,k) * ADp%visc_rem_u(I,j,k)
     enddo ; enddo ; enddo
@@ -1717,8 +1749,7 @@ subroutine horizontal_viscosity(u, v, h, diffu, diffv, MEKE, VarMix, G, GV, US, 
     deallocate(diffu_visc_rem)
   endif
   if (present(ADp) .and. (CS%id_diffv_visc_rem > 0)) then
-    allocate(diffv_visc_rem(G%isd:G%ied,G%JsdB:G%JedB,GV%ke))
-    diffv_visc_rem(:,:,:) = 0.0
+    allocate(diffv_visc_rem(G%isd:G%ied,G%JsdB:G%JedB,GV%ke), source=0.0)
     do k=1,nz ; do J=Jsq,Jeq ; do i=is,ie
       diffv_visc_rem(i,J,k) = diffv(i,J,k) * ADp%visc_rem_v(i,J,k)
     enddo ; enddo ; enddo
@@ -1780,11 +1811,9 @@ subroutine hor_visc_init(Time, G, GV, US, param_file, diag, CS, MEKE, ADp)
   real :: Kh_sin_lat       ! Amplitude of latitudinally dependent viscosity [L2 T-1 ~> m2 s-1]
   real :: Kh_pwr_of_sine   ! Power used to raise sin(lat) when using Kh_sin_lat
   logical :: bound_Cor_def ! parameter setting of BOUND_CORIOLIS
-  logical :: get_all       ! If true, read and log all parameters, regardless of
-                           ! whether they are used, to enable spell-checking of
-                           ! valid parameters.
   logical :: split         ! If true, use the split time stepping scheme.
                            ! If false and USE_GME = True, issue a FATAL error.
+  logical :: use_MEKE      ! If true, the MEKE parameterization is in use.
   logical :: default_2018_answers
   character(len=64) :: inputdir, filename
   real    :: deg2rad       ! Converts degrees to radians
@@ -1794,8 +1823,8 @@ subroutine hor_visc_init(Time, G, GV, US, param_file, diag, CS, MEKE, ADp)
   integer :: is, ie, js, je, Isq, Ieq, Jsq, Jeq, nz
   integer :: isd, ied, jsd, jed, IsdB, IedB, JsdB, JedB
   integer :: i, j
-! This include declares and sets the variable "version".
-#include "version_variable.h"
+  ! This include declares and sets the variable "version".
+# include "version_variable.h"
   character(len=40)  :: mdl = "MOM_hor_visc"  ! module name
   is   = G%isc  ; ie   = G%iec  ; js   = G%jsc  ; je   = G%jec ; nz = GV%ke
   Isq  = G%IscB ; Ieq  = G%IecB ; Jsq  = G%JscB ; Jeq  = G%JecB
@@ -1810,19 +1839,8 @@ subroutine hor_visc_init(Time, G, GV, US, param_file, diag, CS, MEKE, ADp)
   CS%diag => diag
   ! Read parameters and write them to the model log.
   call log_version(param_file, mdl, version, "")
-  !   It is not clear whether these initialization lines are needed for the
-  ! cases where the corresponding parameters are not read.
-  CS%bound_Kh = .false. ; CS%better_bound_Kh = .false. ; CS%Smagorinsky_Kh = .false. ; CS%Leith_Kh = .false.
-  CS%bound_Ah = .false. ; CS%better_bound_Ah = .false. ; CS%Smagorinsky_Ah = .false. ; CS%Leith_Ah = .false.
-  CS%use_QG_Leith_visc = .false.
-  CS%bound_Coriolis = .false.
-  CS%Modified_Leith = .false.
-  CS%anisotropic = .false.
-  CS%dynamic_aniso = .false.
-  Kh = 0.0 ; Ah = 0.0
-  !   If GET_ALL_PARAMS is true, all parameters are read in all cases to enable
-  ! parameter spelling checks.
-  call get_param(param_file, mdl, "GET_ALL_PARAMS", get_all, default=.false.)
+
+  ! All parameters are read in all cases to enable parameter spelling checks.
   call get_param(param_file, mdl, "DEFAULT_2018_ANSWERS", default_2018_answers, &
                  "This sets the default value for the various _2018_ANSWERS parameters.", &
                  default=.false.)
@@ -1834,181 +1852,202 @@ subroutine hor_visc_init(Time, G, GV, US, param_file, diag, CS, MEKE, ADp)
   call get_param(param_file, mdl, "LAPLACIAN", CS%Laplacian, &
                  "If true, use a Laplacian horizontal viscosity.", &
                  default=.false.)
-  if (CS%Laplacian .or. get_all) then
-    call get_param(param_file, mdl, "KH", Kh,                      &
+
+  call get_param(param_file, mdl, "KH", Kh,                      &
                  "The background Laplacian horizontal viscosity.", &
-                 units = "m2 s-1", default=0.0, scale=US%m_to_L**2*US%T_to_s)
-    call get_param(param_file, mdl, "KH_BG_MIN", CS%Kh_bg_min, &
+                 units="m2 s-1", default=0.0, scale=US%m_to_L**2*US%T_to_s, &
+                 do_not_log=.not.CS%Laplacian)
+  call get_param(param_file, mdl, "KH_BG_MIN", CS%Kh_bg_min, &
                  "The minimum value allowed for Laplacian horizontal viscosity, KH.", &
-                 units = "m2 s-1",  default=0.0, scale=US%m_to_L**2*US%T_to_s)
-    call get_param(param_file, mdl, "KH_VEL_SCALE", Kh_vel_scale, &
+                 units="m2 s-1", default=0.0, scale=US%m_to_L**2*US%T_to_s, &
+                 do_not_log=.not.CS%Laplacian)
+  call get_param(param_file, mdl, "KH_VEL_SCALE", Kh_vel_scale, &
                  "The velocity scale which is multiplied by the grid "//&
                  "spacing to calculate the Laplacian viscosity. "//&
                  "The final viscosity is the largest of this scaled "//&
                  "viscosity, the Smagorinsky and Leith viscosities, and KH.", &
-                 units="m s-1", default=0.0, scale=US%m_s_to_L_T)
-    call get_param(param_file, mdl, "KH_SIN_LAT", Kh_sin_lat, &
+                 units="m s-1", default=0.0, scale=US%m_s_to_L_T, &
+                 do_not_log=.not.CS%Laplacian)
+  call get_param(param_file, mdl, "KH_SIN_LAT", Kh_sin_lat, &
                  "The amplitude of a latitudinally-dependent background "//&
                  "viscosity of the form KH_SIN_LAT*(SIN(LAT)**KH_PWR_OF_SINE).", &
-                 units = "m2 s-1",  default=0.0, scale=US%m_to_L**2*US%T_to_s)
-    if (Kh_sin_lat>0. .or. get_all) &
-      call get_param(param_file, mdl, "KH_PWR_OF_SINE", Kh_pwr_of_sine, &
+                 units="m2 s-1", default=0.0, scale=US%m_to_L**2*US%T_to_s, &
+                 do_not_log=.not.CS%Laplacian)
+  call get_param(param_file, mdl, "KH_PWR_OF_SINE", Kh_pwr_of_sine, &
                  "The power used to raise SIN(LAT) when using a latitudinally "//&
                  "dependent background viscosity.", &
-                 units = "nondim",  default=4.0)
-    call get_param(param_file, mdl, "SMAGORINSKY_KH", CS%Smagorinsky_Kh, &
+                 units="nondim", default=4.0, &
+                 do_not_log=.not.(CS%Laplacian .and. (Kh_sin_lat>0.)) )
+  call get_param(param_file, mdl, "SMAGORINSKY_KH", CS%Smagorinsky_Kh, &
                  "If true, use a Smagorinsky nonlinear eddy viscosity.", &
-                 default=.false.)
-    if (CS%Smagorinsky_Kh .or. get_all) &
-      call get_param(param_file, mdl, "SMAG_LAP_CONST", Smag_Lap_const, &
+                 default=.false., do_not_log=.not.CS%Laplacian)
+  if (.not.CS%Laplacian) CS%Smagorinsky_Kh = .false.
+  call get_param(param_file, mdl, "SMAG_LAP_CONST", Smag_Lap_const, &
                  "The nondimensional Laplacian Smagorinsky constant, "//&
                  "often 0.15.", units="nondim", default=0.0, &
-                  fail_if_missing = CS%Smagorinsky_Kh)
-    call get_param(param_file, mdl, "LEITH_KH", CS%Leith_Kh, &
+                 fail_if_missing=CS%Smagorinsky_Kh, do_not_log=.not.CS%Smagorinsky_Kh)
+  call get_param(param_file, mdl, "LEITH_KH", CS%Leith_Kh, &
                  "If true, use a Leith nonlinear eddy viscosity.", &
-                 default=.false.)
-    call get_param(param_file, mdl, "MODIFIED_LEITH", CS%Modified_Leith, &
+                 default=.false., do_not_log=.not.CS%Laplacian)
+  if (.not.CS%Laplacian) CS%Leith_Kh = .false.
+  ! This call duplicates one that occurs 26 lines later, and is probably unneccessary.
+  call get_param(param_file, mdl, "MODIFIED_LEITH", CS%Modified_Leith, &
                  "If true, add a term to Leith viscosity which is "//&
                  "proportional to the gradient of divergence.", &
-                 default=.false.)
-    call get_param(param_file, mdl, "RES_SCALE_MEKE_VISC", CS%res_scale_MEKE, &
+                 default=.false., do_not_log=.not.CS%Laplacian) !### (.not.CS%Leith_Kh)?
+  call get_param(param_file, mdl, "USE_MEKE", use_MEKE, &
+                 default=.false., do_not_log=.true.)
+  call get_param(param_file, mdl, "RES_SCALE_MEKE_VISC", CS%res_scale_MEKE, &
                  "If true, the viscosity contribution from MEKE is scaled by "//&
-                 "the resolution function.", default=.false.)
-    if (CS%Leith_Kh .or. get_all) then
-      call get_param(param_file, mdl, "LEITH_LAP_CONST", Leith_Lap_const, &
+                 "the resolution function.", default=.false., &
+                 do_not_log=.not.(CS%Laplacian.and.use_MEKE))
+  if (.not.(CS%Laplacian.and.use_MEKE)) CS%res_scale_MEKE = .false.
+
+  call get_param(param_file, mdl, "LEITH_LAP_CONST", Leith_Lap_const, &
                  "The nondimensional Laplacian Leith constant, "//&
                  "often set to 1.0", units="nondim", default=0.0, &
-                  fail_if_missing = CS%Leith_Kh)
-      call get_param(param_file, mdl, "USE_QG_LEITH_VISC", CS%use_QG_Leith_visc, &
+                  fail_if_missing=CS%Leith_Kh, do_not_log=.not.CS%Leith_Kh)
+  call get_param(param_file, mdl, "USE_QG_LEITH_VISC", CS%use_QG_Leith_visc, &
                  "If true, use QG Leith nonlinear eddy viscosity.", &
-                 default=.false.)
-      if (CS%use_QG_Leith_visc .and. .not. CS%Leith_Kh) call MOM_error(FATAL, &
-                 "MOM_lateral_mixing_coeffs.F90, VarMix_init:"//&
+                 default=.false., do_not_log=.not.CS%Leith_Kh)
+  if (CS%use_QG_Leith_visc .and. .not. CS%Leith_Kh) call MOM_error(FATAL, &
+                 "MOM_hor_visc.F90, hor_visc_init:"//&
                  "LEITH_KH must be True when USE_QG_LEITH_VISC=True.")
-    endif
-    if (CS%Leith_Kh .or. CS%Leith_Ah .or. get_all) then
-      call get_param(param_file, mdl, "USE_BETA_IN_LEITH", CS%use_beta_in_Leith, &
+
+  !### The following two get_param_calls need to occur after Leith_Ah is read, but for now it replciates prior code.
+  CS%Leith_Ah = .false.
+  call get_param(param_file, mdl, "USE_BETA_IN_LEITH", CS%use_beta_in_Leith, &
                  "If true, include the beta term in the Leith nonlinear eddy viscosity.", &
-                 default=CS%Leith_Kh)
-      call get_param(param_file, mdl, "MODIFIED_LEITH", CS%modified_Leith, &
-                 "If true, add a term to Leith viscosity which is \n"//&
+                 default=CS%Leith_Kh, do_not_log=.not.(CS%Leith_Kh .or. CS%Leith_Ah) )
+  call get_param(param_file, mdl, "MODIFIED_LEITH", CS%modified_Leith, &
+                 "If true, add a term to Leith viscosity which is "//&
                  "proportional to the gradient of divergence.", &
-                 default=.false.)
-    endif
-    call get_param(param_file, mdl, "BOUND_KH", CS%bound_Kh, &
+                 default=.false., do_not_log=.not.(CS%Leith_Kh .or. CS%Leith_Ah) )
+
+  call get_param(param_file, mdl, "BOUND_KH", CS%bound_Kh, &
                  "If true, the Laplacian coefficient is locally limited "//&
-                 "to be stable.", default=.true.)
-    call get_param(param_file, mdl, "BETTER_BOUND_KH", CS%better_bound_Kh, &
+                 "to be stable.", default=.true., do_not_log=.not.CS%Laplacian)
+  call get_param(param_file, mdl, "BETTER_BOUND_KH", CS%better_bound_Kh, &
                  "If true, the Laplacian coefficient is locally limited "//&
                  "to be stable with a better bounding than just BOUND_KH.", &
-                 default=CS%bound_Kh)
-    call get_param(param_file, mdl, "ANISOTROPIC_VISCOSITY", CS%anisotropic, &
+                 default=CS%bound_Kh, do_not_log=.not.CS%Laplacian)
+  if (.not.CS%Laplacian) CS%bound_Kh = .false.
+  if (.not.CS%Laplacian) CS%better_bound_Kh = .false.
+  call get_param(param_file, mdl, "ANISOTROPIC_VISCOSITY", CS%anisotropic, &
                  "If true, allow anistropic viscosity in the Laplacian "//&
-                 "horizontal viscosity.", default=.false.)
-    call get_param(param_file, mdl, "ADD_LES_VISCOSITY", CS%add_LES_viscosity, &
+                 "horizontal viscosity.", default=.false., &
+                 do_not_log=.not.CS%Laplacian)
+  if (.not.CS%Laplacian) CS%anisotropic = .false. ! This replicates the prior code, but is it intended?
+  call get_param(param_file, mdl, "ADD_LES_VISCOSITY", CS%add_LES_viscosity, &
                  "If true, adds the viscosity from Smagorinsky and Leith to the "//&
-                 "background viscosity instead of taking the maximum.", default=.false.)
-  endif
-  if (CS%anisotropic .or. get_all) then
-    call get_param(param_file, mdl, "KH_ANISO", CS%Kh_aniso, &
+                 "background viscosity instead of taking the maximum.", default=.false., &
+                 do_not_log=.not.CS%Laplacian)
+
+  call get_param(param_file, mdl, "KH_ANISO", CS%Kh_aniso, &
                  "The background Laplacian anisotropic horizontal viscosity.", &
-                 units = "m2 s-1", default=0.0, scale=US%m_to_L**2*US%T_to_s)
-    call get_param(param_file, mdl, "ANISOTROPIC_MODE", aniso_mode, &
+                 units="m2 s-1", default=0.0, scale=US%m_to_L**2*US%T_to_s, &
+                 do_not_log=.not.CS%anisotropic)
+  call get_param(param_file, mdl, "ANISOTROPIC_MODE", aniso_mode, &
                  "Selects the mode for setting the direction of anistropy.\n"//&
                  "\t 0 - Points along the grid i-direction.\n"//&
                  "\t 1 - Points towards East.\n"//&
                  "\t 2 - Points along the flow direction, U/|U|.", &
-                 default=0)
-    select case (aniso_mode)
-      case (0)
-        call get_param(param_file, mdl, "ANISO_GRID_DIR", aniso_grid_dir, &
-                 "The vector pointing in the direction of anistropy for "//&
-                 "horizont viscosity. n1,n2 are the i,j components relative "//&
-                 "to the grid.", units = "nondim", fail_if_missing=.true.)
-      case (1)
-        call get_param(param_file, mdl, "ANISO_GRID_DIR", aniso_grid_dir, &
-                 "The vector pointing in the direction of anistropy for "//&
-                 "horizont viscosity. n1,n2 are the i,j components relative "//&
-                 "to the spherical coordinates.", units = "nondim", fail_if_missing=.true.)
-    end select
+                 default=0, do_not_log=.not.CS%anisotropic)
+  if (aniso_mode == 0) then
+    call get_param(param_file, mdl, "ANISO_GRID_DIR", aniso_grid_dir, &
+                 "The vector pointing in the direction of anistropy for horizontal viscosity. "//&
+                 "n1,n2 are the i,j components relative to the grid.", &
+                 units="nondim", fail_if_missing=CS%anisotropic, do_not_log=.not.CS%anisotropic)
+  elseif (aniso_mode == 1) then
+    call get_param(param_file, mdl, "ANISO_GRID_DIR", aniso_grid_dir, &
+                 "The vector pointing in the direction of anistropy for horizontal viscosity. "//&
+                 "n1,n2 are the i,j components relative to the spherical coordinates.", &
+                 units="nondim", fail_if_missing=CS%anisotropic, do_not_log=.not.CS%anisotropic)
+  else
+    call get_param(param_file, mdl, "ANISO_GRID_DIR", aniso_grid_dir, &
+                 "The vector pointing in the direction of anistropy for horizontal viscosity.", &
+                 units="nondim", fail_if_missing=.false., do_not_log=.true.)
   endif
+
   call get_param(param_file, mdl, "BIHARMONIC", CS%biharmonic, &
                  "If true, use a biharmonic horizontal viscosity. "//&
                  "BIHARMONIC may be used with LAPLACIAN.", &
                  default=.true.)
-  if (CS%biharmonic .or. get_all) then
-    call get_param(param_file, mdl, "AH", Ah, &
+  call get_param(param_file, mdl, "AH", Ah, &
                  "The background biharmonic horizontal viscosity.", &
-                 units = "m4 s-1", default=0.0, scale=US%m_to_L**4*US%T_to_s)
-    call get_param(param_file, mdl, "AH_VEL_SCALE", Ah_vel_scale, &
+                 units="m4 s-1", default=0.0, scale=US%m_to_L**4*US%T_to_s, &
+                 do_not_log=.not.CS%biharmonic)
+  call get_param(param_file, mdl, "AH_VEL_SCALE", Ah_vel_scale, &
                  "The velocity scale which is multiplied by the cube of "//&
                  "the grid spacing to calculate the biharmonic viscosity. "//&
                  "The final viscosity is the largest of this scaled "//&
                  "viscosity, the Smagorinsky and Leith viscosities, and AH.", &
-                 units="m s-1", default=0.0, scale=US%m_s_to_L_T)
-    call get_param(param_file, mdl, "AH_TIME_SCALE", Ah_time_scale, &
+                 units="m s-1", default=0.0, scale=US%m_s_to_L_T, do_not_log=.not.CS%biharmonic)
+  call get_param(param_file, mdl, "AH_TIME_SCALE", Ah_time_scale, &
                  "A time scale whose inverse is multiplied by the fourth "//&
                  "power of the grid spacing to calculate biharmonic viscosity. "//&
                  "The final viscosity is the largest of all viscosity "//&
                  "formulations in use. 0.0 means that it's not used.", &
-                 units="s", default=0.0, scale=US%s_to_T)
-    call get_param(param_file, mdl, "SMAGORINSKY_AH", CS%Smagorinsky_Ah, &
+                 units="s", default=0.0, scale=US%s_to_T, do_not_log=.not.CS%biharmonic)
+  call get_param(param_file, mdl, "SMAGORINSKY_AH", CS%Smagorinsky_Ah, &
                  "If true, use a biharmonic Smagorinsky nonlinear eddy "//&
-                 "viscosity.", default=.false.)
-    call get_param(param_file, mdl, "LEITH_AH", CS%Leith_Ah, &
+                 "viscosity.", default=.false., do_not_log=.not.CS%biharmonic)
+  if (.not.CS%biharmonic) CS%Smagorinsky_Ah = .false.
+  call get_param(param_file, mdl, "LEITH_AH", CS%Leith_Ah, &
                  "If true, use a biharmonic Leith nonlinear eddy "//&
-                 "viscosity.", default=.false.)
-    call get_param(param_file, mdl, "BOUND_AH", CS%bound_Ah, &
+                 "viscosity.", default=.false., do_not_log=.not.CS%biharmonic)
+  if (.not.CS%biharmonic) CS%Leith_Ah = .false.
+  call get_param(param_file, mdl, "BOUND_AH", CS%bound_Ah, &
                  "If true, the biharmonic coefficient is locally limited "//&
-                 "to be stable.", default=.true.)
-    call get_param(param_file, mdl, "BETTER_BOUND_AH", CS%better_bound_Ah, &
+                 "to be stable.", default=.true., do_not_log=.not.CS%biharmonic)
+  call get_param(param_file, mdl, "BETTER_BOUND_AH", CS%better_bound_Ah, &
                  "If true, the biharmonic coefficient is locally limited "//&
                  "to be stable with a better bounding than just BOUND_AH.", &
-                 default=CS%bound_Ah)
-    call get_param(param_file, mdl, "RE_AH", CS%Re_Ah, &
+                 default=CS%bound_Ah, do_not_log=.not.CS%biharmonic)
+  if (.not.CS%biharmonic) CS%bound_Ah = .false.
+  if (.not.CS%biharmonic) CS%better_bound_Ah = .false.
+  call get_param(param_file, mdl, "RE_AH", CS%Re_Ah, &
                  "If nonzero, the biharmonic coefficient is scaled "//&
                  "so that the biharmonic Reynolds number is equal to this.", &
-                 units="nondim", default=0.0)
+                 units="nondim", default=0.0, do_not_log=.not.CS%biharmonic)
 
-    if (CS%Smagorinsky_Ah .or. get_all) then
-      call get_param(param_file, mdl, "SMAG_BI_CONST",Smag_bi_const, &
+  call get_param(param_file, mdl, "SMAG_BI_CONST",Smag_bi_const, &
                  "The nondimensional biharmonic Smagorinsky constant, "//&
                  "typically 0.015 - 0.06.", units="nondim", default=0.0, &
-                 fail_if_missing = CS%Smagorinsky_Ah)
-      call get_param(param_file, mdl, "BOUND_CORIOLIS", bound_Cor_def, default=.false.)
-      call get_param(param_file, mdl, "BOUND_CORIOLIS_BIHARM", CS%bound_Coriolis, &
+                 fail_if_missing=CS%Smagorinsky_Ah, do_not_log=.not.CS%Smagorinsky_Ah)
+
+  call get_param(param_file, mdl, "BOUND_CORIOLIS", bound_Cor_def, default=.false.)
+  call get_param(param_file, mdl, "BOUND_CORIOLIS_BIHARM", CS%bound_Coriolis, &
                  "If true use a viscosity that increases with the square "//&
                  "of the velocity shears, so that the resulting viscous "//&
                  "drag is of comparable magnitude to the Coriolis terms "//&
                  "when the velocity differences between adjacent grid "//&
                  "points is 0.5*BOUND_CORIOLIS_VEL.  The default is the "//&
-                 "value of BOUND_CORIOLIS (or false).", default=bound_Cor_def)
-      if (CS%bound_Coriolis .or. get_all) then
-        call get_param(param_file, mdl, "MAXVEL", maxvel, default=3.0e8)
-        bound_Cor_vel = maxvel
-        call get_param(param_file, mdl, "BOUND_CORIOLIS_VEL", bound_Cor_vel, &
+                 "value of BOUND_CORIOLIS (or false).", default=bound_Cor_def, &
+                 do_not_log=.not.CS%Smagorinsky_Ah)
+  if (.not.CS%Smagorinsky_Ah) CS%bound_Coriolis = .false.
+  call get_param(param_file, mdl, "MAXVEL", maxvel, default=3.0e8)
+  call get_param(param_file, mdl, "BOUND_CORIOLIS_VEL", bound_Cor_vel, &
                  "The velocity scale at which BOUND_CORIOLIS_BIHARM causes "//&
                  "the biharmonic drag to have comparable magnitude to the "//&
                  "Coriolis acceleration.  The default is set by MAXVEL.", &
-                 units="m s-1", default=maxvel, scale=US%m_s_to_L_T)
-      endif
-    endif
-    if (CS%Leith_Ah .or. get_all) &
-      call get_param(param_file, mdl, "LEITH_BI_CONST", Leith_bi_const, &
+                 units="m s-1", default=maxvel, scale=US%m_s_to_L_T, &
+                 do_not_log=.not.(CS%Smagorinsky_Ah .and. CS%bound_Coriolis))
+
+  call get_param(param_file, mdl, "LEITH_BI_CONST", Leith_bi_const, &
                  "The nondimensional biharmonic Leith constant, "//&
                  "typical values are thus far undetermined.", units="nondim", default=0.0, &
-                 fail_if_missing = CS%Leith_Ah)
-  endif
+                 fail_if_missing=CS%Leith_Ah, do_not_log=.not.CS%Leith_Ah)
+
   call get_param(param_file, mdl, "USE_LAND_MASK_FOR_HVISC", CS%use_land_mask, &
                  "If true, use Use the land mask for the computation of thicknesses "//&
                  "at velocity locations. This eliminates the dependence on arbitrary "//&
                  "values over land or outside of the domain.", default=.true.)
-  if (CS%better_bound_Ah .or. CS%better_bound_Kh .or. get_all) &
-    call get_param(param_file, mdl, "HORVISC_BOUND_COEF", CS%bound_coef, &
+  call get_param(param_file, mdl, "HORVISC_BOUND_COEF", CS%bound_coef, &
                  "The nondimensional coefficient of the ratio of the "//&
                  "viscosity bounds to the theoretical maximum for "//&
                  "stability without considering other terms.", units="nondim", &
-                 default=0.8)
+                 default=0.8, do_not_log=.not.(CS%better_bound_Ah .or. CS%better_bound_Kh))
   call get_param(param_file, mdl, "NOSLIP", CS%no_slip, &
                  "If true, no slip boundary conditions are used; otherwise "//&
                  "free slip boundary conditions are assumed. The "//&
@@ -2019,34 +2058,31 @@ subroutine hor_visc_init(Time, G, GV, US, param_file, diag, CS, MEKE, ADp)
   call get_param(param_file, mdl, "USE_KH_BG_2D", CS%use_Kh_bg_2d, &
                  "If true, read a file containing 2-d background harmonic "//&
                  "viscosities. The final viscosity is the maximum of the other "//&
-                 "terms and this background value.", default=.false.)
-  if (CS%use_Kh_bg_2d) then
-    call get_param(param_file, mdl, "KH_BG_2D_BUG", CS%Kh_bg_2d_bug, &
+                 "terms and this background value.", default=.false.) ! ###do_not_log=.not.CS%Laplacian?
+  call get_param(param_file, mdl, "KH_BG_2D_BUG", CS%Kh_bg_2d_bug, &
                  "If true, retain an answer-changing horizontal indexing bug in setting "//&
                  "the corner-point viscosities when USE_KH_BG_2D=True. This is"//&
-                 "not recommended.", default=.false.)
-  endif
+                 "not recommended.", default=.false., do_not_log=.not.CS%use_Kh_bg_2d)
 
   call get_param(param_file, mdl, "USE_GME", CS%use_GME, &
                  "If true, use the GM+E backscatter scheme in association \n"//&
                  "with the Gent and McWilliams parameterization.", default=.false.)
-  if (CS%use_GME) then
-    call get_param(param_file, mdl, "SPLIT", split, &
-                 "Use the split time stepping if true.", default=.true., &
-                  do_not_log=.true.)
-    if (.not. split) call MOM_error(FATAL,"ERROR: Currently, USE_GME = True "// &
+  call get_param(param_file, mdl, "SPLIT", split, &
+                 "Use the split time stepping if true.", default=.true., do_not_log=.true.)
+  if (CS%use_GME .and. .not.split) call MOM_error(FATAL,"ERROR: Currently, USE_GME = True "// &
                                            "cannot be used with SPLIT=False.")
-    call get_param(param_file, mdl, "GME_H0", CS%GME_h0, &
+  call get_param(param_file, mdl, "GME_H0", CS%GME_h0, &
                  "The strength of GME tapers quadratically to zero when the bathymetric "//&
-                 "depth is shallower than GME_H0.", units="m", scale=US%m_to_Z, &
-                 default=1000.0)
-    call get_param(param_file, mdl, "GME_EFFICIENCY", CS%GME_efficiency, &
+                 "depth is shallower than GME_H0.", &
+                 units="m", scale=US%m_to_Z, default=1000.0, do_not_log=.not.CS%use_GME)
+  call get_param(param_file, mdl, "GME_EFFICIENCY", CS%GME_efficiency, &
                  "The nondimensional prefactor multiplying the GME coefficient.", &
-                 units="nondim", default=1.0)
-    call get_param(param_file, mdl, "GME_LIMITER", CS%GME_limiter, &
+                 units="nondim", default=1.0, do_not_log=.not.CS%use_GME)
+  call get_param(param_file, mdl, "GME_LIMITER", CS%GME_limiter, &
                  "The absolute maximum value the GME coefficient is allowed to take.", &
-                 units="m2 s-1", scale=US%m_to_L**2*US%T_to_s, default=1.0e7)
-  endif
+                 units="m2 s-1", scale=US%m_to_L**2*US%T_to_s, default=1.0e7, &
+                 do_not_log=.not.CS%use_GME)
+
   if (CS%Laplacian .or. CS%biharmonic) then
     call get_param(param_file, mdl, "DT", dt, &
                  "The (baroclinic) dynamics time step.", units="s", scale=US%s_to_T, &
@@ -2091,6 +2127,8 @@ subroutine hor_visc_init(Time, G, GV, US, param_file, diag, CS, MEKE, ADp)
   endif
   ALLOC_(CS%reduction_xx(isd:ied,jsd:jed))     ; CS%reduction_xx(:,:) = 0.0
   ALLOC_(CS%reduction_xy(IsdB:IedB,JsdB:JedB)) ; CS%reduction_xy(:,:) = 0.0
+
+  CS%dynamic_aniso = .false.
   if (CS%anisotropic) then
     ALLOC_(CS%n1n2_h(isd:ied,jsd:jed)) ; CS%n1n2_h(:,:) = 0.0
     ALLOC_(CS%n1n1_m_n2n2_h(isd:ied,jsd:jed)) ; CS%n1n1_m_n2n2_h(:,:) = 0.0
@@ -2108,13 +2146,14 @@ subroutine hor_visc_init(Time, G, GV, US, param_file, diag, CS, MEKE, ADp)
              "Runtime parameter ANISOTROPIC_MODE is out of range.")
     end select
   endif
-  if (CS%use_Kh_bg_2d) then
-    ALLOC_(CS%Kh_bg_2d(isd:ied,jsd:jed))     ; CS%Kh_bg_2d(:,:) = 0.0
-    call get_param(param_file, mdl, "KH_BG_2D_FILENAME", filename, &
+
+  call get_param(param_file, mdl, "KH_BG_2D_FILENAME", filename, &
                  'The filename containing a 2d map of "Kh".', &
-                 default='KH_background_2d.nc')
+                 default='KH_background_2d.nc', do_not_log=.not.CS%use_Kh_bg_2d)
+  if (CS%use_Kh_bg_2d) then
     call get_param(param_file, mdl, "INPUTDIR", inputdir, default=".")
     inputdir = slasher(inputdir)
+    ALLOC_(CS%Kh_bg_2d(isd:ied,jsd:jed))     ; CS%Kh_bg_2d(:,:) = 0.0
     call MOM_read_data(trim(inputdir)//trim(filename), 'Kh', CS%Kh_bg_2d, &
                        G%domain, timelevel=1, scale=US%m_to_L**2*US%T_to_s)
     call pass_var(CS%Kh_bg_2d, G%domain)
@@ -2542,8 +2581,7 @@ subroutine hor_visc_init(Time, G, GV, US, param_file, diag, CS, MEKE, ADp)
       cmor_field_name='dispkexyfo',                                                              &
       cmor_long_name='Depth integrated ocean kinetic energy dissipation due to lateral friction',&
       cmor_standard_name='ocean_kinetic_energy_dissipation_per_unit_area_due_to_xy_friction')
-  if (CS%Laplacian .or. get_all) then
-  endif
+
 end subroutine hor_visc_init
 
 !> Calculates factors in the anisotropic orientation tensor to be align with the grid.
@@ -2581,8 +2619,9 @@ subroutine smooth_GME(CS,G,GME_flux_h,GME_flux_q)
   do s=1,1
     ! Update halos
     if (present(GME_flux_h)) then
+      !### Work on a wider halo to eliminate this blocking send!
       call pass_var(GME_flux_h, G%Domain)
-      GME_flux_h_original = GME_flux_h
+      GME_flux_h_original(:,:) = GME_flux_h(:,:)
       ! apply smoothing on GME
       do j = G%jsc, G%jec
         do i = G%isc, G%iec
@@ -2594,6 +2633,7 @@ subroutine smooth_GME(CS,G,GME_flux_h,GME_flux_q)
           ws = 0.125 * G%mask2dT(i,j-1)
           wn = 0.125 * G%mask2dT(i,j+1)
           wc = 1.0 - (ww+we+wn+ws)
+          !### Add parentheses to make this rotationally invariant.
           GME_flux_h(i,j) =  wc * GME_flux_h_original(i,j)   &
                            + ww * GME_flux_h_original(i-1,j) &
                            + we * GME_flux_h_original(i+1,j) &
@@ -2604,8 +2644,9 @@ subroutine smooth_GME(CS,G,GME_flux_h,GME_flux_q)
     endif
     ! Update halos
     if (present(GME_flux_q)) then
+      !### Work on a wider halo to eliminate this blocking send!
       call pass_var(GME_flux_q, G%Domain, position=CORNER, complete=.true.)
-      GME_flux_q_original = GME_flux_q
+      GME_flux_q_original(:,:) = GME_flux_q(:,:)
       ! apply smoothing on GME
       do J = G%JscB, G%JecB
         do I = G%IscB, G%IecB
@@ -2617,6 +2658,7 @@ subroutine smooth_GME(CS,G,GME_flux_h,GME_flux_q)
           ws = 0.125 * G%mask2dBu(I,J-1)
           wn = 0.125 * G%mask2dBu(I,J+1)
           wc = 1.0 - (ww+we+wn+ws)
+          !### Add parentheses to make this rotationally invariant.
           GME_flux_q(I,J) =  wc * GME_flux_q_original(I,J)   &
                            + ww * GME_flux_q_original(I-1,J) &
                            + we * GME_flux_q_original(I+1,J) &
