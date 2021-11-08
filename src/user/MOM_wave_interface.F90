@@ -39,6 +39,7 @@ public CoriolisStokes ! NOT READY - Public interface to add Coriolis-Stokes acce
                       ! serious consideration of the full 3d wave-averaged Navier-Stokes
                       ! CL2 effects.
 public Waves_end ! public interface to deallocate and free wave related memory.
+public get_wave_method ! public interface to obtain the wave method string
 
 ! A note on unit descriptions in comments: MOM6 uses units that can be rescaled for dimensional
 ! consistency testing. These are noted in comments with units like Z, H, L, and T, along with
@@ -173,11 +174,19 @@ end type wave_parameters_CS
 
 ! Switches needed in import_stokes_drift
 !>@{ Enumeration values for the wave method
-integer, parameter :: TESTPROF = 0, SURFBANDS = 1, DHH85 = 2, LF17 = 3, NULL_WaveMethod = -99
+integer, parameter :: TESTPROF = 0, SURFBANDS = 1, DHH85 = 2, LF17 = 3, EFACTOR = 4, NULL_WaveMethod = -99
 !>@}
 !>@{ Enumeration values for the wave data source
 integer, parameter :: DATAOVR = 1, COUPLER = 2, INPUT = 3
 !>@}
+
+! Strings for the wave method
+character*(5), parameter  :: NULL_STRING      = "EMPTY"         !< null wave method string
+character*(12), parameter :: TESTPROF_STRING  = "TEST_PROFILE"  !< test profile string
+character*(13), parameter :: SURFBANDS_STRING = "SURFACE_BANDS" !< surface bands string
+character*(5), parameter  :: DHH85_STRING     = "DHH85"         !< DHH85 wave method string
+character*(4), parameter  :: LF17_STRING      = "LF17"          !< LF17 wave method string
+character*(7), parameter  :: EFACTOR_STRING   = "EFACTOR"       !< EFACTOR (based on vr12-ma) wave method string
 
 contains
 
@@ -196,11 +205,6 @@ subroutine MOM_wave_interface_init(time, G, GV, US, param_file, CS, diag )
   ! This include declares and sets the variable "version".
 # include "version_variable.h"
   character*(13) :: TMPSTRING1, TMPSTRING2
-  character*(5), parameter  :: NULL_STRING      = "EMPTY"
-  character*(12), parameter :: TESTPROF_STRING  = "TEST_PROFILE"
-  character*(13), parameter :: SURFBANDS_STRING = "SURFACE_BANDS"
-  character*(5), parameter  :: DHH85_STRING     = "DHH85"
-  character*(4), parameter  :: LF17_STRING      = "LF17"
   character*(12), parameter :: DATAOVR_STRING   = "DATAOVERRIDE"
   character*(7), parameter  :: COUPLER_STRING   = "COUPLER"
   character*(5), parameter  :: INPUT_STRING     = "INPUT"
@@ -283,7 +287,12 @@ subroutine MOM_wave_interface_init(time, G, GV, US, param_file, CS, diag )
        " DHH85         - Uses Donelan et al. 1985 empirical \n"//     &
        "                 wave spectrum with prescribed values. \n"//  &
        " LF17          - Infers Stokes drift profile from wind \n"//  &
-       "                 speed following Li and Fox-Kemper 2017.\n",  &
+       "                 speed following Li and Fox-Kemper 2017.\n"// &
+       " EFACTOR       - Applies an enhancement factor to the KPP\n"//&
+       "                 turbulent velocity scale received \n"//      &
+       "                 directly from WW3 and is based on the \n"//  &
+       "                 surface layer and projected Langmuir \n"//   &
+       "                 number (Li 2016)\n", &
        units='', default=NULL_STRING)
   select case (TRIM(TMPSTRING1))
   case (NULL_STRING)! No Waves
@@ -323,12 +332,9 @@ subroutine MOM_wave_interface_init(time, G, GV, US, param_file, CS, diag )
          "STK_BAND_COUPLER is the number of Stokes drift bands in the coupler. "// &
          "This has to be consistent with the number of Stokes drift bands in WW3, "//&
          "or the model will fail.",units='', default=1)
-      allocate( CS%WaveNum_Cen(CS%NumBands) )
-      allocate( CS%STKx0(G%isdB:G%iedB,G%jsd:G%jed,CS%NumBands))
-      allocate( CS%STKy0(G%isdB:G%iedB,G%jsd:G%jed,CS%NumBands))
-      CS%WaveNum_Cen(:) = 0.0
-      CS%STKx0(:,:,:) = 0.0
-      CS%STKy0(:,:,:) = 0.0
+      allocate( CS%WaveNum_Cen(CS%NumBands), source=0.0 )
+      allocate( CS%STKx0(G%isdB:G%iedB,G%jsd:G%jed,CS%NumBands), source=0.0 )
+      allocate( CS%STKy0(G%isdB:G%iedB,G%jsd:G%jed,CS%NumBands), source=0.0 )
       CS%PartitionMode = 0
       call get_param(param_file, mdl, "SURFBAND_WAVENUMBERS", CS%WaveNum_Cen, &
            "Central wavenumbers for surface Stokes drift bands.", &
@@ -340,16 +346,11 @@ subroutine MOM_wave_interface_init(time, G, GV, US, param_file, CS, diag )
          "Make sure this is consistnet w/ WAVENUMBERS, STOKES_X, and "// &
          "STOKES_Y, there are no safety checks in the code.",              &
          units='', default=1)
-      allocate( CS%WaveNum_Cen(1:CS%NumBands) )
-      CS%WaveNum_Cen(:) = 0.0
-      allocate( CS%PrescribedSurfStkX(1:CS%NumBands))
-      CS%PrescribedSurfStkX(:) = 0.0
-      allocate( CS%PrescribedSurfStkY(1:CS%NumBands))
-      CS%PrescribedSurfStkY(:) = 0.0
-      allocate( CS%STKx0(G%isdB:G%iedB,G%jsd:G%jed,1:CS%NumBands))
-      CS%STKx0(:,:,:) = 0.0
-      allocate( CS%STKy0(G%isd:G%ied,G%jsdB:G%jedB,1:CS%NumBands))
-      CS%STKy0(:,:,:) = 0.0
+      allocate( CS%WaveNum_Cen(1:CS%NumBands), source=0.0 )
+      allocate( CS%PrescribedSurfStkX(1:CS%NumBands), source=0.0 )
+      allocate( CS%PrescribedSurfStkY(1:CS%NumBands), source=0.0 )
+      allocate( CS%STKx0(G%isdB:G%iedB,G%jsd:G%jed,1:CS%NumBands), source=0.0 )
+      allocate( CS%STKy0(G%isd:G%ied,G%jsdB:G%jedB,1:CS%NumBands), source=0.0 )
       CS%PartitionMode = 0
       call get_param(param_file, mdl, "SURFBAND_WAVENUMBERS", CS%WaveNum_Cen, &
            "Central wavenumbers for surface Stokes drift bands.", &
@@ -382,6 +383,8 @@ subroutine MOM_wave_interface_init(time, G, GV, US, param_file, CS, diag )
           default=.false.)
   case (LF17_STRING)!Li and Fox-Kemper 17 wind-sea Langmuir number
     CS%WaveMethod = LF17
+  case (EFACTOR_STRING)!Li and Fox-Kemper 16
+    CS%WaveMethod = EFACTOR
   case default
     call MOM_error(FATAL,'Check WAVE_METHOD.')
   end select
@@ -398,24 +401,17 @@ subroutine MOM_wave_interface_init(time, G, GV, US, param_file, CS, diag )
 
   ! Allocate and initialize
   ! a. Stokes driftProfiles
-  allocate(CS%Us_x(G%isdB:G%IedB,G%jsd:G%jed,GV%ke))
-  CS%Us_x(:,:,:) = 0.0
-  allocate(CS%Us_y(G%isd:G%Ied,G%jsdB:G%jedB,GV%ke))
-  CS%Us_y(:,:,:) = 0.0
+  allocate(CS%Us_x(G%isdB:G%IedB,G%jsd:G%jed,GV%ke), source=0.0)
+  allocate(CS%Us_y(G%isd:G%Ied,G%jsdB:G%jedB,GV%ke), source=0.0)
   ! b. Surface Values
-  allocate(CS%US0_x(G%isdB:G%iedB,G%jsd:G%jed))
-  CS%US0_x(:,:) = 0.0
-  allocate(CS%US0_y(G%isd:G%ied,G%jsdB:G%jedB))
-  CS%US0_y(:,:) = 0.0
+  allocate(CS%US0_x(G%isdB:G%iedB,G%jsd:G%jed), source=0.0)
+  allocate(CS%US0_y(G%isd:G%ied,G%jsdB:G%jedB), source=0.0)
   ! c. Langmuir number
-  allocate(CS%La_SL(G%isc:G%iec,G%jsc:G%jec))
-  allocate(CS%La_turb(G%isc:G%iec,G%jsc:G%jec))
-  CS%La_SL(:,:) = 0.0
-  CS%La_turb (:,:) = 0.0
+  allocate(CS%La_SL(G%isc:G%iec,G%jsc:G%jec), source=0.0)
+  allocate(CS%La_turb(G%isc:G%iec,G%jsc:G%jec), source=0.0)
   ! d. Viscosity for Stokes drift
   if (CS%StokesMixing) then
-    allocate(CS%KvS(G%isd:G%Ied,G%jsd:G%jed,GV%ke))
-    CS%KvS(:,:,:) = 0.0
+    allocate(CS%KvS(G%isd:G%Ied,G%jsd:G%jed,GV%ke), source=0.0)
   endif
 
   ! Initialize Wave related outputs
@@ -760,6 +756,8 @@ subroutine Update_Stokes_Drift(G, GV, US, CS, h, ustar)
       enddo
       CS%DHH85_is_set = .true.
     endif
+  elseif (CS%WaveMethod==EFACTOR) then
+    return ! pass
   else! Keep this else, fallback to 0 Stokes drift
     do kk= 1,GV%ke
       do jj = G%jsd,G%jed
@@ -782,7 +780,7 @@ subroutine Update_Stokes_Drift(G, GV, US, CS, h, ustar)
     do ii = G%isc,G%iec
       Top = h(ii,jj,1)*GV%H_to_Z
       call get_Langmuir_Number( La, G, GV, US, Top, ustar(ii,jj), ii, jj, &
-             H(ii,jj,:),Override_MA=.false.,WAVES=CS)
+             h(ii,jj,:), CS, Override_MA=.false.)
       CS%La_turb(ii,jj) = La
     enddo
   enddo
@@ -855,7 +853,7 @@ subroutine Surface_Bands_by_data_override(day_center, G, GV, US, CS)
 
     CS%NUMBANDS = sizes(1)
     ! Allocate the wavenumber bins
-    allocate( CS%WaveNum_Cen(CS%NUMBANDS) ) ; CS%WaveNum_Cen(:) = 0.0
+    allocate( CS%WaveNum_Cen(CS%NUMBANDS), source=0.0 )
 
     if (wavenumber_exists) then
       ! Wavenumbers found, so this file uses the old method:
@@ -869,7 +867,7 @@ subroutine Surface_Bands_by_data_override(day_center, G, GV, US, CS)
       CS%PartitionMode = 1
 
       ! Allocate the frequency bins
-      allocate( CS%Freq_Cen(CS%NUMBANDS) ) ; CS%Freq_Cen(:) = 0.0
+      allocate( CS%Freq_Cen(CS%NUMBANDS), source=0.0 )
 
       ! Reading frequencies
       PI = 4.0*atan(1.0)
@@ -881,10 +879,10 @@ subroutine Surface_Bands_by_data_override(day_center, G, GV, US, CS)
     endif
 
     if (.not.allocated(CS%STKx0)) then
-      allocate( CS%STKx0(G%isdB:G%iedB,G%jsd:G%jed,CS%NUMBANDS) ) ; CS%STKx0(:,:,:) = 0.0
+      allocate( CS%STKx0(G%isdB:G%iedB,G%jsd:G%jed,CS%NUMBANDS), source=0.0 )
     endif
     if (.not.allocated(CS%STKy0)) then
-      allocate( CS%STKy0(G%isd:G%ied,G%jsdB:G%jedB,CS%NUMBANDS) ) ; CS%STKy0(:,:,:) = 0.0
+      allocate( CS%STKy0(G%isd:G%ied,G%jsdB:G%jedB,CS%NUMBANDS), source=0.0 )
     endif
   endif
 
@@ -933,29 +931,27 @@ end subroutine Surface_Bands_by_data_override
 !! Note this can be called with an unallocated Waves pointer, which is okay if we
 !!  want the wind-speed only dependent Langmuir number.  Therefore, we need to be
 !!  careful about what we try to access here.
-subroutine get_Langmuir_Number( LA, G, GV, US, HBL, ustar, i, j, &
-                                H, U_H, V_H, Override_MA, Waves )
-  type(ocean_grid_type),   intent(in) :: G  !< Ocean grid structure
-  type(verticalGrid_type), intent(in) :: GV !< Ocean vertical grid structure
-  type(unit_scale_type),   intent(in) :: US !< A dimensional unit scaling type
-  integer, intent(in) :: i      !< Meridional index of h-point
-  integer, intent(in) :: j      !< Zonal index of h-point
-  real, intent(in)    :: ustar  !< Friction velocity [Z T-1 ~> m s-1].
-  real, intent(in)    :: HBL    !< (Positive) thickness of boundary layer [Z ~> m].
-  logical, optional,       intent(in) :: Override_MA !< Override to use misalignment in LA
-                                !! calculation. This can be used if diagnostic
-                                !! LA outputs are desired that are different than
-                                !! those used by the dynamical model.
-  real, dimension(SZK_(GV)), optional, &
-       intent(in)      :: H     !< Grid layer thickness [H ~> m or kg m-2]
-  real, dimension(SZK_(GV)), optional, &
-       intent(in)      :: U_H   !< Zonal velocity at H point [L T-1 ~> m s-1] or [m s-1]
-  real, dimension(SZK_(GV)), optional, &
-       intent(in)      :: V_H   !< Meridional velocity at H point [L T-1 ~> m s-1] or [m s-1]
-  type(Wave_parameters_CS), &
-       pointer         :: Waves !< Surface wave control structure.
+subroutine get_Langmuir_Number( LA, G, GV, US, HBL, ustar, i, j, h, Waves, &
+                                U_H, V_H, Override_MA )
+  type(ocean_grid_type),     intent(in)  :: G     !< Ocean grid structure
+  type(verticalGrid_type),   intent(in)  :: GV    !< Ocean vertical grid structure
+  real,                      intent(out) :: LA    !< Langmuir number [nondim]
+  type(unit_scale_type),     intent(in)  :: US    !< A dimensional unit scaling type
+  real,                      intent(in)  :: HBL   !< (Positive) thickness of boundary layer [Z ~> m]
+  real,                      intent(in)  :: ustar !< Friction velocity [Z T-1 ~> m s-1]
+  integer,                   intent(in)  :: i     !< Meridional index of h-point
+  integer,                   intent(in)  :: j     !< Zonal index of h-point
+  real, dimension(SZK_(GV)), intent(in)  :: h     !< Grid layer thickness [H ~> m or kg m-2]
+  type(Wave_parameters_CS),  pointer     :: Waves !< Surface wave control structure.
+  real, dimension(SZK_(GV)), &
+                   optional, intent(in)  :: U_H   !< Zonal velocity at H point [L T-1 ~> m s-1] or [m s-1]
+  real, dimension(SZK_(GV)), &
+                   optional, intent(in)  :: V_H   !< Meridional velocity at H point [L T-1 ~> m s-1] or [m s-1]
+  logical,         optional, intent(in)  :: Override_MA !< Override to use misalignment in LA
+                                                  !! calculation. This can be used if diagnostic
+                                                  !! LA outputs are desired that are different than
+                                                  !! those used by the dynamical model.
 
-  real, intent(out)    :: LA    !< Langmuir number [nondim]
 
 !Local Variables
   real :: Top, bottom, midpoint  ! Positions within each layer [Z ~> m]
@@ -977,9 +973,8 @@ subroutine get_Langmuir_Number( LA, G, GV, US, HBL, ustar, i, j, &
 
   ! If requesting to use misalignment in the Langmuir number compute the Shear Direction
   if (USE_MA) then
-    if (.not.(present(H).and.present(U_H).and.present(V_H))) then
-      call MOM_error(Fatal,'Get_LA_waves requested to consider misalignment.')
-    endif
+    if (.not.(present(U_H).and.present(V_H))) call MOM_error(FATAL, &
+        "Get_LA_waves requested to consider misalignment, but velocities were not provided.")
     ContinueLoop = .true.
     bottom = 0.0
     do kk = 1,GV%ke
@@ -995,30 +990,30 @@ subroutine get_Langmuir_Number( LA, G, GV, US, HBL, ustar, i, j, &
 
   if (Waves%WaveMethod==TESTPROF) then
     do kk = 1,GV%ke
-      US_H(kk) = 0.5*(WAVES%US_X(I,j,kk)+WAVES%US_X(I-1,j,kk))
-      VS_H(kk) = 0.5*(WAVES%US_Y(i,J,kk)+WAVES%US_Y(i,J-1,kk))
+      US_H(kk) = 0.5*(Waves%US_X(I,j,kk)+Waves%US_X(I-1,j,kk))
+      VS_H(kk) = 0.5*(Waves%US_Y(i,J,kk)+Waves%US_Y(i,J-1,kk))
     enddo
-    call Get_SL_Average_Prof( GV, Dpt_LASL, H, US_H, LA_STKx)
-    call Get_SL_Average_Prof( GV, Dpt_LASL, H, VS_H, LA_STKy)
+    call Get_SL_Average_Prof( GV, Dpt_LASL, h, US_H, LA_STKx)
+    call Get_SL_Average_Prof( GV, Dpt_LASL, h, VS_H, LA_STKy)
     LA_STK = sqrt(LA_STKX*LA_STKX+LA_STKY*LA_STKY)
   elseif (Waves%WaveMethod==SURFBANDS) then
-    allocate(StkBand_X(WAVES%NumBands), StkBand_Y(WAVES%NumBands))
-    do bb = 1,WAVES%NumBands
-      StkBand_X(bb) = 0.5*(WAVES%STKx0(I,j,bb)+WAVES%STKx0(I-1,j,bb))
-      StkBand_Y(bb) = 0.5*(WAVES%STKy0(i,J,bb)+WAVES%STKy0(i,J-1,bb))
+    allocate(StkBand_X(Waves%NumBands), StkBand_Y(Waves%NumBands))
+    do bb = 1,Waves%NumBands
+      StkBand_X(bb) = 0.5*(Waves%STKx0(I,j,bb)+Waves%STKx0(I-1,j,bb))
+      StkBand_Y(bb) = 0.5*(Waves%STKy0(i,J,bb)+Waves%STKy0(i,J-1,bb))
     enddo
-    call Get_SL_Average_Band(GV, Dpt_LASL, WAVES%NumBands, WAVES%WaveNum_Cen, StkBand_X, LA_STKx )
-    call Get_SL_Average_Band(GV, Dpt_LASL, WAVES%NumBands, WAVES%WaveNum_Cen, StkBand_Y, LA_STKy )
+    call Get_SL_Average_Band(GV, Dpt_LASL, Waves%NumBands, Waves%WaveNum_Cen, StkBand_X, LA_STKx )
+    call Get_SL_Average_Band(GV, Dpt_LASL, Waves%NumBands, Waves%WaveNum_Cen, StkBand_Y, LA_STKy )
     LA_STK = sqrt(LA_STKX**2 + LA_STKY**2)
     deallocate(StkBand_X, StkBand_Y)
   elseif (Waves%WaveMethod==DHH85) then
     ! Temporarily integrating profile rather than spectrum for simplicity
     do kk = 1,GV%ke
-      US_H(kk) = 0.5*(WAVES%US_X(I,j,kk)+WAVES%US_X(I-1,j,kk))
-      VS_H(kk) = 0.5*(WAVES%US_Y(i,J,kk)+WAVES%US_Y(i,J-1,kk))
+      US_H(kk) = 0.5*(Waves%US_X(I,j,kk)+Waves%US_X(I-1,j,kk))
+      VS_H(kk) = 0.5*(Waves%US_Y(i,J,kk)+Waves%US_Y(i,J-1,kk))
     enddo
-    call Get_SL_Average_Prof( GV, Dpt_LASL, H, US_H, LA_STKx)
-    call Get_SL_Average_Prof( GV, Dpt_LASL, H, VS_H, LA_STKy)
+    call Get_SL_Average_Prof( GV, Dpt_LASL, h, US_H, LA_STKx)
+    call Get_SL_Average_Prof( GV, Dpt_LASL, h, VS_H, LA_STKy)
     LA_STK = sqrt(LA_STKX**2 + LA_STKY**2)
   elseif (Waves%WaveMethod==LF17) then
     call get_StokesSL_LiFoxKemper(ustar, hbl*Waves%LA_FracHBL, GV, US, Waves, LA_STK, LA)
@@ -1036,7 +1031,7 @@ subroutine get_Langmuir_Number( LA, G, GV, US, HBL, ustar, i, j, &
     ! to prevent large enhancements in unconstrained parts of
     ! the curve fit parameterizations.
     ! Note the dimensional constant background Stokes velocity of 10^-10 m s-1.
-    LA = max(WAVES%La_min, sqrt(US%Z_to_L*ustar / (LA_STK + 1.e-10*US%m_s_to_L_T)))
+    LA = max(Waves%La_min, sqrt(US%Z_to_L*ustar / (LA_STK + 1.e-10*US%m_s_to_L_T)))
   endif
 
   if (Use_MA) then
@@ -1045,6 +1040,31 @@ subroutine get_Langmuir_Number( LA, G, GV, US, HBL, ustar, i, j, &
   endif
 
 end subroutine get_Langmuir_Number
+
+!> function to return the wave method string set in the param file
+function get_wave_method(CS)
+  character(:), allocatable :: get_wave_method
+  type(wave_parameters_CS), pointer :: CS !< Control structure
+
+  if (associated(CS)) then
+    select case(CS%WaveMethod)
+      case (Null_WaveMethod)
+        get_wave_method = NULL_STRING
+      case (TESTPROF)
+        get_wave_method = TESTPROF_STRING
+      case (SURFBANDS)
+        get_wave_method = SURFBANDS_STRING
+      case (DHH85)
+        get_wave_method = DHH85_STRING
+      case (LF17)
+        get_wave_method = LF17_STRING
+      case (EFACTOR)
+        get_wave_method = EFACTOR_STRING
+    end select
+  else
+    get_wave_method = NULL_STRING
+  endif
+end function get_wave_method
 
 !> Get SL averaged Stokes drift from Li/FK 17 method
 !!
@@ -1398,7 +1418,7 @@ end subroutine StokesMixing
 !! CHECK THAT RIGHT TIMESTEP IS PASSED IF YOU USE THIS**
 !!
 !! Not accessed in the standard code.
-subroutine CoriolisStokes(G, GV, dt, h, u, v, WAVES, US)
+subroutine CoriolisStokes(G, GV, dt, h, u, v, Waves)
   type(ocean_grid_type), &
        intent(in)    :: G     !< Ocean grid
   type(verticalGrid_type), &
@@ -1412,16 +1432,16 @@ subroutine CoriolisStokes(G, GV, dt, h, u, v, WAVES, US)
        intent(inout) :: v     !< Velocity j-component [L T-1 ~> m s-1]
   type(Wave_parameters_CS), &
        pointer       :: Waves !< Surface wave related control structure.
-  type(unit_scale_type),   intent(in) :: US     !< A dimensional unit scaling type
+
   ! Local variables
   real :: DVel ! A rescaled velocity change [L T-2 ~> m s-2]
-  integer :: i,j,k
+  integer :: i, j, k
 
   do k = 1, GV%ke
     do j = G%jsc, G%jec
       do I = G%iscB, G%iecB
-        DVel = 0.25*(WAVES%us_y(i,j+1,k)+WAVES%us_y(i-1,j+1,k))*G%CoriolisBu(i,j+1) + &
-               0.25*(WAVES%us_y(i,j,k)+WAVES%us_y(i-1,j,k))*G%CoriolisBu(i,j)
+        DVel = 0.25*(Waves%us_y(i,j+1,k)+Waves%us_y(i-1,j+1,k))*G%CoriolisBu(i,j+1) + &
+               0.25*(Waves%us_y(i,j,k)+Waves%us_y(i-1,j,k))*G%CoriolisBu(i,j)
         u(I,j,k) = u(I,j,k) + DVEL*dt
       enddo
     enddo
@@ -1430,8 +1450,8 @@ subroutine CoriolisStokes(G, GV, dt, h, u, v, WAVES, US)
   do k = 1, GV%ke
     do J = G%jscB, G%jecB
       do i = G%isc, G%iec
-        DVel = 0.25*(WAVES%us_x(i+1,j,k)+WAVES%us_x(i+1,j-1,k))*G%CoriolisBu(i+1,j) + &
-               0.25*(WAVES%us_x(i,j,k)+WAVES%us_x(i,j-1,k))*G%CoriolisBu(i,j)
+        DVel = 0.25*(Waves%us_x(i+1,j,k)+Waves%us_x(i+1,j-1,k))*G%CoriolisBu(i+1,j) + &
+               0.25*(Waves%us_x(i,j,k)+Waves%us_x(i,j-1,k))*G%CoriolisBu(i,j)
         v(i,J,k) = v(i,j,k) - DVEL*dt
       enddo
     enddo

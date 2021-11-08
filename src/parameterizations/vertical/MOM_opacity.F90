@@ -1097,7 +1097,7 @@ subroutine opacity_init(Time, G, GV, US, param_file, diag, CS, optics)
     allocate(optics%opacity_band(optics%nbands,isd:ied,jsd:jed,nz))
   if (.not.associated(optics%sw_pen_band)) &
     allocate(optics%sw_pen_band(optics%nbands,isd:ied,jsd:jed))
-  allocate(CS%id_opacity(optics%nbands)) ; CS%id_opacity(:) = -1
+  allocate(CS%id_opacity(optics%nbands), source=-1)
 
   CS%id_sw_pen = register_diag_field('ocean_model', 'SW_pen', diag%axesT1, Time, &
       'Penetrating shortwave radiation flux into ocean', 'W m-2', conversion=US%QRZ_T_to_W_m2)
@@ -1116,20 +1116,20 @@ end subroutine opacity_init
 
 
 subroutine opacity_end(CS, optics)
-  type(opacity_CS),  pointer           :: CS !< An opacity control structure that should be deallocated.
-  type(optics_type), optional, pointer :: optics !< An optics type structure that should be deallocated.
+  type(opacity_CS),  pointer :: CS !< An opacity control structure that should be deallocated.
+  type(optics_type), pointer :: optics !< An optics type structure that should be deallocated.
 
   if (associated(CS%id_opacity)) deallocate(CS%id_opacity)
   if (associated(CS)) deallocate(CS)
 
-  if (present(optics)) then ; if (associated(optics)) then
+  if (associated(optics)) then
     if (associated(optics%sw_pen_band)) deallocate(optics%sw_pen_band)
     if (associated(optics%opacity_band)) deallocate(optics%opacity_band)
     if (associated(optics%max_wavelength_band)) &
       deallocate(optics%max_wavelength_band)
     if (associated(optics%min_wavelength_band)) &
       deallocate(optics%min_wavelength_band)
-  endif ; endif
+  endif
 
 end subroutine opacity_end
 
