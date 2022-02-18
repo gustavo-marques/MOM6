@@ -65,11 +65,6 @@ type, public :: tracer_type
                                                               !! [conc H L2 T-1 ~> conc m3 s-1 or conc kg s-1]
   real, dimension(:,:), pointer :: hbd_dfy_2d       => NULL() !< diagnostic array for y-diffusive tracer flux
                                                               !! [conc H L2 T-1 ~> conc m3 s-1 or conc kg s-1]
-  !### These two arrays may be allocated but are never used.
-  real, dimension(:,:), pointer :: hbd_bulk_df_x       => NULL() !< diagnostic array for x-diffusive tracer flux
-                                                              !! [conc H L2 T-1 ~> conc m3 s-1 or conc kg s-1]
-  real, dimension(:,:), pointer :: hbd_bulk_df_y       => NULL() !< diagnostic array for y-diffusive tracer flux
-                                                              !! [conc H L2 T-1 ~> conc m3 s-1 or conc kg s-1]
   real, dimension(:,:),   pointer :: df2d_x         => NULL() !< diagnostic vertical sum x-diffusive flux
                                                               !! [conc H L2 T-1 ~> conc m3 s-1 or conc kg s-1]
   real, dimension(:,:),   pointer :: df2d_y         => NULL() !< diagnostic vertical sum y-diffusive flux
@@ -126,7 +121,7 @@ type, public :: tracer_type
   !>@{ Diagnostic IDs
   integer :: id_tr = -1, id_tr_post_horzn = -1
   integer :: id_adx = -1, id_ady = -1, id_dfx = -1, id_dfy = -1
-  integer :: id_hbd_bulk_dfx = -1, id_hbd_bulk_dfy = -1, id_hbd_dfx = -1, id_hbd_dfy = -1
+  integer :: id_hbd_dfx = -1, id_hbd_dfy = -1
   integer :: id_hbd_dfx_2d = -1  , id_hbd_dfy_2d = -1
   integer :: id_adx_2d = -1, id_ady_2d = -1, id_dfx_2d = -1, id_dfy_2d = -1
   integer :: id_adv_xy = -1, id_adv_xy_2d = -1
@@ -488,16 +483,6 @@ subroutine register_tracer_diagnostics(Reg, h, Time, diag, G, GV, US, use_ALE)
         "Vertically Integrated Diffusive Meridional Flux of "//trim(flux_longname), &
         flux_units, conversion=(US%L_to_m**2)*Tr%flux_scale*US%s_to_T, &
         x_cell_method='sum')
-    Tr%id_hbd_bulk_dfx = register_diag_field("ocean_model", trim(shortnm)//"_hbd_bulk_diffx", &
-        diag%axesCu1, Time, &
-        "Total Bulk Diffusive Zonal Flux of "//trim(flux_longname), &
-        flux_units, conversion=(US%L_to_m**2)*Tr%flux_scale*US%s_to_T, &
-        y_cell_method='sum')
-    Tr%id_hbd_bulk_dfy = register_diag_field("ocean_model", trim(shortnm)//"_hbd_bulk_diffy", &
-        diag%axesCv1, Time, &
-        "Total Bulk Diffusive Meridional Flux of "//trim(flux_longname), &
-        flux_units, conversion=(US%L_to_m**2)*Tr%flux_scale*US%s_to_T, &
-        x_cell_method='sum')
     Tr%id_hbd_dfx_2d = register_diag_field("ocean_model", trim(shortnm)//"_hbd_diffx_2d", &
         diag%axesCu1, Time, "Vertically-integrated zonal diffusive flux from the horizontal boundary diffusion "//&
         "scheme for "//trim(flux_longname), flux_units, conversion=(US%L_to_m**2)*Tr%flux_scale*US%s_to_T, &
@@ -511,8 +496,6 @@ subroutine register_tracer_diagnostics(Reg, h, Time, diag, G, GV, US, use_ALE)
     if (Tr%id_ady_2d > 0) call safe_alloc_ptr(Tr%ad2d_y,isd,ied,JsdB,JedB)
     if (Tr%id_dfx_2d > 0) call safe_alloc_ptr(Tr%df2d_x,IsdB,IedB,jsd,jed)
     if (Tr%id_dfy_2d > 0) call safe_alloc_ptr(Tr%df2d_y,isd,ied,JsdB,JedB)
-    if (Tr%id_hbd_bulk_dfx > 0) call safe_alloc_ptr(Tr%hbd_bulk_df_x,IsdB,IedB,jsd,jed)
-    if (Tr%id_hbd_bulk_dfy > 0) call safe_alloc_ptr(Tr%hbd_bulk_df_y,isd,ied,JsdB,JedB)
     if (Tr%id_hbd_dfx_2d > 0) call safe_alloc_ptr(Tr%hbd_dfx_2d,IsdB,IedB,jsd,jed)
     if (Tr%id_hbd_dfy_2d > 0) call safe_alloc_ptr(Tr%hbd_dfy_2d,isd,ied,JsdB,JedB)
 
