@@ -103,7 +103,7 @@ type, public :: tracer_type
   integer :: id_adx_2d = -1, id_ady_2d = -1, id_dfx_2d = -1, id_dfy_2d = -1
   integer :: id_adv_xy = -1, id_adv_xy_2d = -1
   integer :: id_dfxy_cont = -1, id_dfxy_cont_2d = -1, id_dfxy_conc = -1
-  integer :: id_lbdxy_cont = -1, id_lbdxy_cont_2d = -1, id_lbdxy_conc = -1
+  integer :: id_hbdxy_cont = -1, id_hbdxy_cont_2d = -1, id_hbdxy_conc = -1
   integer :: id_remap_conc = -1, id_remap_cont = -1, id_remap_cont_2d = -1
   integer :: id_tendency = -1, id_trxh_tendency = -1, id_trxh_tendency_2d = -1
   integer :: id_tr_vardec = -1
