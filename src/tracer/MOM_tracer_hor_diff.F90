@@ -24,7 +24,7 @@ use MOM_neutral_diffusion,        only : neutral_diffusion_init, neutral_diffusi
 use MOM_neutral_diffusion,        only : neutral_diffusion_CS
 use MOM_neutral_diffusion,        only : neutral_diffusion_calc_coeffs, neutral_diffusion
 use MOM_hor_bnd_diffusion,        only : hbd_CS, hor_bnd_diffusion_init
-use MOM_hor_bnd_diffusion,        only : hor_bnd_diffusion
+use MOM_hor_bnd_diffusion,        only : hor_bnd_diffusion, hor_bnd_diffusion_end
 use MOM_tracer_registry,          only : tracer_registry_type, tracer_type, MOM_tracer_chksum
 use MOM_unit_scaling,             only : unit_scale_type
 use MOM_variables,                only : thermo_var_ptrs
@@ -407,7 +407,7 @@ subroutine tracer_hordiff(h, dt, MEKE, VarMix, G, GV, US, CS, Reg, tv, do_online
       if (itt>1) then ! Update halos for subsequent iterations
         call do_group_pass(CS%pass_t, G%Domain, clock=id_clock_pass)
       endif
-      call hor_bnd_diffusion(G, GV, US, h, Coef_x, Coef_y, I_numitts*dt, Reg, &
+      call hor_bnd_diffusion(G, GV, US, h, Coef_x, Coef_y, I_numitts*dt, VarMix, Reg, &
                              CS%hor_bnd_diffusion_CSp)
     enddo ! itt
   endif
@@ -1512,8 +1512,8 @@ subroutine tracer_hor_diff_init(Time, G, GV, US, param_file, diag, EOS, diabatic
                                                     diabatic_CSp, CS%neutral_diffusion_CSp )
   if (CS%use_neutral_diffusion .and. CS%Diffuse_ML_interior) call MOM_error(FATAL, "MOM_tracer_hor_diff: "// &
        "USE_NEUTRAL_DIFFUSION and DIFFUSE_ML_TO_INTERIOR are mutually exclusive!")
-  CS%use_hor_bnd_diffusion = hor_bnd_diffusion_init(Time, G, GV, param_file, diag, diabatic_CSp, &
-                                                                CS%hor_bnd_diffusion_CSp)
+  CS%use_hor_bnd_diffusion = hor_bnd_diffusion_init(Time, G, GV, US, param_file, diag, diabatic_CSp, &
+                                                    CS%hor_bnd_diffusion_CSp)
   if (CS%use_hor_bnd_diffusion .and. CS%Diffuse_ML_interior) call MOM_error(FATAL, "MOM_tracer_hor_diff: "// &
        "USE_HORIZONTAL_BOUNDARY_DIFFUSION and DIFFUSE_ML_TO_INTERIOR are mutually exclusive!")
 
@@ -1555,6 +1555,7 @@ subroutine tracer_hor_diff_end(CS)
   type(tracer_hor_diff_CS), pointer :: CS !< module control structure
 
   call neutral_diffusion_end(CS%neutral_diffusion_CSp)
+  call hor_bnd_diffusion_end(CS%hor_bnd_diffusion_CSp)
   if (associated(CS)) deallocate(CS)
 
 end subroutine tracer_hor_diff_end
