@@ -55,9 +55,10 @@ type, public :: hbd_CS ; private
                              !! Angstrom or larger without changing it at the bit level [H ~> m or kg m-2].
                              !! If Angstrom is 0 or exceedingly small, this is negligible compared to 1e-17 m.
   real    :: hbd_min_depth   !< The minimum depth used to determine if a continuous transition from neutral
-                             !! to horizontal mixing should occur. If BLD <= hbd_min_depth, mixing within
-                             !! the BLD will be purely horizontal. Otherwise, mixing will transition from
-                             !! neutral and the base of BLD to horizontal at the top-most interface.
+                             !! to horizontal mixing should occur. If the either depth of the column or
+                             !! the BLD <= hbd_min_depth, mixing within the BLD will be purely horizontal.
+                             !! Otherwise, mixing will transition from neutral at the base of BLD to
+                             !! horizontal at the top-most interface.
 
   ! HBD dynamic grids
   real,    allocatable, dimension(:,:,:,:) :: hbd_grd_u   !< HBD thicknesses at t-points adjecent to
@@ -143,9 +144,10 @@ logical function hor_bnd_diffusion_init(Time, G, GV, US, param_file, diag, diaba
 
   call get_param(param_file, mdl, "HBD_MIN_DEPTH", CS%hbd_min_depth, &
                  "The minimum depth used to determine if a continuous transition from neutral \n"//&
-                 "to horizontal mixing should occur. If BLD <= hbd_min_depth, mixing within      \n"//&
-                 "the BLD will be purely horizontal. Otherwise, mixing will transition from      \n"//&
-                 "neutral and the base of BLD to horizontal at the top-most interface. ", &
+                 "to horizontal mixing should occur. If the either depth of the column or     \n"//&
+                 "the BLD <= hbd_min_depth, mixing within the BLD will be purely horizontal.  \n"//&
+                 "Otherwise, mixing will transition from neutral at the base of BLD to        \n"//&
+                 "horizontal at the top-most interface. ", &
                  units="m", scale=US%m_to_Z, default=10.0)
 
   ! allocate the hbd grids
@@ -490,12 +492,12 @@ end subroutine unique
 !! return a set of 1-d layer thicknesses whose interfaces cover all interfaces in the left
 !! and right columns. This can be used to accurately remap tracer tendencies
 !! in both columns.
-subroutine merge_interfaces2(nk, h_L, h_R, H_subroundoff, h)
+subroutine merge_interfaces2(nk, h_L, h_R, h, H_subroundoff)
   integer,                         intent(in   ) :: nk     !< Number of layers                        [nondim]
   real, dimension(nk),             intent(in   ) :: h_L    !< Layer thicknesses in the left column    [H ~> m or kg m-2]
   real, dimension(nk),             intent(in   ) :: h_R    !< Layer thicknesses in the right column   [H ~> m or kg m-2]
-  real,                            intent(in   ) :: H_subroundoff !< GV%H_subroundoff                 [H ~> m or kg m-2]
   real, dimension(2*nk),           intent(inout) :: h     !< Combined thicknesses                     [H ~> m or kg m-2]
+  real,                            intent(in   ) :: H_subroundoff !< GV%H_subroundoff                 [H ~> m or kg m-2]
 
   ! Local variables
   integer                         :: n           !< Number of layers in eta_all
@@ -690,22 +692,23 @@ subroutine boundary_k_range(boundary, nk, h, hbl, k_top, zeta_top, k_bot, zeta_b
 end subroutine boundary_k_range
 
 !> Super samples an array
-subroutine super_sample(nk_in, nk_out, dz_in, dz_out, CS)
+subroutine super_sample(nk_in, nk_out, dz_in, dz_out, H_subroundoff)
   integer,                intent(in   ) :: nk_in     !< Number of layers in the input array  [nondim]
   integer,                intent(in   ) :: nk_out    !< Number of layers in the output array [nondim]
   real, dimension(nk_in), intent(in   ) :: dz_in     !< Input layer thickness  [H ~> m or kg m-2]
   real, dimension(nk_out),intent(inout) :: dz_out    !< Output layer thickness [H ~> m or kg m-2]
-  type(hbd_CS),           pointer       :: CS        !< Horizontal diffusion control structure
+  real,                   intent(in   ) :: H_subroundoff !< GV%H_subroundoff                 [H ~> m or kg m-2]
 
   ! local variables
-  integer :: k1, k2, i
+  integer :: k1, k2, i, ratio
 
+  ratio = nk_out/nk_in
   !! build finer grid
   i = 0
   do k1=1,nk_in
-    do k2=1,CS%ratio
+    do k2=1,ratio
       i = i + 1
-      dz_out(i) = (dz_in(k1)/real(CS%ratio)) + CS%H_subroundoff
+      dz_out(i) = (dz_in(k1)/real(ratio)) + H_subroundoff
     enddo
   enddo
 
@@ -729,26 +732,27 @@ subroutine build_hbd_grid(nk, nk_hbd, k_bot, zeta_bot, slope_bld, depth, dx, h1,
   ! local variables
   integer :: k
   real, dimension(nk_hbd+1) :: e1, e2
-  real    :: slope, a
+  real    :: slope, a, max_h
 
   hbd1(:) = CS%H_subroundoff
   hbd2(:) = CS%H_subroundoff
   ! here, slope_bld is always > 0
   slope_bld = abs(slope_bld)
+  max_h = 0.0
 
   if (depth <= CS%hbd_min_depth) then
     slope_bld = 0.0
-  endif
-  if (slope_bld == 0.0) then
+    call merge_interfaces2(nk, h1, h2, hbd1, CS%H_subroundoff)
+    call merge_interfaces2(nk, h1, h2, hbd2, CS%H_subroundoff)
+  !endif
+  elseif ((slope_bld == 0.0) .and. (depth>CS%hbd_min_depth)) then
     ! if slope = 0., h_hbd1 and h_hbd2 are high-resolution versions of h1 and h2, respectively.
-    !call super_sample(nk, nk_hbd, h1, hbd1, CS)
-    !call super_sample(nk, nk_hbd, h2, hbd2, CS)
-    call merge_interfaces2(nk, h1, h2, CS%H_subroundoff, hbd1)
-    call merge_interfaces2(nk, h1, h2, CS%H_subroundoff, hbd2)
+    call merge_interfaces2(nk, h1, h2, hbd1, CS%H_subroundoff)
+    call merge_interfaces2(nk, h1, h2, hbd2, CS%H_subroundoff)
   else
     ! if slope != 0., h_hbd1 is a high-resolution versions of h1
     ! h_hbd2 is build using h_hbd1 and slope_bld
-    call super_sample(nk, nk_hbd, h1, hbd1, CS)
+    call super_sample(nk, nk_hbd, h1, hbd1, CS%H_subroundoff)
 
     ! build interfaces for h_hbd1
     e1(:) = 0.0
@@ -760,7 +764,9 @@ subroutine build_hbd_grid(nk, nk_hbd, k_bot, zeta_bot, slope_bld, depth, dx, h1,
     ! slope varies linearly from max_slope at k= k_bot+1 to 0 at k=1
     e2(:) = SUM(h2(:))
     !max_slope = MIN(slope_bld, TAN(h2(k_bot)/dx))
-    slope_bld = MIN(slope_bld, TAN(h2(k_bot)/dx))
+    max_h = depth*0.5
+    !slope_bld = MIN(slope_bld, TAN(h2(k_bot)/dx))
+    slope_bld = MIN(slope_bld, TAN(max_h/dx))
 
     if (CS%linear) then
       ! linear decay
@@ -785,6 +791,7 @@ subroutine build_hbd_grid(nk, nk_hbd, k_bot, zeta_bot, slope_bld, depth, dx, h1,
 
   if (CS%debug) then
     if (is_root_pe()) then
+      write(*,*)'max_h, h2(k_bot):',max_h, h2(k_bot)
       write(*,*)'SUM(h1(:), SUM(hbd1(:))',SUM(h1(:)), SUM(hbd1(:))
       write(*,*)'SUM(h2(:), SUM(hbd2(:))',SUM(h2(:)), SUM(hbd2(:))
       write(*,*)'###### max_slope, depth #####', slope_bld, depth
@@ -992,8 +999,10 @@ subroutine fluxes_layer_method(boundary, nk, hbd_nk, k_max, hbl_L, hbl_R, h_L, h
   allocate(hbd_h_vel(CS%hbd_nk), source=0.0)
 
   ! remap tracer to the hbd grid
-  call remapping_core_h(CS%remap_cs, nk, h_L(:), phi_L(:), CS%hbd_nk, hbd_L(:), phi_L_z(:))
-  call remapping_core_h(CS%remap_cs, nk, h_R(:), phi_R(:), CS%hbd_nk, hbd_R(:), phi_R_z(:))
+  call remapping_core_h(CS%remap_cs, nk, h_L(:), phi_L(:), CS%hbd_nk, hbd_L(:), &
+                        phi_L_z(:), CS%H_subroundoff, CS%H_subroundoff)
+  call remapping_core_h(CS%remap_cs, nk, h_R(:), phi_R(:), CS%hbd_nk, hbd_R(:), &
+                        phi_R_z(:), CS%H_subroundoff, CS%H_subroundoff)
 
   if (boundary == SURFACE) then
     do k = 1, CS%hbd_nk
