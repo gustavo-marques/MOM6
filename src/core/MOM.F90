@@ -1068,8 +1068,12 @@ subroutine step_MOM_dynamics(forces, p_surf_begin, p_surf_end, dt, dt_thermo, &
 
     call enable_averages(dt_thermo, Time_local+real_to_time(US%T_to_s*(dt_thermo-dt)), CS%diag)
     call cpu_clock_begin(id_clock_thick_diff)
-    if (CS%VarMix%use_variable_mixing) &
+    ! GMM
+    if (CS%VarMix%use_variable_mixing) then
       call calc_slope_functions(h, CS%tv, dt, G, GV, US, CS%VarMix, OBC=CS%OBC)
+      call uvchksum("GMM 1 slope_[xy]", CS%VarMix%slope_x, CS%VarMix%slope_y, G%HI, &
+                  scale=US%Z_to_L, haloshift=1)
+    endif
     call thickness_diffuse(h, CS%uhtr, CS%vhtr, CS%tv, dt_thermo, G, GV, US, &
                            CS%MEKE, CS%VarMix, CS%CDp, CS%thickness_diffuse_CSp)
     call cpu_clock_end(id_clock_thick_diff)
@@ -1172,8 +1176,12 @@ subroutine step_MOM_dynamics(forces, p_surf_begin, p_surf_end, dt, dt_thermo, &
 
     if (CS%debug) call hchksum(h,"Pre-thickness_diffuse h", G%HI, haloshift=0, scale=GV%H_to_m)
 
-    if (CS%VarMix%use_variable_mixing) &
+    ! GMM
+    if (CS%VarMix%use_variable_mixing) then
       call calc_slope_functions(h, CS%tv, dt, G, GV, US, CS%VarMix, OBC=CS%OBC)
+      call uvchksum("GMM 2 slope_[xy]", CS%VarMix%slope_x, CS%VarMix%slope_y, G%HI, &
+                  scale=US%Z_to_L, haloshift=1)
+    endif
     call thickness_diffuse(h, CS%uhtr, CS%vhtr, CS%tv, dt, G, GV, US, &
                            CS%MEKE, CS%VarMix, CS%CDp, CS%thickness_diffuse_CSp)
 
@@ -1278,8 +1286,11 @@ subroutine step_MOM_tracer_dyn(CS, G, GV, US, h, Time_local)
   else
     x_first = (MODULO(G%first_direction,2) == 0)
   endif
-  call advect_tracer(h, CS%uhtr, CS%vhtr, CS%OBC, CS%t_dyn_rel_adv, G, GV, US, &
-                     CS%tracer_adv_CSp, CS%tracer_Reg, x_first_in=x_first)
+  ! GMM, turn off advection
+  !call advect_tracer(h, CS%uhtr, CS%vhtr, CS%OBC, CS%t_dyn_rel_adv, G, GV, US, &
+  !                   CS%tracer_adv_CSp, CS%tracer_Reg, x_first_in=x_first)
+  call uvchksum("Before tracer_hordiff slope_[xy]", CS%VarMix%slope_x, CS%VarMix%slope_y, G%HI, &
+                  scale=US%Z_to_L, haloshift=1)
   call tracer_hordiff(h, CS%t_dyn_rel_adv, CS%MEKE, CS%VarMix, G, GV, US, &
                       CS%tracer_diff_CSp, CS%tracer_Reg, CS%tv)
   if (showCallTree) call callTree_waypoint("finished tracer advection/diffusion (step_MOM)")
