@@ -10,7 +10,6 @@ use MOM_cpu_clock,        only : CLOCK_SUBCOMPONENT
 use MOM_diag_mediator,    only : diag_ctrl
 use MOM_diag_mediator,    only : safe_alloc_ptr, time_type
 use MOM_domains,          only : pass_vector, pass_var, fill_symmetric_edges
-use MOM_domains,          only : global_field_sum, BITWISE_EXACT_SUM
 use MOM_domains,          only : AGRID, BGRID_NE, CGRID_NE, To_All
 use MOM_domains,          only : To_North, To_East, Omit_Corners
 use MOM_error_handler,    only : MOM_error, WARNING, FATAL, is_root_pe, MOM_mesg
@@ -82,6 +81,8 @@ type, public :: surface_forcing_CS ; private
                                 !! pressure limited by max_p_surf instead of the
                                 !! full atmospheric pressure.  The default is true.
   logical :: use_CFC            !< enables the MOM_CFC_cap tracer package.
+  logical :: enthalpy_cpl       !< Controls if enthalpy terms are provided by the coupler or computed
+                                !! internally.
   real :: gust_const            !< constant unresolved background gustiness for ustar [R L Z T-1 ~> Pa]
   logical :: read_gust_2d       !< If true, use a 2-dimensional gustiness supplied
                                 !! from an input file.
@@ -181,8 +182,12 @@ type, public :: ice_ocean_boundary_type
   real, pointer, dimension(:,:) :: ustar_berg        =>NULL() !< frictional velocity beneath icebergs [m/s]
   real, pointer, dimension(:,:) :: area_berg         =>NULL() !< area covered by icebergs[m2/m2]
   real, pointer, dimension(:,:) :: mass_berg         =>NULL() !< mass of icebergs(kg/m2)
-  real, pointer, dimension(:,:) :: lrunoff_hflx      =>NULL() !< heat content of liquid runoff [W/m2]
-  real, pointer, dimension(:,:) :: frunoff_hflx      =>NULL() !< heat content of frozen runoff [W/m2]
+  real, pointer, dimension(:,:) :: hrofl             =>NULL() !< heat content from liquid runoff [W/m2]
+  real, pointer, dimension(:,:) :: hrofi             =>NULL() !< heat content from frozen runoff [W/m2]
+  real, pointer, dimension(:,:) :: hrain             =>NULL() !< heat content from liquid precipitation [W/m2]
+  real, pointer, dimension(:,:) :: hsnow             =>NULL() !< heat content from frozen precipitation [W/m2]
+  real, pointer, dimension(:,:) :: hevap             =>NULL() !< heat content from evaporation [W/m2]
+  real, pointer, dimension(:,:) :: hcond             =>NULL() !< heat content from condensation [W/m2]
   real, pointer, dimension(:,:) :: p                 =>NULL() !< pressure of overlying ice and atmosphere
                                                               !< on ocean surface [Pa]
   real, pointer, dimension(:,:) :: ice_fraction      =>NULL() !< fractional ice area [nondim]
@@ -304,7 +309,7 @@ subroutine convert_IOB_to_fluxes(IOB, fluxes, index_bounds, Time, valid_time, G,
   if (fluxes%dt_buoy_accum < 0) then
     call allocate_forcing_type(G, fluxes, water=.true., heat=.true., ustar=.true., &
                                press=.true., fix_accum_bug=CS%fix_ustar_gustless_bug, &
-                               cfc=CS%use_CFC)
+                               cfc=CS%use_CFC, hevap=CS%enthalpy_cpl)
 
     call safe_alloc_ptr(fluxes%sw_vis_dir,isd,ied,jsd,jed)
     call safe_alloc_ptr(fluxes%sw_vis_dif,isd,ied,jsd,jed)
@@ -314,9 +319,9 @@ subroutine convert_IOB_to_fluxes(IOB, fluxes, index_bounds, Time, valid_time, G,
     call safe_alloc_ptr(fluxes%p_surf     ,isd,ied,jsd,jed)
     call safe_alloc_ptr(fluxes%p_surf_full,isd,ied,jsd,jed)
     if (CS%use_limited_P_SSH) then
-       fluxes%p_surf_SSH => fluxes%p_surf
+      fluxes%p_surf_SSH => fluxes%p_surf
     else
-       fluxes%p_surf_SSH => fluxes%p_surf_full
+      fluxes%p_surf_SSH => fluxes%p_surf_full
     endif
 
     call safe_alloc_ptr(fluxes%salt_flux,isd,ied,jsd,jed)
@@ -408,7 +413,7 @@ subroutine convert_IOB_to_fluxes(IOB, fluxes, index_bounds, Time, valid_time, G,
       fluxes%salt_flux_added(is:ie,js:je) = fluxes%salt_flux(is:ie,js:je) ! Diagnostic
     else
       do j=js,je ; do i=is,ie
-        if (G%mask2dT(i,j) > 0.5) then
+        if (G%mask2dT(i,j) > 0.0) then
           delta_sss = sfc_state%SSS(i,j) - data_restore(i,j)
           delta_sss = sign(1.0,delta_sss)*min(abs(delta_sss),CS%max_delta_srestore)
           fluxes%vprec(i,j) = (CS%basin_mask(i,j)*open_ocn_mask(i,j)*CS%srestore_mask(i,j))* &
@@ -452,7 +457,7 @@ subroutine convert_IOB_to_fluxes(IOB, fluxes, index_bounds, Time, valid_time, G,
     return
   endif
   if (associated(IOB%lrunoff)) then
-   if(CS%liquid_runoff_from_data)call data_override('OCN', 'runoff', IOB%lrunoff, Time)
+    if (CS%liquid_runoff_from_data) call data_override('OCN', 'runoff', IOB%lrunoff, Time)
   endif
 
   ! obtain fluxes from IOB; note the staggering of indices
@@ -487,13 +492,6 @@ subroutine convert_IOB_to_fluxes(IOB, fluxes, index_bounds, Time, valid_time, G,
     if (associated(IOB%mass_berg)) &
       fluxes%mass_berg(i,j) = US%m_to_Z*US%kg_m3_to_R * IOB%mass_berg(i-i0,j-j0) * G%mask2dT(i,j)
 
-    if (associated(IOB%lrunoff_hflx)) &
-      fluxes%heat_content_lrunoff(i,j) = US%W_m2_to_QRZ_T * IOB%lrunoff_hflx(i-i0,j-j0) * G%mask2dT(i,j)
-
-    if (associated(IOB%frunoff_hflx)) &
-      fluxes%heat_content_frunoff(i,j) = US%W_m2_to_QRZ_T * kg_m2_s_conversion * &
-                                         IOB%frunoff_hflx(i-i0,j-j0) * G%mask2dT(i,j)
-
     if (associated(IOB%lw_flux)) &
       fluxes%lw(i,j) = US%W_m2_to_QRZ_T * IOB%lw_flux(i-i0,j-j0) * G%mask2dT(i,j)
 
@@ -502,30 +500,30 @@ subroutine convert_IOB_to_fluxes(IOB, fluxes, index_bounds, Time, valid_time, G,
 
     ! sea ice and snow melt heat flux [Q R Z T-1 ~> W/m2]
     if (associated(IOB%seaice_melt_heat)) &
-         fluxes%seaice_melt_heat(i,j) = US%W_m2_to_QRZ_T * G%mask2dT(i,j) * IOB%seaice_melt_heat(i-i0,j-j0)
+      fluxes%seaice_melt_heat(i,j) = US%W_m2_to_QRZ_T * G%mask2dT(i,j) * IOB%seaice_melt_heat(i-i0,j-j0)
 
     ! water flux due to sea ice and snow melt [kg/m2/s]
     if (associated(IOB%seaice_melt)) &
-         fluxes%seaice_melt(i,j) = kg_m2_s_conversion * G%mask2dT(i,j) * IOB%seaice_melt(i-i0,j-j0)
+      fluxes%seaice_melt(i,j) = kg_m2_s_conversion * G%mask2dT(i,j) * IOB%seaice_melt(i-i0,j-j0)
 
     fluxes%latent(i,j) = 0.0
     ! notice minus sign since fprec is positive into the ocean
     if (associated(IOB%fprec)) then
-       fluxes%latent(i,j)            = fluxes%latent(i,j) - &
-           IOB%fprec(i-i0,j-j0)*US%W_m2_to_QRZ_T*CS%latent_heat_fusion
-       fluxes%latent_fprec_diag(i,j) = - G%mask2dT(i,j) * IOB%fprec(i-i0,j-j0)*US%W_m2_to_QRZ_T*CS%latent_heat_fusion
+      fluxes%latent(i,j)            = fluxes%latent(i,j) - &
+          IOB%fprec(i-i0,j-j0)*US%W_m2_to_QRZ_T*CS%latent_heat_fusion
+      fluxes%latent_fprec_diag(i,j) = - G%mask2dT(i,j) * IOB%fprec(i-i0,j-j0)*US%W_m2_to_QRZ_T*CS%latent_heat_fusion
     endif
     ! notice minus sign since frunoff is positive into the ocean
     if (associated(IOB%frunoff)) then
-       fluxes%latent(i,j)              = fluxes%latent(i,j) - &
-           IOB%frunoff(i-i0,j-j0) * US%W_m2_to_QRZ_T * CS%latent_heat_fusion
-       fluxes%latent_frunoff_diag(i,j) = - G%mask2dT(i,j) * &
-           IOB%frunoff(i-i0,j-j0) * US%W_m2_to_QRZ_T * CS%latent_heat_fusion
+      fluxes%latent(i,j)              = fluxes%latent(i,j) - &
+          IOB%frunoff(i-i0,j-j0) * US%W_m2_to_QRZ_T * CS%latent_heat_fusion
+      fluxes%latent_frunoff_diag(i,j) = - G%mask2dT(i,j) * &
+          IOB%frunoff(i-i0,j-j0) * US%W_m2_to_QRZ_T * CS%latent_heat_fusion
     endif
     if (associated(IOB%q_flux)) then
-       fluxes%latent(i,j)           = fluxes%latent(i,j) + &
-           IOB%q_flux(i-i0,j-j0)*US%W_m2_to_QRZ_T*CS%latent_heat_vapor
-       fluxes%latent_evap_diag(i,j) = G%mask2dT(i,j) * IOB%q_flux(i-i0,j-j0)*US%W_m2_to_QRZ_T*CS%latent_heat_vapor
+      fluxes%latent(i,j)           = fluxes%latent(i,j) + &
+          IOB%q_flux(i-i0,j-j0)*US%W_m2_to_QRZ_T*CS%latent_heat_vapor
+      fluxes%latent_evap_diag(i,j) = G%mask2dT(i,j) * IOB%q_flux(i-i0,j-j0)*US%W_m2_to_QRZ_T*CS%latent_heat_vapor
     endif
     fluxes%latent(i,j) = G%mask2dT(i,j) * fluxes%latent(i,j)
 
@@ -544,12 +542,33 @@ subroutine convert_IOB_to_fluxes(IOB, fluxes, index_bounds, Time, valid_time, G,
     fluxes%sw(i,j) = fluxes%sw_vis_dir(i,j) + fluxes%sw_vis_dif(i,j) + &
                      fluxes%sw_nir_dir(i,j) + fluxes%sw_nir_dif(i,j)
 
+    ! enthalpy terms
+    if (CS%enthalpy_cpl) then
+      if (associated(IOB%hrofl)) &
+        fluxes%heat_content_lrunoff(i,j) = US%W_m2_to_QRZ_T * IOB%hrofl(i-i0,j-j0) * G%mask2dT(i,j)
+
+      if (associated(IOB%hrofi)) &
+        fluxes%heat_content_frunoff(i,j) = US%W_m2_to_QRZ_T * IOB%hrofi(i-i0,j-j0) * G%mask2dT(i,j)
+
+      if (associated(IOB%hrain)) &
+        fluxes%heat_content_lprec(i,j)   = US%W_m2_to_QRZ_T * IOB%hrain(i-i0,j-j0) * G%mask2dT(i,j)
+
+      if (associated(IOB%hsnow)) &
+        fluxes%heat_content_fprec(i,j)   = US%W_m2_to_QRZ_T * IOB%hsnow(i-i0,j-j0) * G%mask2dT(i,j)
+
+       if (associated(IOB%hevap)) &
+        fluxes%heat_content_evap(i,j)    = US%W_m2_to_QRZ_T * IOB%hevap(i-i0,j-j0) * G%mask2dT(i,j)
+
+       if (associated(IOB%hcond)) &
+        fluxes%heat_content_cond(i,j)    = US%W_m2_to_QRZ_T * IOB%hcond(i-i0,j-j0) * G%mask2dT(i,j)
+    endif
+
     ! sea ice fraction [nondim]
     if (associated(IOB%ice_fraction) .and. associated(fluxes%ice_fraction)) &
-         fluxes%ice_fraction(i,j) = G%mask2dT(i,j) * IOB%ice_fraction(i-i0,j-j0)
+      fluxes%ice_fraction(i,j) = G%mask2dT(i,j) * IOB%ice_fraction(i-i0,j-j0)
     ! 10-m wind speed squared [m2/s2]
     if (associated(IOB%u10_sqr) .and. associated(fluxes%u10_sqr)) &
-         fluxes%u10_sqr(i,j) = US%m_to_L**2 * US%T_to_s**2 * G%mask2dT(i,j) * IOB%u10_sqr(i-i0,j-j0)
+      fluxes%u10_sqr(i,j) = US%m_to_L**2 * US%T_to_s**2 * G%mask2dT(i,j) * IOB%u10_sqr(i-i0,j-j0)
 
   enddo ; enddo
 
@@ -567,18 +586,18 @@ subroutine convert_IOB_to_fluxes(IOB, fluxes, index_bounds, Time, valid_time, G,
 
   ! applied surface pressure from atmosphere and cryosphere
   if (associated(IOB%p)) then
-     if (CS%max_p_surf >= 0.0) then
-        do j=js,je ; do i=is,ie
-           fluxes%p_surf_full(i,j) = G%mask2dT(i,j) * US%kg_m3_to_R*US%m_s_to_L_T**2*IOB%p(i-i0,j-j0)
-           fluxes%p_surf(i,j) = MIN(fluxes%p_surf_full(i,j),CS%max_p_surf)
-        enddo; enddo
-     else
-        do j=js,je ; do i=is,ie
-           fluxes%p_surf_full(i,j) = G%mask2dT(i,j) * US%kg_m3_to_R*US%m_s_to_L_T**2*IOB%p(i-i0,j-j0)
-           fluxes%p_surf(i,j) = fluxes%p_surf_full(i,j)
-        enddo; enddo
-     endif
-     fluxes%accumulate_p_surf = .true. ! Multiple components may contribute to surface pressure.
+    if (CS%max_p_surf >= 0.0) then
+      do j=js,je ; do i=is,ie
+        fluxes%p_surf_full(i,j) = G%mask2dT(i,j) * US%kg_m3_to_R*US%m_s_to_L_T**2*IOB%p(i-i0,j-j0)
+        fluxes%p_surf(i,j) = MIN(fluxes%p_surf_full(i,j),CS%max_p_surf)
+      enddo ; enddo
+    else
+      do j=js,je ; do i=is,ie
+        fluxes%p_surf_full(i,j) = G%mask2dT(i,j) * US%kg_m3_to_R*US%m_s_to_L_T**2*IOB%p(i-i0,j-j0)
+        fluxes%p_surf(i,j) = fluxes%p_surf_full(i,j)
+      enddo ; enddo
+    endif
+    fluxes%accumulate_p_surf = .true. ! Multiple components may contribute to surface pressure.
   endif
 
   ! CFCs
@@ -732,9 +751,9 @@ subroutine convert_IOB_to_forces(IOB, forces, index_bounds, Time, G, US, CS)
 
   ! applied surface pressure from atmosphere and cryosphere
   if (CS%use_limited_P_SSH) then
-     forces%p_surf_SSH => forces%p_surf
+    forces%p_surf_SSH => forces%p_surf
   else
-     forces%p_surf_SSH => forces%p_surf_full
+    forces%p_surf_SSH => forces%p_surf_full
   endif
   if (associated(IOB%p)) then
     if (CS%max_p_surf >= 0.0) then
@@ -804,7 +823,7 @@ subroutine convert_IOB_to_forces(IOB, forces, index_bounds, Time, G, US, CS)
 
     do j=js,je ; do I=Isq,Ieq
       forces%taux(I,j) = 0.0
-      if ((G%mask2dBu(I,J) + G%mask2dBu(I,J-1)) > 0) &
+      if ((G%mask2dBu(I,J) + G%mask2dBu(I,J-1)) > 0.0) &
         forces%taux(I,j) = (G%mask2dBu(I,J)*taux_at_q(I,J) + &
                             G%mask2dBu(I,J-1)*taux_at_q(I,J-1)) / &
                            (G%mask2dBu(I,J) + G%mask2dBu(I,J-1))
@@ -812,7 +831,7 @@ subroutine convert_IOB_to_forces(IOB, forces, index_bounds, Time, G, US, CS)
 
     do J=Jsq,Jeq ; do i=is,ie
       forces%tauy(i,J) = 0.0
-      if ((G%mask2dBu(I,J) + G%mask2dBu(I-1,J)) > 0) &
+      if ((G%mask2dBu(I,J) + G%mask2dBu(I-1,J)) > 0.0) &
         forces%tauy(i,J) = (G%mask2dBu(I,J)*tauy_at_q(I,J) + &
                             G%mask2dBu(I-1,J)*tauy_at_q(I-1,J)) / &
                            (G%mask2dBu(I,J) + G%mask2dBu(I-1,J))
@@ -825,7 +844,7 @@ subroutine convert_IOB_to_forces(IOB, forces, index_bounds, Time, G, US, CS)
     do j=js,je ; do i=is,ie
       tau_mag = 0.0 ; gustiness = CS%gust_const
       if (((G%mask2dBu(I,J) + G%mask2dBu(I-1,J-1)) + &
-           (G%mask2dBu(I,J-1) + G%mask2dBu(I-1,J))) > 0) then
+           (G%mask2dBu(I,J-1) + G%mask2dBu(I-1,J))) > 0.0) then
         tau_mag = sqrt(((G%mask2dBu(I,J)*(taux_at_q(I,J)**2 + tauy_at_q(I,J)**2) + &
             G%mask2dBu(I-1,J-1)*(taux_at_q(I-1,J-1)**2 + tauy_at_q(I-1,J-1)**2)) + &
            (G%mask2dBu(I,J-1)*(taux_at_q(I,J-1)**2 + tauy_at_q(I,J-1)**2) + &
@@ -841,7 +860,7 @@ subroutine convert_IOB_to_forces(IOB, forces, index_bounds, Time, G, US, CS)
 
     do j=js,je ; do I=Isq,Ieq
       forces%taux(I,j) = 0.0
-      if ((G%mask2dT(i,j) + G%mask2dT(i+1,j)) > 0) &
+      if ((G%mask2dT(i,j) + G%mask2dT(i+1,j)) > 0.0) &
         forces%taux(I,j) = (G%mask2dT(i,j)*taux_at_h(i,j) + &
                             G%mask2dT(i+1,j)*taux_at_h(i+1,j)) / &
                            (G%mask2dT(i,j) + G%mask2dT(i+1,j))
@@ -849,7 +868,7 @@ subroutine convert_IOB_to_forces(IOB, forces, index_bounds, Time, G, US, CS)
 
     do J=Jsq,Jeq ; do i=is,ie
       forces%tauy(i,J) = 0.0
-      if ((G%mask2dT(i,j) + G%mask2dT(i,j+1)) > 0) &
+      if ((G%mask2dT(i,j) + G%mask2dT(i,j+1)) > 0.0) &
         forces%tauy(i,J) = (G%mask2dT(i,j)*tauy_at_h(i,j) + &
                             G%mask2dT(i,J+1)*tauy_at_h(i,j+1)) / &
                            (G%mask2dT(i,j) + G%mask2dT(i,j+1))
@@ -857,7 +876,7 @@ subroutine convert_IOB_to_forces(IOB, forces, index_bounds, Time, G, US, CS)
 
     do j=js,je ; do i=is,ie
       gustiness = CS%gust_const
-      if (CS%read_gust_2d .and. (G%mask2dT(i,j) > 0)) gustiness = CS%gust(i,j)
+      if (CS%read_gust_2d .and. (G%mask2dT(i,j) > 0.0)) gustiness = CS%gust(i,j)
       forces%ustar(i,j) = sqrt(gustiness*Irho0 + Irho0 * G%mask2dT(i,j) * &
                                sqrt(taux_at_h(i,j)**2 + tauy_at_h(i,j)**2))
     enddo ; enddo
@@ -869,12 +888,12 @@ subroutine convert_IOB_to_forces(IOB, forces, index_bounds, Time, G, US, CS)
 
     do j=js,je ; do i=is,ie
       taux2 = 0.0
-      if ((G%mask2dCu(I-1,j) + G%mask2dCu(I,j)) > 0) &
+      if ((G%mask2dCu(I-1,j) + G%mask2dCu(I,j)) > 0.0) &
         taux2 = (G%mask2dCu(I-1,j)*forces%taux(I-1,j)**2 + &
                  G%mask2dCu(I,j)*forces%taux(I,j)**2) / (G%mask2dCu(I-1,j) + G%mask2dCu(I,j))
 
       tauy2 = 0.0
-      if ((G%mask2dCv(i,J-1) + G%mask2dCv(i,J)) > 0) &
+      if ((G%mask2dCv(i,J-1) + G%mask2dCv(i,J)) > 0.0) &
         tauy2 = (G%mask2dCv(i,J-1)*forces%tauy(i,J-1)**2 + &
                  G%mask2dCv(i,J)*forces%tauy(i,J)**2) / (G%mask2dCv(i,J-1) + G%mask2dCv(i,J))
 
@@ -1201,6 +1220,10 @@ subroutine surface_forcing_init(Time, G, US, param_file, diag, CS, restore_salt,
   call get_param(param_file, mdl, "USE_CFC_CAP", CS%use_CFC, &
                  default=.false., do_not_log=.true.)
 
+  call get_param(param_file, mdl, "ENTHALPY_FROM_COUPLER", CS%enthalpy_cpl, &
+                 "If True, the heat (enthalpy) associated with mass entering/leaving the "//&
+                 "ocean is provided via coupler.", default=.false.)
+
   if (restore_salt) then
     call get_param(param_file, mdl, "FLUXCONST", CS%Flux_const, &
                  "The constant that relates the restoring surface fluxes to the relative "//&
@@ -1505,6 +1528,26 @@ subroutine ice_ocn_bnd_type_chksum(id, timestep, iobt)
   endif
   if (associated(iobt%mass_berg)) then
     chks = field_chksum( iobt%mass_berg  ) ; if (root) write(outunit,100) 'iobt%mass_berg      ', chks
+  endif
+
+  ! enthalpy
+  if (associated(iobt%hrofl)) then
+    chks = field_chksum( iobt%hrofl  ) ; if (root) write(outunit,100) 'iobt%hrofl      ', chks
+  endif
+  if (associated(iobt%hrofi)) then
+    chks = field_chksum( iobt%hrofi  ) ; if (root) write(outunit,100) 'iobt%hrofi      ', chks
+  endif
+  if (associated(iobt%hrain)) then
+    chks = field_chksum( iobt%hrain  ) ; if (root) write(outunit,100) 'iobt%hrain      ', chks
+  endif
+  if (associated(iobt%hsnow)) then
+    chks = field_chksum( iobt%hsnow  ) ; if (root) write(outunit,100) 'iobt%hsnow      ', chks
+  endif
+  if (associated(iobt%hevap)) then
+    chks = field_chksum( iobt%hevap  ) ; if (root) write(outunit,100) 'iobt%hevap      ', chks
+  endif
+  if (associated(iobt%hcond)) then
+    chks = field_chksum( iobt%hcond  ) ; if (root) write(outunit,100) 'iobt%hcond      ', chks
   endif
 
 100 FORMAT("   CHECKSUM::",A20," = ",Z20)

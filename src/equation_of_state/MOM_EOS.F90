@@ -64,9 +64,9 @@ public query_compressible
 
 !> Calculates density of sea water from T, S and P
 interface calculate_density
-  module procedure calculate_density_scalar, calculate_density_array, calculate_density_1d
-  module procedure calculate_stanley_density_scalar, calculate_stanley_density_array
-  module procedure calculate_stanley_density_1d
+  module procedure calculate_density_scalar, calculate_density_array, calculate_density_1d, &
+                   calculate_stanley_density_scalar, calculate_stanley_density_array, &
+                   calculate_stanley_density_1d
 end interface calculate_density
 
 !> Calculates specific volume of sea water from T, S and P
@@ -430,18 +430,18 @@ subroutine calculate_stanley_density_1d(T, S, pressure, Tvar, TScov, Svar, rho, 
 
   select case (EOS%form_of_EOS)
     case (EOS_LINEAR)
-      call calculate_density_linear(T, S, pres, rho, 1, npts, &
+      call calculate_density_linear(T, S, pres, rho, is, npts, &
                                     EOS%Rho_T0_S0, EOS%dRho_dT, EOS%dRho_dS, rho_ref)
       call calculate_density_second_derivs_linear(T, S, pres, d2RdSS, d2RdST, &
-                                                  d2RdTT, d2RdSp, d2RdTP, 1, npts)
+                                                  d2RdTT, d2RdSp, d2RdTP, is, npts)
     case (EOS_WRIGHT)
-      call calculate_density_wright(T, S, pres, rho, 1, npts, rho_ref)
+      call calculate_density_wright(T, S, pres, rho, is, npts, rho_ref)
       call calculate_density_second_derivs_wright(T, S, pres, d2RdSS, d2RdST, &
-                                                  d2RdTT, d2RdSp, d2RdTP, 1, npts)
+                                                  d2RdTT, d2RdSp, d2RdTP, is, npts)
     case (EOS_TEOS10)
-      call calculate_density_teos10(T, S, pres, rho, 1, npts, rho_ref)
+      call calculate_density_teos10(T, S, pres, rho, is, npts, rho_ref)
       call calculate_density_second_derivs_teos10(T, S, pres, d2RdSS, d2RdST, &
-                                                  d2RdTT, d2RdSp, d2RdTP, 1, npts)
+                                                  d2RdTT, d2RdSp, d2RdTP, is, npts)
     case default
       call MOM_error(FATAL, "calculate_stanley_density_scalar: EOS is not valid.")
   end select
@@ -769,7 +769,6 @@ subroutine calculate_density_derivs_scalar(T, S, pressure, drho_dT, drho_dS, EOS
   ! Local variables
   real :: rho_scale ! A factor to convert density from kg m-3 to the desired units [R m3 kg-1 ~> 1]
   real :: p_scale   ! A factor to convert pressure to units of Pa [Pa T2 R-1 L-2 ~> 1]
-  integer :: j
 
   p_scale = EOS%RL2_T2_to_Pa
 
@@ -947,7 +946,6 @@ subroutine calculate_spec_vol_derivs_array(T, S, pressure, dSV_dT, dSV_dS, start
   type(EOS_type),     intent(in)  :: EOS    !< Equation of state structure
 
   ! Local variables
-  real, dimension(size(T)) :: press   ! Pressure converted to [Pa]
   real, dimension(size(T)) :: rho     ! In situ density [kg m-3]
   real, dimension(size(T)) :: dRho_dT ! Derivative of density with temperature [kg m-3 degC-1]
   real, dimension(size(T)) :: dRho_dS ! Derivative of density with salinity [kg m-3 ppt-1]
@@ -1160,10 +1158,6 @@ subroutine analytic_int_specific_vol_dp(T, S, p_t, p_b, alpha_ref, HI, EOS, &
                             !! the same units as p_t [R L2 T-2 ~> Pa] or [Pa]
   logical,    optional, intent(in)  :: useMassWghtInterp !< If true, uses mass weighting
                             !! to interpolate T/S for top and bottom integrals.
-  ! Local variables
-  real :: pres_scale    ! A unit conversion factor from the rescaled units of pressure to Pa [Pa T2 R-1 L-2 ~> 1]
-  real :: SV_scale      ! A multiplicative factor by which to scale specific
-                        ! volume from m3 kg-1 to the desired units [kg m-3 R-1 ~> 1]
 
   ! We should never reach this point with quadrature. EOS_quadrature indicates that numerical
   ! integration be used instead of analytic. This is a safety check.
@@ -1453,8 +1447,7 @@ subroutine convert_temp_salt_for_TEOS10(T, S, HI, kd, mask_z, EOS)
   type(EOS_type),        intent(in)    :: EOS !< Equation of state structure
 
   integer :: i, j, k
-  real :: gsw_sr_from_sp, gsw_ct_from_pt, gsw_sa_from_sp
-  real :: p
+  real :: gsw_sr_from_sp, gsw_ct_from_pt
 
   if ((EOS%form_of_EOS /= EOS_TEOS10) .and. (EOS%form_of_EOS /= EOS_NEMO)) return
 

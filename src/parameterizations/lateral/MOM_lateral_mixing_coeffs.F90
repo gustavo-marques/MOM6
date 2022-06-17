@@ -59,6 +59,7 @@ type, public :: VarMix_CS
                                   !! This parameter is set depending on other parameters.
   logical :: calculate_Eady_growth_rate !< If true, calculate all the Eady growth rate.
                                   !! This parameter is set depending on other parameters.
+  logical :: use_stanley_iso      !< If true, use Stanley parameterization in MOM_isopycnal_slopes
   logical :: use_simpler_Eady_growth_rate !< If true, use a simpler method to calculate the
                                   !! Eady growth rate that avoids division by layer thickness.
                                   !! This parameter is set depending on other parameters.
@@ -216,7 +217,7 @@ subroutine calc_resoln_function(h, tv, G, GV, US, CS)
   real :: dx_term ! A term in the denominator [L2 T-2 ~> m2 s-2] or [m2 s-2]
   integer :: power_2
   integer :: is, ie, js, je, Isq, Ieq, Jsq, Jeq, nz
-  integer :: i, j, k
+  integer :: i, j
   is = G%isc ; ie = G%iec ; js = G%jsc ; je = G%jec ; nz = GV%ke
   Isq = G%IscB ; Ieq = G%IecB ; Jsq = G%JscB ; Jeq = G%JecB
 
@@ -471,14 +472,14 @@ subroutine calc_slope_functions(h, tv, dt, G, GV, US, CS, OBC)
   if (CS%calculate_Eady_growth_rate) then
     if (CS%use_simpler_Eady_growth_rate) then
       call find_eta(h, tv, G, GV, US, e, halo_size=2)
-      call calc_isoneutral_slopes(G, GV, US, h, e, tv, dt*CS%kappa_smooth, &
+      call calc_isoneutral_slopes(G, GV, US, h, e, tv, dt*CS%kappa_smooth, CS%use_stanley_iso, &
                                   CS%slope_x, CS%slope_y, N2_u=N2_u, N2_v=N2_v, dzu=dzu, dzv=dzv, &
                                   dzSxN=dzSxN, dzSyN=dzSyN, halo=1, OBC=OBC)
       call calc_Eady_growth_rate_2D(CS, G, GV, US, OBC, h, e, dzu, dzv, dzSxN, dzSyN, CS%SN_u, CS%SN_v)
     else
       call find_eta(h, tv, G, GV, US, e, halo_size=2)
       if (CS%use_stored_slopes) then
-        call calc_isoneutral_slopes(G, GV, US, h, e, tv, dt*CS%kappa_smooth, &
+        call calc_isoneutral_slopes(G, GV, US, h, e, tv, dt*CS%kappa_smooth, CS%use_stanley_iso, &
                                     CS%slope_x, CS%slope_y, N2_u=N2_u, N2_v=N2_v, halo=1, OBC=OBC)
         call calc_Visbeck_coeffs_old(h, CS%slope_x, CS%slope_y, N2_u, N2_v, G, GV, US, CS, OBC)
       else
@@ -526,7 +527,7 @@ subroutine calc_Visbeck_coeffs_old(h, slope_x, slope_y, N2_u, N2_v, G, GV, US, C
   real :: Hup, Hdn      ! Thickness from above, below [H ~> m or kg m-2]
   real :: H_geom        ! The geometric mean of Hup*Hdn [H ~> m or kg m-2].
   integer :: is, ie, js, je, nz
-  integer :: i, j, k, kb_max
+  integer :: i, j, k
   integer :: l_seg
   real :: S2max, wNE, wSE, wSW, wNW
   real :: H_u(SZIB_(G)), H_v(SZI_(G))
@@ -876,7 +877,7 @@ subroutine calc_slope_functions_using_just_e(h, G, GV, US, CS, e, calculate_slop
   real :: H_geom        ! The geometric mean of Hup*Hdn [H ~> m or kg m-2].
   real :: one_meter     ! One meter in thickness units [H ~> m or kg m-2].
   integer :: is, ie, js, je, nz
-  integer :: i, j, k, kb_max
+  integer :: i, j, k
   integer :: l_seg
   real    :: S2N2_u_local(SZIB_(G), SZJ_(G),SZK_(GV))
   real    :: S2N2_v_local(SZI_(G), SZJB_(G),SZK_(GV))
@@ -1267,6 +1268,9 @@ subroutine VarMix_init(Time, G, GV, US, param_file, diag, CS)
 
   call get_param(param_file, mdl, "DEBUG", CS%debug, default=.false., do_not_log=.true.)
 
+  call get_param(param_file, mdl, "USE_STANLEY_ISO", CS%use_stanley_iso, &
+                 "If true, turn on Stanley SGS T variance parameterization "// &
+                 "in isopycnal slope code.", default=.false.)
 
   if (CS%Resoln_use_ebt .or. CS%khth_use_ebt_struct) then
     in_use = .true.
@@ -1290,6 +1294,7 @@ subroutine VarMix_init(Time, G, GV, US, param_file, diag, CS)
   endif
 
   if (CS%use_stored_slopes) then
+    ! CS%calculate_Eady_growth_rate=.true.
     in_use = .true.
     allocate(CS%slope_x(IsdB:IedB,jsd:jed,GV%ke+1), source=0.0)
     allocate(CS%slope_y(isd:ied,JsdB:JedB,GV%ke+1), source=0.0)

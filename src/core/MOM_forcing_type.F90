@@ -118,9 +118,8 @@ type, public :: forcing
   ! heat associated with water crossing ocean surface
   real, pointer, dimension(:,:) :: &
     heat_content_cond    => NULL(), & !< heat content associated with condensating water [Q R Z T-1 ~> W m-2]
+    heat_content_evap    => NULL(), & !< heat content associated with evaporating water  [Q R Z T-1 ~> W m-2]
     heat_content_lprec   => NULL(), & !< heat content associated with liquid >0 precip   [Q R Z T-1 ~> W m-2]
-    heat_content_icemelt => NULL(), & !< heat content associated with snow and seaice
-                                      !! melt and formation [Q R Z T-1 ~> W m-2]
     heat_content_fprec   => NULL(), & !< heat content associated with frozen precip      [Q R Z T-1 ~> W m-2]
     heat_content_vprec   => NULL(), & !< heat content associated with virtual >0 precip  [Q R Z T-1 ~> W m-2]
     heat_content_lrunoff => NULL(), & !< heat content associated with liquid runoff      [Q R Z T-1 ~> W m-2]
@@ -171,6 +170,8 @@ type, public :: forcing
                                  !! exactly 0 away from shelves or on land.
   real, pointer, dimension(:,:) :: iceshelf_melt => NULL() !< Ice shelf melt rate (positive)
                                  !! or freezing (negative) [R Z T-1 ~> kg m-2 s-1]
+  real, pointer, dimension(:,:) :: shelf_sfc_mass_flux => NULL() !< Ice shelf surface mass flux
+                                 !! deposition from the atmosphere. [R Z T-1 ~> kg m-2 s-1]
 
   ! Scalars set by surface forcing modules
   real :: vPrecGlobalAdj = 0.     !< adjustment to restoring vprec to zero out global net [kg m-2 s-1]
@@ -264,12 +265,12 @@ type, public :: mech_forcing
                                 !! ice needs to be accumulated, and the rigidity explicitly
                                 !! reset to zero at the driver level when appropriate.
   real, pointer, dimension(:) :: &
-       stk_wavenumbers => NULL() !< The central wave number of Stokes bands [rad m-1]
+    stk_wavenumbers => NULL()   !< The central wave number of Stokes bands [rad m-1]
   real, pointer, dimension(:,:,:) :: &
-       ustkb => NULL(), &       !< Stokes Drift spectrum, zonal [m s-1]
+    ustkb => NULL(), &          !< Stokes Drift spectrum, zonal [m s-1]
                                 !! Horizontal - u points
                                 !! 3rd dimension - wavenumber
-       vstkb => NULL()          !< Stokes Drift spectrum, meridional [m s-1]
+    vstkb => NULL()             !< Stokes Drift spectrum, meridional [m s-1]
                                 !! Horizontal - v points
                                 !! 3rd dimension - wavenumber
 
@@ -312,10 +313,11 @@ type, public :: forcing_diags
   integer :: id_heat_content_lrunoff= -1, id_heat_content_frunoff  = -1
   integer :: id_heat_content_lprec  = -1, id_heat_content_fprec    = -1
   integer :: id_heat_content_cond   = -1, id_heat_content_surfwater= -1
+  integer :: id_heat_content_evap   = -1
   integer :: id_heat_content_vprec  = -1, id_heat_content_massout  = -1
   integer :: id_heat_added          = -1, id_heat_content_massin   = -1
   integer :: id_hfrainds            = -1, id_hfrunoffds            = -1
-  integer :: id_seaice_melt_heat    = -1, id_heat_content_icemelt  = -1
+  integer :: id_seaice_melt_heat    = -1
 
   ! global area integrated heat flux diagnostic handles
   integer :: id_total_net_heat_coupler    = -1, id_total_net_heat_surface      = -1
@@ -326,9 +328,10 @@ type, public :: forcing_diags
   integer :: id_total_heat_content_lrunoff= -1, id_total_heat_content_frunoff  = -1
   integer :: id_total_heat_content_lprec  = -1, id_total_heat_content_fprec    = -1
   integer :: id_total_heat_content_cond   = -1, id_total_heat_content_surfwater= -1
+  integer :: id_total_heat_content_evap   = -1
   integer :: id_total_heat_content_vprec  = -1, id_total_heat_content_massout  = -1
   integer :: id_total_heat_added          = -1, id_total_heat_content_massin   = -1
-  integer :: id_total_seaice_melt_heat    = -1, id_total_heat_content_icemelt  = -1
+  integer :: id_total_seaice_melt_heat    = -1
 
   ! global area averaged heat flux diagnostic handles
   integer :: id_net_heat_coupler_ga = -1, id_net_heat_surface_ga = -1
@@ -375,7 +378,6 @@ type, public :: forcing_diags
   ! Iceberg + Ice shelf diagnostic handles
   integer :: id_ustar_ice_cover = -1
   integer :: id_frac_ice_cover = -1
-
   ! wave forcing diagnostics handles.
   integer :: id_lamult = -1
   !>@}
@@ -469,6 +471,7 @@ subroutine extractFluxes1d(G, GV, US, fluxes, optics, nsw, j, dt, &
   real :: I_Cp_Hconvert       ! Unit conversion factors divided by the heat capacity
                               ! [degC H R-1 Z-1 Q-1 ~> degC m3 J-1 or kg degC J-1]
   logical :: calculate_diags  ! Indicate to calculate/update diagnostic arrays
+  logical :: do_enthalpy      ! If true (default) enthalpy terms are computed in MOM6
   character(len=200) :: mesg
   integer            :: is, ie, nz, i, k, n
 
@@ -487,6 +490,13 @@ subroutine extractFluxes1d(G, GV, US, fluxes, optics, nsw, j, dt, &
   if (present(netmassinout_rate)) do_NMIOR = .true.
   if (present(pen_sw_bnd_rate)) do_PSWBR = .true.
   !}BGR
+
+  ! GMM: by default heat content from mass entering and leaving the ocean (enthalpy)
+  ! is diagnosed in this subroutine. When heat_content_evap is associated,
+  ! the enthalpy terms are provided via coupler and, therefore, they do not need
+  ! to be computed again.
+  do_enthalpy = .true.
+  if (associated(fluxes%heat_content_evap)) do_enthalpy = .false.
 
   Ih_limit  = 0.0 ; if (FluxRescaleDepth > 0.0) Ih_limit  = 1.0 / FluxRescaleDepth
   I_Cp      = 1.0 / fluxes%C_p
@@ -598,7 +608,7 @@ subroutine extractFluxes1d(G, GV, US, fluxes, optics, nsw, j, dt, &
 
     ! evap > 0 means condensating water is added into ocean.
     ! evap < 0 means evaporation of water from the ocean, in
-    ! which case heat_content_evap is computed in MOM_diabatic_driver.F90
+    ! which case heat_content_massout is computed in MOM_diabatic_driver.F90
     if (fluxes%evap(i,j) < 0.0) netMassOut(i) = netMassOut(i) + fluxes%evap(i,j)
   !   if (associated(fluxes%heat_content_cond)) fluxes%heat_content_cond(i,j) = 0.0 !??? --AJA
 
@@ -624,6 +634,7 @@ subroutine extractFluxes1d(G, GV, US, fluxes, optics, nsw, j, dt, &
     ! (H=m for Bouss, H=kg/m2 for non-Bouss)
 
     ! CIME provides heat flux from snow&ice melt (seaice_melt_heat), so this is added below
+    ! Note: this term accounts for the enthalpy associated with water flux due to sea ice melting/freezing
     if (associated(fluxes%seaice_melt_heat)) then
       net_heat(i) = scale * dt * I_Cp_Hconvert * &
                     ( fluxes%sw(i,j) + (((fluxes%lw(i,j) + fluxes%latent(i,j)) + fluxes%sens(i,j)) + &
@@ -696,12 +707,20 @@ subroutine extractFluxes1d(G, GV, US, fluxes, optics, nsw, j, dt, &
 !     (fluxes%heat_content_cond(i,j)     +  fluxes%heat_content_vprec(i,j))))))
 !    endif
 
+    ! When enthalpy terms are provided via coupler, they must be included in net_heat
+    if (.not. do_enthalpy) then
+      net_heat(i) = net_heat(i) + (scale * dt * I_Cp_Hconvert * &
+                    (fluxes%heat_content_lrunoff(i,j) + fluxes%heat_content_frunoff(i,j) + &
+                     fluxes%heat_content_lprec(i,j)   + fluxes%heat_content_fprec(i,j)   + &
+                     fluxes%heat_content_evap(i,j)    + fluxes%heat_content_cond(i,j)))
+    endif
+
     if (fluxes%num_msg < fluxes%max_msg) then
       if (Pen_SW_tot(i) > 1.000001 * I_Cp_Hconvert*scale*dt*fluxes%sw(i,j)) then
         fluxes%num_msg = fluxes%num_msg + 1
         write(mesg,'("Penetrating shortwave of ",1pe17.10, &
                     &" exceeds total shortwave of ",1pe17.10,&
-                    &" at ",1pg11.4,"E, "1pg11.4,"N.")') &
+                    &" at ",1pg11.4,",E,",1pg11.4,"N.")') &
                Pen_SW_tot(i), I_Cp_Hconvert*scale*dt * fluxes%sw(i,j), &
                G%geoLonT(i,j), G%geoLatT(i,j)
         call MOM_error(WARNING,mesg)
@@ -732,7 +751,7 @@ subroutine extractFluxes1d(G, GV, US, fluxes, optics, nsw, j, dt, &
     endif
 
     ! Diagnostics follow...
-    if (calculate_diags) then
+    if (calculate_diags .and. do_enthalpy) then
 
       ! Initialize heat_content_massin that is diagnosed in mixedlayer_convection or
       ! applyBoundaryFluxes such that the meaning is as the sum of all incoming components.
@@ -790,15 +809,6 @@ subroutine extractFluxes1d(G, GV, US, fluxes, optics, nsw, j, dt, &
         endif
       endif
 
-      ! Following lprec and fprec, water flux due to sea ice melt (seaice_melt) enters at SST - GMM
-      if (associated(fluxes%heat_content_icemelt)) then
-        if (fluxes%seaice_melt(i,j) > 0.0) then
-          fluxes%heat_content_icemelt(i,j) = fluxes%C_p*fluxes%seaice_melt(i,j)*T(i,1)
-        else
-          fluxes%heat_content_icemelt(i,j) = 0.0
-        endif
-      endif
-
       ! virtual precip associated with salinity restoring
       ! vprec > 0 means add water to ocean, assumed to be at SST
       ! vprec < 0 means remove water from ocean; set heat_content_vprec in MOM_diabatic_driver.F90
@@ -838,7 +848,31 @@ subroutine extractFluxes1d(G, GV, US, fluxes, optics, nsw, j, dt, &
         endif
       endif
 
-    endif ! calculate_diags
+    elseif (.not. do_enthalpy) then
+
+      ! virtual precip associated with salinity restoring. Heat content associated with
+      ! that is *not* provided by the coupler and must be calculated by MOM6.
+      ! vprec > 0 means add water to ocean, assumed to be at SST
+      ! vprec < 0 means remove water from ocean; set heat_content_vprec in MOM_diabatic_driver.F90
+      if (associated(fluxes%heat_content_vprec)) then
+        if (fluxes%vprec(i,j) > 0.0) then
+          fluxes%heat_content_vprec(i,j) = fluxes%C_p*fluxes%vprec(i,j)*T(i,1)
+        else
+          fluxes%heat_content_vprec(i,j) = 0.0
+        endif
+      endif
+
+      if (associated(tv%TempxPmE)) then
+        tv%TempxPmE(i,j) =  (I_Cp*dt*scale) * &
+        (fluxes%heat_content_lprec(i,j)  + &
+        fluxes%heat_content_fprec(i,j)   + &
+        fluxes%heat_content_lrunoff(i,j) + &
+        fluxes%heat_content_frunoff(i,j) + &
+        fluxes%heat_content_evap(i,j)    + &
+        fluxes%heat_content_cond(i,j))
+      endif
+
+    endif ! calculate_diags and do_enthalpy
 
   enddo ! i-loop
 
@@ -1019,6 +1053,7 @@ subroutine calculateBuoyancyFlux2d(G, GV, US, fluxes, optics, h, Temp, Salt, tv,
                                                                       !! [degC H T-1 ~> degC m s-1 or degC kg m-2 s-1]
   real, dimension(SZI_(G),SZJ_(G)),           intent(inout) :: netSalt !< Net surface salt flux
                                                                       !! [ppt H T-1 ~> ppt m s-1 or ppt kg m-2 s-1]
+
   ! local variables
   integer :: j
 
@@ -1120,14 +1155,17 @@ subroutine MOM_forcing_chksum(mesg, fluxes, G, US, haloshift)
   if (associated(fluxes%heat_content_fprec)) &
     call hchksum(fluxes%heat_content_fprec, mesg//" fluxes%heat_content_fprec", G%HI, &
                  haloshift=hshift, scale=US%QRZ_T_to_W_m2)
-  if (associated(fluxes%heat_content_icemelt)) &
-    call hchksum(fluxes%heat_content_icemelt, mesg//" fluxes%heat_content_icemelt", G%HI, &
-                 haloshift=hshift, scale=US%QRZ_T_to_W_m2)
   if (associated(fluxes%heat_content_cond)) &
     call hchksum(fluxes%heat_content_cond, mesg//" fluxes%heat_content_cond", G%HI, &
                  haloshift=hshift, scale=US%QRZ_T_to_W_m2)
+  if (associated(fluxes%heat_content_evap)) &
+    call hchksum(fluxes%heat_content_evap, mesg//" fluxes%heat_content_evap", G%HI, &
+                 haloshift=hshift, scale=US%QRZ_T_to_W_m2)
   if (associated(fluxes%heat_content_massout)) &
     call hchksum(fluxes%heat_content_massout, mesg//" fluxes%heat_content_massout", G%HI, &
+                 haloshift=hshift, scale=US%QRZ_T_to_W_m2)
+  if (associated(fluxes%heat_content_massin)) &
+    call hchksum(fluxes%heat_content_massin, mesg//" fluxes%heat_content_massin", G%HI, &
                  haloshift=hshift, scale=US%QRZ_T_to_W_m2)
 end subroutine MOM_forcing_chksum
 
@@ -1227,10 +1265,12 @@ subroutine forcing_SinglePointPrint(fluxes, G, i, j, mesg)
   call locMsg(fluxes%heat_content_frunoff,'heat_content_frunoff')
   call locMsg(fluxes%heat_content_lprec,'heat_content_lprec')
   call locMsg(fluxes%heat_content_fprec,'heat_content_fprec')
-  call locMsg(fluxes%heat_content_icemelt,'heat_content_icemelt')
   call locMsg(fluxes%heat_content_vprec,'heat_content_vprec')
   call locMsg(fluxes%heat_content_cond,'heat_content_cond')
   call locMsg(fluxes%heat_content_cond,'heat_content_massout')
+  call locMsg(fluxes%heat_content_evap,'heat_content_evap')
+  call locMsg(fluxes%heat_content_massout,'heat_content_massout')
+  call locMsg(fluxes%heat_content_massin,'heat_content_massin')
 
   contains
   !> Format and write a message depending on associated state of array
@@ -1486,39 +1526,41 @@ subroutine register_forcing_type_diags(Time, diag, US, use_temperature, handles,
   !=========================================================================
   ! area averaged surface mass transport
 
-  handles%id_prcme_ga = register_scalar_field('ocean_model', 'PRCmE_ga', Time, diag,             &
-      long_name='Area averaged net surface water flux (precip+melt+liq runoff+ice calving-evap)',&
-      units='kg m-2 s-1', standard_name='water_flux_into_sea_water_area_averaged',               &
-      cmor_field_name='ave_wfo',                                                                 &
-      cmor_standard_name='rainfall_flux_area_averaged',                                          &
+  handles%id_prcme_ga = register_scalar_field('ocean_model', 'PRCmE_ga', Time, diag, &
+      long_name='Area averaged net surface water flux (precip+melt+liq runoff+ice calving-evap)', &
+      units='kg m-2 s-1', conversion=US%RZ_T_to_kg_m2s, &
+      standard_name='water_flux_into_sea_water_area_averaged', &
+      cmor_field_name='ave_wfo', cmor_standard_name='rainfall_flux_area_averaged', &
       cmor_long_name='Water Transport Into Sea Water Area Averaged')
 
-  handles%id_evap_ga = register_scalar_field('ocean_model', 'evap_ga', Time, diag,&
-      long_name='Area averaged evap/condense at ocean surface',                   &
-      units='kg m-2 s-1', standard_name='water_evaporation_flux_area_averaged',   &
-      cmor_field_name='ave_evs',                                                  &
-      cmor_standard_name='water_evaporation_flux_area_averaged',                  &
+  handles%id_evap_ga = register_scalar_field('ocean_model', 'evap_ga', Time, diag, &
+      long_name='Area averaged evap/condense at ocean surface', &
+      units='kg m-2 s-1', conversion=US%RZ_T_to_kg_m2s, &
+      standard_name='water_evaporation_flux_area_averaged', &
+      cmor_field_name='ave_evs', cmor_standard_name='water_evaporation_flux_area_averaged', &
       cmor_long_name='Evaporation Where Ice Free Ocean over Sea Area Averaged')
 
- handles%id_lprec_ga = register_scalar_field('ocean_model', 'lprec_ga', Time, diag,&
-      long_name='Area integrated liquid precip into ocean', units='kg m-2 s-1',    &
-      standard_name='rainfall_flux_area_averaged',                                 &
-      cmor_field_name='ave_pr',                                                    &
-      cmor_standard_name='rainfall_flux_area_averaged',                            &
+  handles%id_lprec_ga = register_scalar_field('ocean_model', 'lprec_ga', Time, diag,&
+      long_name='Area integrated liquid precip into ocean', &
+      units='kg m-2 s-1', conversion=US%RZ_T_to_kg_m2s, &
+      standard_name='rainfall_flux_area_averaged', &
+      cmor_field_name='ave_pr', cmor_standard_name='rainfall_flux_area_averaged', &
       cmor_long_name='Rainfall Flux where Ice Free Ocean over Sea Area Averaged')
 
- handles%id_fprec_ga = register_scalar_field('ocean_model', 'fprec_ga', Time, diag,&
-      long_name='Area integrated frozen precip into ocean', units='kg m-2 s-1',    &
+  handles%id_fprec_ga = register_scalar_field('ocean_model', 'fprec_ga', Time, diag, &
+      long_name='Area integrated frozen precip into ocean', &
+      units='kg m-2 s-1', conversion=US%RZ_T_to_kg_m2s, &
       standard_name='snowfall_flux_area_averaged',                                 &
-      cmor_field_name='ave_prsn',                                                  &
-      cmor_standard_name='snowfall_flux_area_averaged',                            &
+      cmor_field_name='ave_prsn',cmor_standard_name='snowfall_flux_area_averaged', &
       cmor_long_name='Snowfall Flux where Ice Free Ocean over Sea Area Averaged')
 
   handles%id_precip_ga = register_scalar_field('ocean_model', 'precip_ga', Time, diag, &
-      long_name='Area averaged liquid+frozen precip into ocean', units='kg m-2 s-1')
+      long_name='Area averaged liquid+frozen precip into ocean', &
+      units='kg m-2 s-1', conversion=US%RZ_T_to_kg_m2s)
 
   handles%id_vprec_ga = register_scalar_field('ocean_model', 'vrec_ga', Time, diag, &
-      long_name='Area averaged virtual liquid precip due to SSS restoring', units='kg m-2 s-1')
+      long_name='Area averaged virtual liquid precip due to SSS restoring', &
+      units='kg m-2 s-1', conversion=US%RZ_T_to_kg_m2s)
 
   !===============================================================
   ! surface heat flux maps
@@ -1546,16 +1588,16 @@ subroutine register_forcing_type_diags(Time, diag, US, use_temperature, handles,
         diag%axesT1,Time,'Heat content (relative to 0degC) of frozen prec entering ocean',&
         'W m-2', conversion=US%QRZ_T_to_W_m2)
 
-  handles%id_heat_content_icemelt = register_diag_field('ocean_model', 'heat_content_icemelt',&
-        diag%axesT1,Time,'Heat content (relative to 0degC) of water flux due to sea ice melting/freezing',&
-        'W m-2', conversion=US%QRZ_T_to_W_m2)
-
   handles%id_heat_content_vprec = register_diag_field('ocean_model', 'heat_content_vprec',   &
         diag%axesT1,Time,'Heat content (relative to 0degC) of virtual precip entering ocean',&
         'W m-2', conversion=US%QRZ_T_to_W_m2)
 
   handles%id_heat_content_cond = register_diag_field('ocean_model', 'heat_content_cond',   &
         diag%axesT1,Time,'Heat content (relative to 0degC) of water condensing into ocean',&
+        'W m-2', conversion=US%QRZ_T_to_W_m2)
+
+  handles%id_heat_content_evap = register_diag_field('ocean_model', 'heat_content_evap',   &
+        diag%axesT1,Time,'Heat content (relative to 0degC) of water evaporating from ocean',&
         'W m-2', conversion=US%QRZ_T_to_W_m2)
 
   handles%id_hfrainds = register_diag_field('ocean_model', 'hfrainds',                                 &
@@ -1689,11 +1731,6 @@ subroutine register_forcing_type_diags(Time, diag, US, use_temperature, handles,
       long_name='Area integrated heat content (relative to 0C) of frozen precip',&
       units='W')
 
-  handles%id_total_heat_content_icemelt = register_scalar_field('ocean_model',     &
-      'total_heat_content_icemelt', Time, diag,long_name=                          &
-      'Area integrated heat content (relative to 0C) of water flux due sea ice melting/freezing', &
-      units='W')
-
   handles%id_total_heat_content_vprec = register_scalar_field('ocean_model',      &
       'total_heat_content_vprec', Time, diag,                                     &
       long_name='Area integrated heat content (relative to 0C) of virtual precip',&
@@ -1702,6 +1739,11 @@ subroutine register_forcing_type_diags(Time, diag, US, use_temperature, handles,
   handles%id_total_heat_content_cond = register_scalar_field('ocean_model',   &
       'total_heat_content_cond', Time, diag,                                  &
       long_name='Area integrated heat content (relative to 0C) of condensate',&
+      units='W')
+
+  handles%id_total_heat_content_evap = register_scalar_field('ocean_model',    &
+      'total_heat_content_evap', Time, diag,                                   &
+      long_name='Area integrated heat content (relative to 0C) of evaporation',&
       units='W')
 
   handles%id_total_heat_content_surfwater = register_scalar_field('ocean_model',          &
@@ -1817,12 +1859,12 @@ subroutine register_forcing_type_diags(Time, diag, US, use_temperature, handles,
   handles%id_net_heat_coupler_ga = register_scalar_field('ocean_model',                       &
       'net_heat_coupler_ga', Time, diag,                                                      &
       long_name='Area averaged surface heat flux from SW+LW+latent+sensible+seaice_melt_heat (via the coupler)',&
-      units='W m-2')
+      units='W m-2', conversion=US%QRZ_T_to_W_m2)
 
   handles%id_net_heat_surface_ga = register_scalar_field('ocean_model',                       &
       'net_heat_surface_ga', Time, diag, long_name=                                                     &
       'Area averaged surface heat flux from SW+LW+lat+sens+mass+frazil+restore+seaice_melt_heat or flux adjustments', &
-      units='W m-2',                                                                          &
+      units='W m-2', conversion=US%QRZ_T_to_W_m2,                                             &
       cmor_field_name='ave_hfds',                                                             &
       cmor_standard_name='surface_downward_heat_flux_in_sea_water_area_averaged',             &
       cmor_long_name=                                                                         &
@@ -1831,7 +1873,7 @@ subroutine register_forcing_type_diags(Time, diag, US, use_temperature, handles,
   handles%id_sw_ga = register_scalar_field('ocean_model',                                 &
       'sw_ga', Time, diag,                                                                &
       long_name='Area averaged net downward shortwave at sea water surface',              &
-      units='W m-2',                                                                      &
+      units='W m-2', conversion=US%QRZ_T_to_W_m2,                                         &
       cmor_field_name='ave_rsntds',                                                       &
       cmor_standard_name='net_downward_shortwave_flux_at_sea_water_surface_area_averaged',&
       cmor_long_name=                                                                     &
@@ -1840,12 +1882,12 @@ subroutine register_forcing_type_diags(Time, diag, US, use_temperature, handles,
   handles%id_LwLatSens_ga = register_scalar_field('ocean_model',&
       'LwLatSens_ga', Time, diag,                               &
       long_name='Area averaged longwave+latent+sensible heating',&
-      units='W m-2')
+      units='W m-2', conversion=US%QRZ_T_to_W_m2)
 
   handles%id_lw_ga = register_scalar_field('ocean_model',                   &
       'lw_ga', Time, diag,                                                  &
       long_name='Area averaged net downward longwave at sea water surface', &
-      units='W m-2',                                                        &
+      units='W m-2', conversion=US%QRZ_T_to_W_m2,                           &
       cmor_field_name='ave_rlntds',                                         &
       cmor_standard_name='surface_net_downward_longwave_flux_area_averaged',&
       cmor_long_name=                                                       &
@@ -1854,7 +1896,7 @@ subroutine register_forcing_type_diags(Time, diag, US, use_temperature, handles,
   handles%id_lat_ga = register_scalar_field('ocean_model',                 &
       'lat_ga', Time, diag,                                                &
       long_name='Area averaged surface downward latent heat flux',         &
-      units='W m-2',                                                       &
+      units='W m-2', conversion=US%QRZ_T_to_W_m2,                          &
       cmor_field_name='ave_hflso',                                         &
       cmor_standard_name='surface_downward_latent_heat_flux_area_averaged',&
       cmor_long_name=                                                      &
@@ -1863,7 +1905,7 @@ subroutine register_forcing_type_diags(Time, diag, US, use_temperature, handles,
   handles%id_sens_ga = register_scalar_field('ocean_model',                  &
       'sens_ga', Time, diag,                                                 &
       long_name='Area averaged downward sensible heat flux',                 &
-      units='W m-2',                                                         &
+      units='W m-2', conversion=US%QRZ_T_to_W_m2,                            &
       cmor_field_name='ave_hfsso',                                           &
       cmor_standard_name='surface_downward_sensible_heat_flux_area_averaged',&
       cmor_long_name=                                                        &
@@ -1980,8 +2022,8 @@ subroutine fluxes_accumulate(flux_tmp, fluxes, G, wt2, forces)
   ! applied based on the time interval stored in flux_tmp.
 
   real :: wt1  ! The relative weight of the previous fluxes [nondim]
-  integer :: i, j, is, ie, js, je, Isq, Ieq, Jsq, Jeq, i0, j0
-  integer :: isd, ied, jsd, jed, IsdB, IedB, JsdB, JedB, isr, ier, jsr, jer
+  integer :: i, j, is, ie, js, je, Isq, Ieq, Jsq, Jeq
+  integer :: isd, ied, jsd, jed, IsdB, IedB, JsdB, JedB
   is   = G%isc   ; ie   = G%iec    ; js   = G%jsc   ; je   = G%jec
   Isq  = G%IscB  ; Ieq  = G%IecB   ; Jsq  = G%JscB  ; Jeq  = G%JecB
   isd  = G%isd   ; ied  = G%ied    ; jsd  = G%jsd   ; jed  = G%jed
@@ -2051,6 +2093,11 @@ subroutine fluxes_accumulate(flux_tmp, fluxes, G, wt2, forces)
       fluxes%heat_content_cond(i,j) = wt1*fluxes%heat_content_cond(i,j) + wt2*flux_tmp%heat_content_cond(i,j)
     enddo ; enddo
   endif
+  if (associated(fluxes%heat_content_evap) .and. associated(flux_tmp%heat_content_evap)) then
+    do j=js,je ; do i=is,ie
+      fluxes%heat_content_evap(i,j) = wt1*fluxes%heat_content_evap(i,j) + wt2*flux_tmp%heat_content_evap(i,j)
+    enddo ; enddo
+  endif
   if (associated(fluxes%heat_content_lprec) .and. associated(flux_tmp%heat_content_lprec)) then
     do j=js,je ; do i=is,ie
       fluxes%heat_content_lprec(i,j) = wt1*fluxes%heat_content_lprec(i,j) + wt2*flux_tmp%heat_content_lprec(i,j)
@@ -2059,11 +2106,6 @@ subroutine fluxes_accumulate(flux_tmp, fluxes, G, wt2, forces)
   if (associated(fluxes%heat_content_fprec) .and. associated(flux_tmp%heat_content_fprec)) then
     do j=js,je ; do i=is,ie
       fluxes%heat_content_fprec(i,j) = wt1*fluxes%heat_content_fprec(i,j) + wt2*flux_tmp%heat_content_fprec(i,j)
-    enddo ; enddo
-  endif
-  if (associated(fluxes%heat_content_icemelt) .and. associated(flux_tmp%heat_content_icemelt)) then
-    do j=js,je ; do i=is,ie
-      fluxes%heat_content_icemelt(i,j) = wt1*fluxes%heat_content_icemelt(i,j) + wt2*flux_tmp%heat_content_icemelt(i,j)
     enddo ; enddo
   endif
   if (associated(fluxes%heat_content_vprec) .and. associated(flux_tmp%heat_content_vprec)) then
@@ -2081,11 +2123,6 @@ subroutine fluxes_accumulate(flux_tmp, fluxes, G, wt2, forces)
       fluxes%heat_content_frunoff(i,j) = wt1*fluxes%heat_content_frunoff(i,j) + wt2*flux_tmp%heat_content_frunoff(i,j)
     enddo ; enddo
   endif
-  if (associated(fluxes%heat_content_icemelt) .and. associated(flux_tmp%heat_content_icemelt)) then
-    do j=js,je ; do i=is,ie
-      fluxes%heat_content_icemelt(i,j) = wt1*fluxes%heat_content_icemelt(i,j) + wt2*flux_tmp%heat_content_icemelt(i,j)
-    enddo ; enddo
-  endif
 
   if (associated(fluxes%ustar_shelf) .and. associated(flux_tmp%ustar_shelf)) then
     do i=isd,ied ; do j=jsd,jed
@@ -2095,6 +2132,12 @@ subroutine fluxes_accumulate(flux_tmp, fluxes, G, wt2, forces)
   if (associated(fluxes%iceshelf_melt) .and. associated(flux_tmp%iceshelf_melt)) then
     do i=isd,ied ; do j=jsd,jed
       fluxes%iceshelf_melt(i,j)  = flux_tmp%iceshelf_melt(i,j)
+    enddo ; enddo
+  endif
+  if (associated(fluxes%shelf_sfc_mass_flux) &
+                 .and. associated(flux_tmp%shelf_sfc_mass_flux)) then
+    do i=isd,ied ; do j=jsd,jed
+      fluxes%shelf_sfc_mass_flux(i,j)  = flux_tmp%shelf_sfc_mass_flux(i,j)
     enddo ; enddo
   endif
   if (associated(fluxes%frac_shelf_h) .and. associated(flux_tmp%frac_shelf_h)) then
@@ -2173,12 +2216,12 @@ subroutine set_derived_forcing_fields(forces, fluxes, G, US, Rho0)
       associated(fluxes%ustar_gustless)) then
     do j=js,je ; do i=is,ie
       taux2 = 0.0
-      if ((G%mask2dCu(I-1,j) + G%mask2dCu(I,j)) > 0) &
+      if ((G%mask2dCu(I-1,j) + G%mask2dCu(I,j)) > 0.0) &
         taux2 = (G%mask2dCu(I-1,j) * forces%taux(I-1,j)**2 + &
                  G%mask2dCu(I,j) * forces%taux(I,j)**2) / &
                 (G%mask2dCu(I-1,j) + G%mask2dCu(I,j))
       tauy2 = 0.0
-      if ((G%mask2dCv(i,J-1) + G%mask2dCv(i,J)) > 0) &
+      if ((G%mask2dCv(i,J-1) + G%mask2dCv(i,J)) > 0.0) &
         tauy2 = (G%mask2dCv(i,J-1) * forces%tauy(i,J-1)**2 + &
                  G%mask2dCv(i,J) * forces%tauy(i,J)**2) / &
                 (G%mask2dCv(i,J-1) + G%mask2dCv(i,J))
@@ -2273,7 +2316,7 @@ subroutine mech_forcing_diags(forces_in, dt, G, time_end, diag, handles)
   type(diag_ctrl),       intent(inout) :: diag     !< diagnostic type
   type(forcing_diags),   intent(inout) :: handles  !< diagnostic id for diag_manager
 
-  integer :: i,j,is,ie,js,je
+  integer :: is, ie, js, je
 
   type(mech_forcing), pointer :: forces
   integer :: turns
@@ -2322,7 +2365,7 @@ end subroutine mech_forcing_diags
 
 !> Offer buoyancy forcing fields for diagnostics for those
 !! fields registered as part of register_forcing_type_diags.
-subroutine forcing_diagnostics(fluxes_in, sfc_state, G_in, US, time_end, diag, handles)
+subroutine forcing_diagnostics(fluxes_in, sfc_state, G_in, US, time_end, diag, handles, enthalpy)
   type(forcing), target, intent(in)    :: fluxes_in !< A structure containing thermodynamic forcing fields
   type(surface),         intent(in)    :: sfc_state !< A structure containing fields that
                                                     !! describe the surface state of the ocean.
@@ -2331,6 +2374,11 @@ subroutine forcing_diagnostics(fluxes_in, sfc_state, G_in, US, time_end, diag, h
   type(time_type),       intent(in)    :: time_end  !< The end time of the diagnostic interval.
   type(diag_ctrl),       intent(inout) :: diag      !< diagnostic regulator
   type(forcing_diags),   intent(inout) :: handles   !< diagnostic ids
+  logical,     optional, intent(in   ) :: enthalpy  !< If present and true, the heat content associated
+                                                    !! with mass entering/leaving the ocean is provided
+                                                    !! by the coupler. Diagnostics net_heat_surface and
+                                                    !! heat_content_surfwater are computed using
+                                                    !! heat_content_evap instead of heat_content_massout.
 
   ! local variables
   type(ocean_grid_type), pointer :: G   ! Grid metric on model index map
@@ -2338,13 +2386,17 @@ subroutine forcing_diagnostics(fluxes_in, sfc_state, G_in, US, time_end, diag, h
   real, dimension(SZI_(diag%G),SZJ_(diag%G)) :: res ! A temporary array for combinations
                           ! of fluxes [R Z T-1 ~> kg m-2 s-1] or [Q R Z T-1 ~> W m-2]
   real :: total_transport ! for diagnosing integrated boundary transport, in MKS units of [kg s-1] or [W]
-  real :: ave_flux        ! for diagnosing averaged boundary flux, in MKS units of [kg m-2 s-1] or [W m-2]
+  real :: ave_flux        ! for diagnosing averaged boundary flux in [R Z T-1 ~> kg m-2 s-1] or [Q R Z T-1 ~> W m-2]
   real :: I_dt            ! inverse time step [T-1 ~> s-1]
   real :: ppt2mks         ! conversion between ppt and mks units [nondim]
   integer :: turns        ! Number of index quarter turns
+  logical :: mom_enthalpy ! If true (default) enthalpy terms are computed in MOM6
   integer :: i, j, is, ie, js, je
 
   call cpu_clock_begin(handles%id_clock_forcing)
+
+  mom_enthalpy = .true.
+  if (present(enthalpy)) mom_enthalpy = .not. enthalpy
 
   ! NOTE: post_data expects data to be on the rotated index map, so any
   !   rotations must be applied before saving the output.
@@ -2386,7 +2438,7 @@ subroutine forcing_diagnostics(fluxes_in, sfc_state, G_in, US, time_end, diag, h
         call post_data(handles%id_total_prcme, total_transport, diag)
       endif
       if (handles%id_prcme_ga > 0) then
-        ave_flux = global_area_mean(res, G, scale=US%RZ_T_to_kg_m2s)
+        ave_flux = global_area_mean(res, G, tmp_scale=US%RZ_T_to_kg_m2s)
         call post_data(handles%id_prcme_ga, ave_flux, diag)
       endif
     endif
@@ -2456,7 +2508,7 @@ subroutine forcing_diagnostics(fluxes_in, sfc_state, G_in, US, time_end, diag, h
       call post_data(handles%id_total_evap, total_transport, diag)
     endif
     if ((handles%id_evap_ga > 0) .and. associated(fluxes%evap)) then
-      ave_flux = global_area_mean(fluxes%evap, G, scale=US%RZ_T_to_kg_m2s)
+      ave_flux = global_area_mean(fluxes%evap, G, tmp_scale=US%RZ_T_to_kg_m2s)
       call post_data(handles%id_evap_ga, ave_flux, diag)
     endif
 
@@ -2470,7 +2522,7 @@ subroutine forcing_diagnostics(fluxes_in, sfc_state, G_in, US, time_end, diag, h
         call post_data(handles%id_total_precip, total_transport, diag)
       endif
       if (handles%id_precip_ga > 0) then
-        ave_flux = global_area_mean(res, G, scale=US%RZ_T_to_kg_m2s)
+        ave_flux = global_area_mean(res, G, tmp_scale=US%RZ_T_to_kg_m2s)
         call post_data(handles%id_precip_ga, ave_flux, diag)
       endif
     endif
@@ -2482,7 +2534,7 @@ subroutine forcing_diagnostics(fluxes_in, sfc_state, G_in, US, time_end, diag, h
         call post_data(handles%id_total_lprec, total_transport, diag)
       endif
       if (handles%id_lprec_ga > 0) then
-        ave_flux = global_area_mean(fluxes%lprec, G, scale=US%RZ_T_to_kg_m2s)
+        ave_flux = global_area_mean(fluxes%lprec, G, tmp_scale=US%RZ_T_to_kg_m2s)
         call post_data(handles%id_lprec_ga, ave_flux, diag)
       endif
     endif
@@ -2494,7 +2546,7 @@ subroutine forcing_diagnostics(fluxes_in, sfc_state, G_in, US, time_end, diag, h
         call post_data(handles%id_total_fprec, total_transport, diag)
       endif
       if (handles%id_fprec_ga > 0) then
-        ave_flux = global_area_mean(fluxes%fprec, G, scale=US%RZ_T_to_kg_m2s)
+        ave_flux = global_area_mean(fluxes%fprec, G, tmp_scale=US%RZ_T_to_kg_m2s)
         call post_data(handles%id_fprec_ga, ave_flux, diag)
       endif
     endif
@@ -2506,7 +2558,7 @@ subroutine forcing_diagnostics(fluxes_in, sfc_state, G_in, US, time_end, diag, h
         call post_data(handles%id_total_vprec, total_transport, diag)
       endif
       if (handles%id_vprec_ga > 0) then
-        ave_flux = global_area_mean(fluxes%vprec, G, scale=US%RZ_T_to_kg_m2s)
+        ave_flux = global_area_mean(fluxes%vprec, G, tmp_scale=US%RZ_T_to_kg_m2s)
         call post_data(handles%id_vprec_ga, ave_flux, diag)
       endif
     endif
@@ -2565,13 +2617,6 @@ subroutine forcing_diagnostics(fluxes_in, sfc_state, G_in, US, time_end, diag, h
       call post_data(handles%id_total_heat_content_fprec, total_transport, diag)
     endif
 
-    if ((handles%id_heat_content_icemelt > 0) .and. associated(fluxes%heat_content_icemelt))      &
-      call post_data(handles%id_heat_content_icemelt, fluxes%heat_content_icemelt, diag)
-    if ((handles%id_total_heat_content_icemelt > 0) .and. associated(fluxes%heat_content_icemelt)) then
-      total_transport = global_area_integral(fluxes%heat_content_icemelt, G, scale=US%QRZ_T_to_W_m2)
-      call post_data(handles%id_total_heat_content_icemelt, total_transport, diag)
-    endif
-
     if ((handles%id_heat_content_vprec > 0) .and. associated(fluxes%heat_content_vprec))      &
       call post_data(handles%id_heat_content_vprec, fluxes%heat_content_vprec, diag)
     if ((handles%id_total_heat_content_vprec > 0) .and. associated(fluxes%heat_content_vprec)) then
@@ -2584,6 +2629,13 @@ subroutine forcing_diagnostics(fluxes_in, sfc_state, G_in, US, time_end, diag, h
     if ((handles%id_total_heat_content_cond > 0) .and. associated(fluxes%heat_content_cond)) then
       total_transport = global_area_integral(fluxes%heat_content_cond, G, scale=US%QRZ_T_to_W_m2)
       call post_data(handles%id_total_heat_content_cond, total_transport, diag)
+    endif
+
+    if ((handles%id_heat_content_evap > 0) .and. associated(fluxes%heat_content_evap))        &
+      call post_data(handles%id_heat_content_evap, fluxes%heat_content_evap, diag)
+    if ((handles%id_total_heat_content_evap > 0) .and. associated(fluxes%heat_content_evap)) then
+      total_transport = global_area_integral(fluxes%heat_content_evap, G, scale=US%QRZ_T_to_W_m2)
+      call post_data(handles%id_total_heat_content_evap, total_transport, diag)
     endif
 
     if ((handles%id_heat_content_massout > 0) .and. associated(fluxes%heat_content_massout))  &
@@ -2616,7 +2668,7 @@ subroutine forcing_diagnostics(fluxes_in, sfc_state, G_in, US, time_end, diag, h
         call post_data(handles%id_total_net_heat_coupler, total_transport, diag)
       endif
       if (handles%id_net_heat_coupler_ga > 0) then
-        ave_flux = global_area_mean(res, G, scale=US%QRZ_T_to_W_m2)
+        ave_flux = global_area_mean(res, G, tmp_scale=US%QRZ_T_to_W_m2)
         call post_data(handles%id_net_heat_coupler_ga, ave_flux, diag)
       endif
     endif
@@ -2634,22 +2686,25 @@ subroutine forcing_diagnostics(fluxes_in, sfc_state, G_in, US, time_end, diag, h
         !if (associated(sfc_state%TempXpme)) then
         !  res(i,j) = res(i,j) + sfc_state%TempXpme(i,j) * fluxes%C_p * I_dt
         !else
-          if (associated(fluxes%heat_content_lrunoff)) &
-            res(i,j) = res(i,j) + fluxes%heat_content_lrunoff(i,j)
-          if (associated(fluxes%heat_content_frunoff)) &
-            res(i,j) = res(i,j) + fluxes%heat_content_frunoff(i,j)
-          if (associated(fluxes%heat_content_lprec)) &
-            res(i,j) = res(i,j) + fluxes%heat_content_lprec(i,j)
-          if (associated(fluxes%heat_content_fprec)) &
-            res(i,j) = res(i,j) + fluxes%heat_content_fprec(i,j)
-          if (associated(fluxes%heat_content_icemelt)) &
-            res(i,j) = res(i,j) + fluxes%heat_content_icemelt(i,j)
-          if (associated(fluxes%heat_content_vprec)) &
-            res(i,j) = res(i,j) + fluxes%heat_content_vprec(i,j)
-          if (associated(fluxes%heat_content_cond)) &
-            res(i,j) = res(i,j) + fluxes%heat_content_cond(i,j)
+        if (associated(fluxes%heat_content_lrunoff)) &
+          res(i,j) = res(i,j) + fluxes%heat_content_lrunoff(i,j)
+        if (associated(fluxes%heat_content_frunoff)) &
+          res(i,j) = res(i,j) + fluxes%heat_content_frunoff(i,j)
+        if (associated(fluxes%heat_content_lprec)) &
+          res(i,j) = res(i,j) + fluxes%heat_content_lprec(i,j)
+        if (associated(fluxes%heat_content_fprec)) &
+          res(i,j) = res(i,j) + fluxes%heat_content_fprec(i,j)
+        if (associated(fluxes%heat_content_vprec)) &
+          res(i,j) = res(i,j) + fluxes%heat_content_vprec(i,j)
+        if (associated(fluxes%heat_content_cond)) &
+          res(i,j) = res(i,j) + fluxes%heat_content_cond(i,j)
+        if (mom_enthalpy) then
           if (associated(fluxes%heat_content_massout)) &
             res(i,j) = res(i,j) + fluxes%heat_content_massout(i,j)
+        else
+          if (associated(fluxes%heat_content_evap)) &
+            res(i,j) = res(i,j) + fluxes%heat_content_evap(i,j)
+        endif
         !endif
         if (associated(fluxes%heat_added)) res(i,j) = res(i,j) + fluxes%heat_added(i,j)
       enddo ; enddo
@@ -2660,7 +2715,7 @@ subroutine forcing_diagnostics(fluxes_in, sfc_state, G_in, US, time_end, diag, h
         call post_data(handles%id_total_net_heat_surface, total_transport, diag)
       endif
       if (handles%id_net_heat_surface_ga > 0) then
-        ave_flux = global_area_mean(res, G, scale=US%QRZ_T_to_W_m2)
+        ave_flux = global_area_mean(res, G, tmp_scale=US%QRZ_T_to_W_m2)
         call post_data(handles%id_net_heat_surface_ga, ave_flux, diag)
       endif
     endif
@@ -2671,14 +2726,17 @@ subroutine forcing_diagnostics(fluxes_in, sfc_state, G_in, US, time_end, diag, h
       ! if (associated(sfc_state%TempXpme)) then
       !   res(i,j) = res(i,j) + sfc_state%TempXpme(i,j) * fluxes%C_p * I_dt
       ! else
-          if (associated(fluxes%heat_content_lrunoff)) res(i,j) = res(i,j) + fluxes%heat_content_lrunoff(i,j)
-          if (associated(fluxes%heat_content_frunoff)) res(i,j) = res(i,j) + fluxes%heat_content_frunoff(i,j)
-          if (associated(fluxes%heat_content_lprec))   res(i,j) = res(i,j) + fluxes%heat_content_lprec(i,j)
-          if (associated(fluxes%heat_content_icemelt)) res(i,j) = res(i,j) + fluxes%heat_content_icemelt(i,j)
-          if (associated(fluxes%heat_content_fprec))   res(i,j) = res(i,j) + fluxes%heat_content_fprec(i,j)
-          if (associated(fluxes%heat_content_vprec))   res(i,j) = res(i,j) + fluxes%heat_content_vprec(i,j)
-          if (associated(fluxes%heat_content_cond))    res(i,j) = res(i,j) + fluxes%heat_content_cond(i,j)
-          if (associated(fluxes%heat_content_massout)) res(i,j) = res(i,j) + fluxes%heat_content_massout(i,j)
+      if (associated(fluxes%heat_content_lrunoff)) res(i,j) = res(i,j) + fluxes%heat_content_lrunoff(i,j)
+      if (associated(fluxes%heat_content_frunoff)) res(i,j) = res(i,j) + fluxes%heat_content_frunoff(i,j)
+      if (associated(fluxes%heat_content_lprec))   res(i,j) = res(i,j) + fluxes%heat_content_lprec(i,j)
+      if (associated(fluxes%heat_content_fprec))   res(i,j) = res(i,j) + fluxes%heat_content_fprec(i,j)
+      if (associated(fluxes%heat_content_vprec))   res(i,j) = res(i,j) + fluxes%heat_content_vprec(i,j)
+      if (associated(fluxes%heat_content_cond))    res(i,j) = res(i,j) + fluxes%heat_content_cond(i,j)
+      if (mom_enthalpy) then
+        if (associated(fluxes%heat_content_massout)) res(i,j) = res(i,j) + fluxes%heat_content_massout(i,j)
+      else
+        if (associated(fluxes%heat_content_evap))    res(i,j) = res(i,j) + fluxes%heat_content_evap(i,j)
+      endif
       ! endif
       enddo ; enddo
       if (handles%id_heat_content_surfwater > 0) call post_data(handles%id_heat_content_surfwater, res, diag)
@@ -2731,7 +2789,7 @@ subroutine forcing_diagnostics(fluxes_in, sfc_state, G_in, US, time_end, diag, h
       do j=js,je ; do i=is,ie
         res(i,j) = ((fluxes%lw(i,j) + fluxes%latent(i,j)) + fluxes%sens(i,j))
       enddo ; enddo
-      ave_flux = global_area_mean(res, G, scale=US%QRZ_T_to_W_m2)
+      ave_flux = global_area_mean(res, G, tmp_scale=US%QRZ_T_to_W_m2)
       call post_data(handles%id_LwLatSens_ga, ave_flux, diag)
     endif
 
@@ -2751,7 +2809,7 @@ subroutine forcing_diagnostics(fluxes_in, sfc_state, G_in, US, time_end, diag, h
       call post_data(handles%id_total_sw, total_transport, diag)
     endif
     if ((handles%id_sw_ga > 0) .and. associated(fluxes%sw)) then
-      ave_flux = global_area_mean(fluxes%sw, G, scale=US%QRZ_T_to_W_m2)
+      ave_flux = global_area_mean(fluxes%sw, G, tmp_scale=US%QRZ_T_to_W_m2)
       call post_data(handles%id_sw_ga, ave_flux, diag)
     endif
 
@@ -2763,7 +2821,7 @@ subroutine forcing_diagnostics(fluxes_in, sfc_state, G_in, US, time_end, diag, h
       call post_data(handles%id_total_lw, total_transport, diag)
     endif
     if ((handles%id_lw_ga > 0) .and. associated(fluxes%lw)) then
-      ave_flux = global_area_mean(fluxes%lw, G, scale=US%QRZ_T_to_W_m2)
+      ave_flux = global_area_mean(fluxes%lw, G, tmp_scale=US%QRZ_T_to_W_m2)
       call post_data(handles%id_lw_ga, ave_flux, diag)
     endif
 
@@ -2775,7 +2833,7 @@ subroutine forcing_diagnostics(fluxes_in, sfc_state, G_in, US, time_end, diag, h
       call post_data(handles%id_total_lat, total_transport, diag)
     endif
     if ((handles%id_lat_ga > 0) .and. associated(fluxes%latent)) then
-      ave_flux = global_area_mean(fluxes%latent, G, scale=US%QRZ_T_to_W_m2)
+      ave_flux = global_area_mean(fluxes%latent, G, tmp_scale=US%QRZ_T_to_W_m2)
       call post_data(handles%id_lat_ga, ave_flux, diag)
     endif
 
@@ -2821,7 +2879,7 @@ subroutine forcing_diagnostics(fluxes_in, sfc_state, G_in, US, time_end, diag, h
       call post_data(handles%id_total_sens, total_transport, diag)
     endif
     if ((handles%id_sens_ga > 0) .and. associated(fluxes%sens)) then
-      ave_flux = global_area_mean(fluxes%sens, G, scale=US%QRZ_T_to_W_m2)
+      ave_flux = global_area_mean(fluxes%sens, G, tmp_scale=US%QRZ_T_to_W_m2)
       call post_data(handles%id_sens_ga, ave_flux, diag)
     endif
 
@@ -2926,7 +2984,8 @@ end subroutine forcing_diagnostics
 
 !> Conditionally allocate fields within the forcing type
 subroutine allocate_forcing_by_group(G, fluxes, water, heat, ustar, press, &
-                                     shelf, iceberg, salt, fix_accum_bug, cfc, waves, lamult)
+                                  shelf, iceberg, salt, fix_accum_bug, cfc, waves, &
+                                  shelf_sfc_accumulation, lamult, hevap)
   type(ocean_grid_type), intent(in) :: G       !< Ocean grid structure
   type(forcing),      intent(inout) :: fluxes  !< A structure containing thermodynamic forcing fields
   logical, optional,     intent(in) :: water   !< If present and true, allocate water fluxes
@@ -2940,14 +2999,27 @@ subroutine allocate_forcing_by_group(G, fluxes, water, heat, ustar, press, &
                                                !! accumulation of ustar_gustless
   logical, optional,     intent(in) :: cfc     !< If present and true, allocate cfc fluxes
   logical, optional,     intent(in) :: waves   !< If present and true, allocate wave fields
+  logical, optional,     intent(in) :: shelf_sfc_accumulation !< If present and true, and shelf is true,
+                                               !! then allocate surface flux deposition from the atmosphere
+                                               !! over ice shelves and ice sheets.
   logical, optional,     intent(in) :: lamult  !< If present and true, allocate langmuir enhancement factor
+  logical, optional,     intent(in) :: hevap   !< If present and true, allocate heat content evap.
+                                               !! This field must be allocated when enthalpy is provided
+                                               !! via coupler.
 
   ! Local variables
   integer :: isd, ied, jsd, jed, IsdB, IedB, JsdB, JedB
-  logical :: heat_water
+  logical :: shelf_sfc_acc, enthalpy_mom
+
+  ! if true, allocate fluxes needed to calculate enthalpy terms in MOM6
+  enthalpy_mom = .true.
+  if (present (hevap)) enthalpy_mom = .not. hevap
 
   isd  = G%isd   ; ied  = G%ied    ; jsd  = G%jsd   ; jed  = G%jed
   IsdB = G%IsdB  ; IedB = G%IedB   ; JsdB = G%JsdB  ; JedB = G%JedB
+
+  shelf_sfc_acc=.false.
+  if (present(shelf_sfc_accumulation)) shelf_sfc_acc=shelf_sfc_accumulation
 
   call myAlloc(fluxes%ustar,isd,ied,jsd,jed, ustar)
   call myAlloc(fluxes%ustar_gustless,isd,ied,jsd,jed, ustar)
@@ -2974,21 +3046,25 @@ subroutine allocate_forcing_by_group(G, fluxes, water, heat, ustar, press, &
 
   if (present(heat) .and. present(water)) then ; if (heat .and. water) then
     call myAlloc(fluxes%heat_content_cond,isd,ied,jsd,jed, .true.)
-    call myAlloc(fluxes%heat_content_icemelt,isd,ied,jsd,jed, .true.)
+    call myAlloc(fluxes%heat_content_evap,isd,ied,jsd,jed, .not. enthalpy_mom)
     call myAlloc(fluxes%heat_content_lprec,isd,ied,jsd,jed, .true.)
     call myAlloc(fluxes%heat_content_fprec,isd,ied,jsd,jed, .true.)
     call myAlloc(fluxes%heat_content_vprec,isd,ied,jsd,jed, .true.)
     call myAlloc(fluxes%heat_content_lrunoff,isd,ied,jsd,jed, .true.)
     call myAlloc(fluxes%heat_content_frunoff,isd,ied,jsd,jed, .true.)
-    call myAlloc(fluxes%heat_content_massout,isd,ied,jsd,jed, .true.)
-    call myAlloc(fluxes%heat_content_massin,isd,ied,jsd,jed, .true.)
+    call myAlloc(fluxes%heat_content_massout,isd,ied,jsd,jed, enthalpy_mom)
+    call myAlloc(fluxes%heat_content_massin,isd,ied,jsd,jed,  enthalpy_mom)
   endif ; endif
 
   call myAlloc(fluxes%p_surf,isd,ied,jsd,jed, press)
 
-  call myAlloc(fluxes%frac_shelf_h,isd,ied,jsd,jed, shelf)
-  call myAlloc(fluxes%ustar_shelf,isd,ied,jsd,jed, shelf)
-  call myAlloc(fluxes%iceshelf_melt,isd,ied,jsd,jed, shelf)
+  ! These fields should only be allocated if ice shelf is enabled.
+  if (present(shelf)) then; if (shelf) then
+    call myAlloc(fluxes%frac_shelf_h,isd,ied,jsd,jed, shelf)
+    call myAlloc(fluxes%ustar_shelf,isd,ied,jsd,jed, shelf)
+    call myAlloc(fluxes%iceshelf_melt,isd,ied,jsd,jed, shelf)
+    if (shelf_sfc_acc) call myAlloc(fluxes%shelf_sfc_mass_flux,isd,ied,jsd,jed, shelf_sfc_acc)
+  endif; endif
 
   !These fields should only on allocated when iceberg area is being passed through the coupler.
   call myAlloc(fluxes%ustar_berg,isd,ied,jsd,jed, iceberg)
@@ -3074,7 +3150,6 @@ subroutine allocate_mech_forcing_by_group(G, forces, stress, ustar, shelf, &
 
   ! Local variables
   integer :: isd, ied, jsd, jed, IsdB, IedB, JsdB, JedB
-  logical :: heat_water
 
   isd  = G%isd   ; ied  = G%ied    ; jsd  = G%jsd   ; jed  = G%jed
   IsdB = G%IsdB  ; IedB = G%IedB   ; JsdB = G%JsdB  ; JedB = G%JedB
@@ -3101,7 +3176,7 @@ subroutine allocate_mech_forcing_by_group(G, forces, stress, ustar, shelf, &
   if (present(waves)) then; if (waves) then;
     if (.not. present(num_stk_bands)) then
       call MOM_error(FATAL,"Requested to &
-      initialize with waves, but no waves are present.")
+      &initialize with waves, but no waves are present.")
     endif
     if (num_stk_bands > 0) then
       if (.not.associated(forces%ustkb)) then
@@ -3199,7 +3274,7 @@ subroutine myAlloc(array, is, ie, js, je, flag)
   logical, optional, intent(in) :: flag !< Flag to indicate to allocate
 
   if (present(flag)) then ; if (flag) then ; if (.not.associated(array)) then
-    allocate(array(is:ie,js:je)) ; array(is:ie,js:je) = 0.0
+    allocate(array(is:ie,js:je), source=0.0)
   endif ; endif ; endif
 end subroutine myAlloc
 
@@ -3225,10 +3300,10 @@ subroutine deallocate_forcing_type(fluxes)
   if (associated(fluxes%heat_added))           deallocate(fluxes%heat_added)
   if (associated(fluxes%heat_content_lrunoff)) deallocate(fluxes%heat_content_lrunoff)
   if (associated(fluxes%heat_content_frunoff)) deallocate(fluxes%heat_content_frunoff)
-  if (associated(fluxes%heat_content_icemelt)) deallocate(fluxes%heat_content_icemelt)
   if (associated(fluxes%heat_content_lprec))   deallocate(fluxes%heat_content_lprec)
   if (associated(fluxes%heat_content_fprec))   deallocate(fluxes%heat_content_fprec)
   if (associated(fluxes%heat_content_cond))    deallocate(fluxes%heat_content_cond)
+  if (associated(fluxes%heat_content_evap))    deallocate(fluxes%heat_content_evap)
   if (associated(fluxes%heat_content_massout)) deallocate(fluxes%heat_content_massout)
   if (associated(fluxes%heat_content_massin))  deallocate(fluxes%heat_content_massin)
   if (associated(fluxes%evap))                 deallocate(fluxes%evap)
@@ -3247,6 +3322,8 @@ subroutine deallocate_forcing_type(fluxes)
   if (associated(fluxes%ustar_tidal))          deallocate(fluxes%ustar_tidal)
   if (associated(fluxes%ustar_shelf))          deallocate(fluxes%ustar_shelf)
   if (associated(fluxes%iceshelf_melt))        deallocate(fluxes%iceshelf_melt)
+  if (associated(fluxes%shelf_sfc_mass_flux)) &
+                                               deallocate(fluxes%shelf_sfc_mass_flux)
   if (associated(fluxes%frac_shelf_h))         deallocate(fluxes%frac_shelf_h)
   if (associated(fluxes%ustar_berg))           deallocate(fluxes%ustar_berg)
   if (associated(fluxes%area_berg))            deallocate(fluxes%area_berg)
@@ -3327,14 +3404,17 @@ subroutine rotate_forcing(fluxes_in, fluxes, turns)
 
   if (do_heat .and. do_water) then
     call rotate_array(fluxes_in%heat_content_cond, turns, fluxes%heat_content_cond)
-    call rotate_array(fluxes_in%heat_content_icemelt, turns, fluxes%heat_content_icemelt)
     call rotate_array(fluxes_in%heat_content_lprec, turns, fluxes%heat_content_lprec)
     call rotate_array(fluxes_in%heat_content_fprec, turns, fluxes%heat_content_fprec)
     call rotate_array(fluxes_in%heat_content_vprec, turns, fluxes%heat_content_vprec)
     call rotate_array(fluxes_in%heat_content_lrunoff, turns, fluxes%heat_content_lrunoff)
     call rotate_array(fluxes_in%heat_content_frunoff, turns, fluxes%heat_content_frunoff)
-    call rotate_array(fluxes_in%heat_content_massout, turns, fluxes%heat_content_massout)
-    call rotate_array(fluxes_in%heat_content_massin, turns, fluxes%heat_content_massin)
+    if (associated (fluxes_in%heat_content_evap))  then
+      call rotate_array(fluxes_in%heat_content_evap, turns, fluxes%heat_content_evap)
+    else
+      call rotate_array(fluxes_in%heat_content_massout, turns, fluxes%heat_content_massout)
+      call rotate_array(fluxes_in%heat_content_massin, turns, fluxes%heat_content_massin)
+    endif
   endif
 
   if (do_press) then
@@ -3345,6 +3425,7 @@ subroutine rotate_forcing(fluxes_in, fluxes, turns)
     call rotate_array(fluxes_in%frac_shelf_h, turns, fluxes%frac_shelf_h)
     call rotate_array(fluxes_in%ustar_shelf, turns, fluxes%ustar_shelf)
     call rotate_array(fluxes_in%iceshelf_melt, turns, fluxes%iceshelf_melt)
+    call rotate_array(fluxes_in%shelf_sfc_mass_flux, turns, fluxes%shelf_sfc_mass_flux)
   endif
 
   if (do_iceberg) then
@@ -3462,18 +3543,18 @@ subroutine homogenize_mech_forcing(forces, G, US, Rho0, UpdateUstar)
   type(ocean_grid_type),    intent(in) :: G      !< Grid metric of target forcing
   type(unit_scale_type),    intent(in) :: US     !< A dimensional unit scaling type
   real,                     intent(in) :: Rho0   !< A reference density of seawater [R ~> kg m-3],
-                                              !! as used to calculate ustar.
+                                                 !! as used to calculate ustar.
   logical, optional,        intent(in) :: UpdateUstar !< A logical to determine if Ustar should be directly averaged
-                                                   !! or updated from mean tau.
+                                                 !! or updated from mean tau.
 
-  real :: tx_mean, ty_mean, avg
-  real :: iRho0
+  real :: tx_mean, ty_mean ! Mean wind stresses [R L Z T-2 ~> Pa]
+  real :: Irho0        ! Inverse of the mean density rescaled to [Z L-1 R-1 ~> m3 kg-1]
   logical :: do_stress, do_ustar, do_shelf, do_press, do_iceberg, tau2ustar
   integer :: i, j, is, ie, js, je, isB, ieB, jsB, jeB
   is = G%isc ; ie = G%iec ; js = G%jsc ; je = G%jec
   isB = G%iscB ; ieB = G%iecB ; jsB = G%jscB ; jeB = G%jecB
 
-  iRho0 = US%L_to_Z / Rho0
+  Irho0 = US%L_to_Z / Rho0
 
   tau2ustar = .false.
   if (present(UpdateUstar)) tau2ustar = UpdateUstar
@@ -3482,153 +3563,154 @@ subroutine homogenize_mech_forcing(forces, G, US, Rho0, UpdateUstar)
                               do_press, do_iceberg)
 
   if (do_stress) then
-    tx_mean = global_area_mean_u(forces%taux, G)
+    tx_mean = global_area_mean_u(forces%taux, G, tmp_scale=US%Z_to_L*US%RL2_T2_to_Pa)
     do j=js,je ; do i=isB,ieB
-      if (G%mask2dCu(I,j) > 0.) forces%taux(I,j) = tx_mean
+      if (G%mask2dCu(I,j) > 0.0) forces%taux(I,j) = tx_mean
     enddo ; enddo
-    ty_mean = global_area_mean_v(forces%tauy, G)
+    ty_mean = global_area_mean_v(forces%tauy, G, tmp_scale=US%Z_to_L*US%RL2_T2_to_Pa)
     do j=jsB,jeB ; do i=is,ie
-      if (G%mask2dCv(i,J) > 0.) forces%tauy(i,J) = ty_mean
+      if (G%mask2dCv(i,J) > 0.0) forces%tauy(i,J) = ty_mean
     enddo ; enddo
     if (tau2ustar) then
       do j=js,je ; do i=is,ie
-        if (G%mask2dT(i,j) > 0.) forces%ustar(i,j) = sqrt(sqrt(tx_mean**2 + ty_mean**2)*iRho0)
+        if (G%mask2dT(i,j) > 0.0) forces%ustar(i,j) = sqrt(sqrt(tx_mean**2 + ty_mean**2)*Irho0)
       enddo ; enddo
     else
-      call homogenize_field_t(forces%ustar, G)
+      call homogenize_field_t(forces%ustar, G, tmp_scale=US%Z_to_m*US%s_to_T)
     endif
   else
     if (do_ustar) then
-      call homogenize_field_t(forces%ustar, G)
+      call homogenize_field_t(forces%ustar, G, tmp_scale=US%Z_to_m*US%s_to_T)
     endif
   endif
 
   if (do_shelf) then
-    call homogenize_field_u(forces%rigidity_ice_u, G)
-    call homogenize_field_v(forces%rigidity_ice_v, G)
+    call homogenize_field_u(forces%rigidity_ice_u, G, tmp_scale=US%L_T_to_m_s*US%L_to_m**2*US%L_to_Z)
+    call homogenize_field_v(forces%rigidity_ice_v, G, tmp_scale=US%L_T_to_m_s*US%L_to_m**2*US%L_to_Z)
     call homogenize_field_u(forces%frac_shelf_u, G)
     call homogenize_field_v(forces%frac_shelf_v, G)
   endif
 
   if (do_press) then
     ! NOTE: p_surf_SSH either points to p_surf or p_surf_full
-    call homogenize_field_t(forces%p_surf, G)
-    call homogenize_field_t(forces%p_surf_full, G)
-    call homogenize_field_t(forces%net_mass_src, G)
+    call homogenize_field_t(forces%p_surf, G, tmp_scale=US%RL2_T2_to_Pa)
+    call homogenize_field_t(forces%p_surf_full, G, tmp_scale=US%RL2_T2_to_Pa)
+    call homogenize_field_t(forces%net_mass_src, G, tmp_scale=US%RZ_T_to_kg_m2s)
   endif
 
   if (do_iceberg) then
     call homogenize_field_t(forces%area_berg, G)
-    call homogenize_field_t(forces%mass_berg, G)
+    call homogenize_field_t(forces%mass_berg, G, tmp_scale=US%RZ_to_kg_m2)
   endif
 
 end subroutine homogenize_mech_forcing
 
 !< Homogenize the fluxes
-subroutine homogenize_forcing(fluxes, G)
-  type(forcing), intent(inout)  :: fluxes     !< Input forcing struct
-  type(ocean_grid_type), intent(in) :: G      !< Grid metric of target forcing
+subroutine homogenize_forcing(fluxes, G, GV, US)
+  type(forcing),           intent(inout) :: fluxes !< Input forcing struct
+  type(ocean_grid_type),   intent(in)    :: G      !< Grid metric of target forcing
+  type(verticalGrid_type), intent(in)    :: GV     !< ocean vertical grid structure
+  type(unit_scale_type),   intent(in)    :: US     !< A dimensional unit scaling type
 
-  real :: avg
   logical :: do_ustar, do_water, do_heat, do_salt, do_press, do_shelf, &
       do_iceberg, do_heat_added, do_buoy
-  integer :: i, j, is, ie, js, je, isB, ieB, jsB, jeB
-  is = G%isc ; ie = G%iec ; js = G%jsc ; je = G%jec
-  isB = G%iscB ; ieB = G%iecB ; jsB = G%jscB ; jeB = G%jecB
 
   call get_forcing_groups(fluxes, do_water, do_heat, do_ustar, do_press, &
       do_shelf, do_iceberg, do_salt, do_heat_added, do_buoy)
 
   if (do_ustar) then
-    call homogenize_field_t(fluxes%ustar, G)
-    call homogenize_field_t(fluxes%ustar_gustless, G)
+    call homogenize_field_t(fluxes%ustar, G, tmp_scale=US%Z_to_m*US%s_to_T)
+    call homogenize_field_t(fluxes%ustar_gustless, G, tmp_scale=US%Z_to_m*US%s_to_T)
   endif
 
   if (do_water) then
-    call homogenize_field_t(fluxes%evap, G)
-    call homogenize_field_t(fluxes%lprec, G)
-    call homogenize_field_t(fluxes%lprec, G)
-    call homogenize_field_t(fluxes%fprec, G)
-    call homogenize_field_t(fluxes%vprec, G)
-    call homogenize_field_t(fluxes%lrunoff, G)
-    call homogenize_field_t(fluxes%frunoff, G)
-    call homogenize_field_t(fluxes%seaice_melt, G)
-    call homogenize_field_t(fluxes%netMassOut, G)
-    call homogenize_field_t(fluxes%netMassIn, G)
+    call homogenize_field_t(fluxes%evap, G, tmp_scale=US%RZ_T_to_kg_m2s)
+    call homogenize_field_t(fluxes%lprec, G, tmp_scale=US%RZ_T_to_kg_m2s)
+    call homogenize_field_t(fluxes%fprec, G, tmp_scale=US%RZ_T_to_kg_m2s)
+    call homogenize_field_t(fluxes%vprec, G, tmp_scale=US%RZ_T_to_kg_m2s)
+    call homogenize_field_t(fluxes%lrunoff, G, tmp_scale=US%RZ_T_to_kg_m2s)
+    call homogenize_field_t(fluxes%frunoff, G, tmp_scale=US%RZ_T_to_kg_m2s)
+    call homogenize_field_t(fluxes%seaice_melt, G, tmp_scale=US%RZ_T_to_kg_m2s)
+    !  These two calls might not be needed.
+    call homogenize_field_t(fluxes%netMassOut, G, tmp_scale=GV%H_to_mks)
+    call homogenize_field_t(fluxes%netMassIn, G, tmp_scale=GV%H_to_mks)
+    !This was removed and I don't think replaced. Not needed?
+    !call homogenize_field_t(fluxes%netSalt, G)
   endif
 
   if (do_heat) then
-    call homogenize_field_t(fluxes%seaice_melt_heat, G)
-    call homogenize_field_t(fluxes%sw, G)
-    call homogenize_field_t(fluxes%lw, G)
-    call homogenize_field_t(fluxes%latent, G)
-    call homogenize_field_t(fluxes%sens, G)
-    call homogenize_field_t(fluxes%latent_evap_diag, G)
-    call homogenize_field_t(fluxes%latent_fprec_diag, G)
-    call homogenize_field_t(fluxes%latent_frunoff_diag, G)
+    call homogenize_field_t(fluxes%seaice_melt_heat, G, tmp_scale=US%QRZ_T_to_W_m2)
+    call homogenize_field_t(fluxes%sw, G, tmp_scale=US%QRZ_T_to_W_m2)
+    call homogenize_field_t(fluxes%lw, G, tmp_scale=US%QRZ_T_to_W_m2)
+    call homogenize_field_t(fluxes%latent, G, tmp_scale=US%QRZ_T_to_W_m2)
+    call homogenize_field_t(fluxes%sens, G, tmp_scale=US%QRZ_T_to_W_m2)
+    !### These are for diagnostics only and may not be needed.
+    call homogenize_field_t(fluxes%latent_evap_diag, G, tmp_scale=US%QRZ_T_to_W_m2)
+    call homogenize_field_t(fluxes%latent_fprec_diag, G, tmp_scale=US%QRZ_T_to_W_m2)
+    call homogenize_field_t(fluxes%latent_frunoff_diag, G, tmp_scale=US%QRZ_T_to_W_m2)
   endif
 
-  if (do_salt) call homogenize_field_t(fluxes%salt_flux, G)
+  if (do_salt) call homogenize_field_t(fluxes%salt_flux, G, tmp_scale=US%RZ_T_to_kg_m2s)
 
   if (do_heat .and. do_water) then
-    call homogenize_field_t(fluxes%heat_content_cond, G)
-    call homogenize_field_t(fluxes%heat_content_icemelt, G)
-    call homogenize_field_t(fluxes%heat_content_lprec, G)
-    call homogenize_field_t(fluxes%heat_content_fprec, G)
-    call homogenize_field_t(fluxes%heat_content_vprec, G)
-    call homogenize_field_t(fluxes%heat_content_lrunoff, G)
-    call homogenize_field_t(fluxes%heat_content_frunoff, G)
-    call homogenize_field_t(fluxes%heat_content_massout, G)
-    call homogenize_field_t(fluxes%heat_content_massin, G)
+    call homogenize_field_t(fluxes%heat_content_cond, G, tmp_scale=US%QRZ_T_to_W_m2)
+    call homogenize_field_t(fluxes%heat_content_lprec, G, tmp_scale=US%QRZ_T_to_W_m2)
+    call homogenize_field_t(fluxes%heat_content_fprec, G, tmp_scale=US%QRZ_T_to_W_m2)
+    call homogenize_field_t(fluxes%heat_content_vprec, G, tmp_scale=US%QRZ_T_to_W_m2)
+    call homogenize_field_t(fluxes%heat_content_lrunoff, G, tmp_scale=US%QRZ_T_to_W_m2)
+    call homogenize_field_t(fluxes%heat_content_frunoff, G, tmp_scale=US%QRZ_T_to_W_m2)
+    call homogenize_field_t(fluxes%heat_content_massout, G, tmp_scale=US%QRZ_T_to_W_m2)
+    call homogenize_field_t(fluxes%heat_content_massin, G, tmp_scale=US%QRZ_T_to_W_m2)
   endif
 
-  if (do_press) call homogenize_field_t(fluxes%p_surf, G)
+  if (do_press) call homogenize_field_t(fluxes%p_surf, G, tmp_scale=US%RL2_T2_to_Pa)
 
   if (do_shelf) then
     call homogenize_field_t(fluxes%frac_shelf_h, G)
-    call homogenize_field_t(fluxes%ustar_shelf, G)
-    call homogenize_field_t(fluxes%iceshelf_melt, G)
+    call homogenize_field_t(fluxes%ustar_shelf, G, tmp_scale=US%Z_to_m*US%s_to_T)
+    call homogenize_field_t(fluxes%iceshelf_melt, G, tmp_scale=US%RZ_T_to_kg_m2s)
+    call homogenize_field_t(fluxes%shelf_sfc_mass_flux, G, tmp_scale=US%RZ_T_to_kg_m2s)
   endif
 
   if (do_iceberg) then
-    call homogenize_field_t(fluxes%ustar_berg, G)
+    call homogenize_field_t(fluxes%ustar_berg, G, tmp_scale=US%Z_to_m*US%s_to_T)
     call homogenize_field_t(fluxes%area_berg, G)
   endif
 
   if (do_heat_added) then
-    call homogenize_field_t(fluxes%heat_added, G)
+    call homogenize_field_t(fluxes%heat_added, G, tmp_scale=US%QRZ_T_to_W_m2)
   endif
 
   ! The following fields are handled by drivers rather than control flags.
   if (associated(fluxes%sw_vis_dir)) &
-    call homogenize_field_t(fluxes%sw_vis_dir, G)
+    call homogenize_field_t(fluxes%sw_vis_dir, G, tmp_scale=US%QRZ_T_to_W_m2)
 
   if (associated(fluxes%sw_vis_dif)) &
-    call homogenize_field_t(fluxes%sw_vis_dif, G)
+    call homogenize_field_t(fluxes%sw_vis_dif, G, tmp_scale=US%QRZ_T_to_W_m2)
 
   if (associated(fluxes%sw_nir_dir)) &
-    call homogenize_field_t(fluxes%sw_nir_dir, G)
+    call homogenize_field_t(fluxes%sw_nir_dir, G, tmp_scale=US%QRZ_T_to_W_m2)
 
   if (associated(fluxes%sw_nir_dif)) &
-    call homogenize_field_t(fluxes%sw_nir_dif, G)
+    call homogenize_field_t(fluxes%sw_nir_dif, G, tmp_scale=US%QRZ_T_to_W_m2)
 
   if (associated(fluxes%salt_flux_in)) &
-    call homogenize_field_t(fluxes%salt_flux_in, G)
+    call homogenize_field_t(fluxes%salt_flux_in, G, tmp_scale=US%RZ_T_to_kg_m2s)
 
   if (associated(fluxes%salt_flux_added)) &
-    call homogenize_field_t(fluxes%salt_flux_added, G)
+    call homogenize_field_t(fluxes%salt_flux_added, G, tmp_scale=US%RZ_T_to_kg_m2s)
 
   if (associated(fluxes%p_surf_full)) &
-    call homogenize_field_t(fluxes%p_surf_full, G)
+    call homogenize_field_t(fluxes%p_surf_full, G, tmp_scale=US%RL2_T2_to_Pa)
 
   if (associated(fluxes%buoy)) &
-    call homogenize_field_t(fluxes%buoy, G)
+    call homogenize_field_t(fluxes%buoy, G, tmp_scale=US%L_to_m**2*US%s_to_T**3)
 
   if (associated(fluxes%TKE_tidal)) &
-    call homogenize_field_t(fluxes%TKE_tidal, G)
+    call homogenize_field_t(fluxes%TKE_tidal, G, tmp_scale=US%RZ3_T3_to_W_m2)
 
   if (associated(fluxes%ustar_tidal)) &
-    call homogenize_field_t(fluxes%ustar_tidal, G)
+    call homogenize_field_t(fluxes%ustar_tidal, G, tmp_scale=US%Z_to_m*US%s_to_T)
 
   ! TODO: tracer flux homogenization
   ! Having a warning causes a lot of errors (each time step).
@@ -3637,47 +3719,53 @@ subroutine homogenize_forcing(fluxes, G)
 
 end subroutine homogenize_forcing
 
-subroutine homogenize_field_t(var, G)
-  type(ocean_grid_type),                intent(in) :: G   !< The ocean's grid structure
-  real, dimension(SZI_(G), SZJ_(G)), intent(inout) :: var !< The variable to homogenize
+subroutine homogenize_field_t(var, G, tmp_scale)
+  type(ocean_grid_type),            intent(in)    :: G   !< The ocean's grid structure
+  real, dimension(SZI_(G),SZJ_(G)), intent(inout) :: var !< The variable to homogenize
+  real,                   optional, intent(in)    :: tmp_scale !< A temporary rescaling factor for the
+                                                         !! variable that is reversed in the return value
 
-  real    :: avg
+  real    :: avg   ! Global average of var, in the same units as var
   integer :: i, j, is, ie, js, je
   is = G%isc ; ie = G%iec ; js = G%jsc ; je = G%jec
 
-  avg = global_area_mean(var, G)
+  avg = global_area_mean(var, G, tmp_scale=tmp_scale)
   do j=js,je ; do i=is,ie
-    if (G%mask2dT(i,j) > 0.) var(i,j) = avg
+    if (G%mask2dT(i,j) > 0.0) var(i,j) = avg
   enddo ; enddo
 
 end subroutine homogenize_field_t
 
-subroutine homogenize_field_v(var, G)
+subroutine homogenize_field_v(var, G, tmp_scale)
   type(ocean_grid_type),             intent(in)    :: G    !< The ocean's grid structure
-  real, dimension(SZI_(G), SZJB_(G)), intent(inout) :: var  !< The variable to homogenize
+  real, dimension(SZI_(G),SZJB_(G)), intent(inout) :: var  !< The variable to homogenize
+  real,                    optional, intent(in)    :: tmp_scale !< A temporary rescaling factor for the
+                                                         !! variable that is reversed in the return value
 
-  real    :: avg
+  real    :: avg   ! Global average of var, in the same units as var
   integer :: i, j, is, ie, jsB, jeB
   is = G%isc ; ie = G%iec ; jsB = G%jscB ; jeB = G%jecB
 
-  avg = global_area_mean_v(var, G)
+  avg = global_area_mean_v(var, G, tmp_scale=tmp_scale)
   do J=jsB,jeB ; do i=is,ie
-    if (G%mask2dCv(i,J) > 0.) var(i,J) = avg
+    if (G%mask2dCv(i,J) > 0.0) var(i,J) = avg
   enddo ; enddo
 
 end subroutine homogenize_field_v
 
-subroutine homogenize_field_u(var, G)
+subroutine homogenize_field_u(var, G, tmp_scale)
   type(ocean_grid_type),             intent(in)    :: G    !< The ocean's grid structure
-  real, dimension(SZI_(G), SZJB_(G)), intent(inout) :: var  !< The variable to homogenize
+  real, dimension(SZI_(G),SZJB_(G)), intent(inout) :: var  !< The variable to homogenize
+  real,                    optional, intent(in)    :: tmp_scale !< A temporary rescaling factor for the
+                                                         !! variable that is reversed in the return value
 
-  real    :: avg
+  real    :: avg   ! Global average of var, in the same units as var
   integer :: i, j, isB, ieB, js, je
   isB = G%iscB ; ieB = G%iecB ; js = G%jsc ; je = G%jec
 
-  avg = global_area_mean_u(var, G)
+  avg = global_area_mean_u(var, G, tmp_scale=tmp_scale)
   do j=js,je ; do I=isB,ieB
-    if (G%mask2dCu(I,j) > 0.) var(I,j) = avg
+    if (G%mask2dCu(I,j) > 0.0) var(I,j) = avg
   enddo ; enddo
 
 end subroutine homogenize_field_u

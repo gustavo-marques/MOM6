@@ -106,6 +106,8 @@ type, public :: diagnostics_CS ; private
   integer :: id_rhopot0        = -1, id_rhopot2        = -1
   integer :: id_drho_dT        = -1, id_drho_dS        = -1
   integer :: id_h_pre_sync     = -1
+  integer :: id_tosq           = -1, id_sosq           = -1
+
   !>@}
   type(wave_speed_CS) :: wave_speed  !< Wave speed control struct
 
@@ -233,9 +235,6 @@ subroutine calculate_diagnostic_fields(u, v, h, uh, vh, tv, ADp, CDp, p_surf, &
 
   ! This value is roughly (pi / (the age of the universe) )^2.
   absurdly_small_freq2 = 1e-34*US%T_to_s**2
-
-  if (loc(CS)==0) call MOM_error(FATAL, &
-         "calculate_diagnostic_fields: Module must be initialized before used.")
 
   if (.not. CS%initialized) call MOM_error(FATAL, &
          "calculate_diagnostic_fields: Module must be initialized before used.")
@@ -402,16 +401,28 @@ subroutine calculate_diagnostic_fields(u, v, h, uh, vh, tv, ADp, CDp, p_surf, &
     ! Internal T&S variables are conservative temperature & absolute salinity,
     ! so they need to converted to potential temperature and practical salinity
     ! for some diagnostics using TEOS-10 function calls.
-    if ((CS%id_Tpot > 0) .or. (CS%id_tob > 0)) then
+    if ((CS%id_Tpot > 0) .or. (CS%id_tob > 0) .or. (CS%id_tosq > 0)) then
       do k=1,nz ; do j=js,je ; do i=is,ie
         work_3d(i,j,k) = gsw_pt_from_ct(tv%S(i,j,k),tv%T(i,j,k))
       enddo ; enddo ; enddo
       if (CS%id_Tpot > 0) call post_data(CS%id_Tpot, work_3d, CS%diag)
       if (CS%id_tob > 0) call post_data(CS%id_tob, work_3d(:,:,nz), CS%diag, mask=G%mask2dT)
+      if (CS%id_tosq > 0) then
+         do k=1,nz ; do j=js,je ; do i=is,ie
+           work_3d(i,j,k) = work_3d(i,j,k)*work_3d(i,j,k)
+         enddo ; enddo ; enddo
+         call post_data(CS%id_tosq, work_3d, CS%diag)
+      endif
     endif
   else
     ! Internal T&S variables are potential temperature & practical salinity
     if (CS%id_tob > 0) call post_data(CS%id_tob, tv%T(:,:,nz), CS%diag, mask=G%mask2dT)
+    if (CS%id_tosq > 0) then
+      do k=1,nz ; do j=js,je ; do i=is,ie
+        work_3d(i,j,k) = tv%T(i,j,k)*tv%T(i,j,k)
+      enddo ; enddo ; enddo
+      call post_data(CS%id_tosq, work_3d, CS%diag)
+    endif
   endif
 
   ! Calculate additional, potentially derived salinity diagnostics
@@ -419,16 +430,28 @@ subroutine calculate_diagnostic_fields(u, v, h, uh, vh, tv, ADp, CDp, p_surf, &
     ! Internal T&S variables are conservative temperature & absolute salinity,
     ! so they need to converted to potential temperature and practical salinity
     ! for some diagnostics using TEOS-10 function calls.
-    if ((CS%id_Sprac > 0) .or. (CS%id_sob > 0)) then
+    if ((CS%id_Sprac > 0) .or. (CS%id_sob > 0) .or. (CS%id_sosq >0)) then
       do k=1,nz ; do j=js,je ; do i=is,ie
         work_3d(i,j,k) = gsw_sp_from_sr(tv%S(i,j,k))
       enddo ; enddo ; enddo
       if (CS%id_Sprac > 0) call post_data(CS%id_Sprac, work_3d, CS%diag)
       if (CS%id_sob > 0) call post_data(CS%id_sob, work_3d(:,:,nz), CS%diag, mask=G%mask2dT)
+      if (CS%id_sosq > 0) then
+        do k=1,nz ; do j=js,je ; do i=is,ie
+           work_3d(i,j,k) = work_3d(i,j,k)*work_3d(i,j,k)
+        enddo ; enddo ; enddo
+        call post_data(CS%id_sosq, work_3d, CS%diag)
+      endif
     endif
   else
     ! Internal T&S variables are potential temperature & practical salinity
     if (CS%id_sob > 0) call post_data(CS%id_sob, tv%S(:,:,nz), CS%diag, mask=G%mask2dT)
+    if (CS%id_sosq > 0) then
+      do k=1,nz ; do j=js,je ; do i=is,ie
+        work_3d(i,j,k) = tv%S(i,j,k)*tv%S(i,j,k)
+      enddo ; enddo ; enddo
+      call post_data(CS%id_sosq, work_3d, CS%diag)
+    endif
   endif
 
   ! volume mean potential temperature
@@ -455,7 +478,7 @@ subroutine calculate_diagnostic_fields(u, v, h, uh, vh, tv, ADp, CDp, p_surf, &
   ! area mean SSS
   if (CS%id_sosga > 0) then
     do j=js,je ; do i=is,ie
-       surface_field(i,j) = tv%S(i,j,1)
+      surface_field(i,j) = tv%S(i,j,1)
     enddo ; enddo
     sosga = global_area_mean(surface_field, G)
     call post_data(CS%id_sosga, sosga, CS%diag)
@@ -1293,32 +1316,27 @@ subroutine post_surface_thermo_diags(IDs, G, GV, US, diag, dt_int, sfc_state, tv
 
   real, dimension(SZI_(G),SZJ_(G)) :: work_2d  ! A 2-d work array
   real, dimension(SZI_(G),SZJ_(G)) :: &
-    zos  ! dynamic sea lev (zero area mean) from inverse-barometer adjusted ssh [m]
+    zos  ! dynamic sea lev (zero area mean) from inverse-barometer adjusted ssh [Z ~> m]
   real :: I_time_int    ! The inverse of the time interval [T-1 ~> s-1].
-  real :: zos_area_mean ! Global area mean sea surface height [m]
+  real :: zos_area_mean ! Global area mean sea surface height [Z ~> m]
   real :: volo          ! Total volume of the ocean [m3]
-  real :: ssh_ga        ! Global ocean area weighted mean sea seaface height [m]
+  real :: ssh_ga        ! Global ocean area weighted mean sea seaface height [Z ~> m]
   integer :: i, j, is, ie, js, je
 
   is = G%isc ; ie = G%iec ; js = G%jsc ; je = G%jec
 
   ! area mean SSH
   if (IDs%id_ssh_ga > 0) then
-    ssh_ga = global_area_mean(ssh, G, scale=US%Z_to_m)
+    ssh_ga = global_area_mean(ssh, G, tmp_scale=US%Z_to_m)
     call post_data(IDs%id_ssh_ga, ssh_ga, diag)
   endif
 
   ! post the dynamic sea level, zos, and zossq.
-  ! zos is ave_ssh with sea ice inverse barometer removed,
-  ! and with zero global area mean.
+  ! zos is ave_ssh with sea ice inverse barometer removed, and with zero global area mean.
   if (IDs%id_zos > 0 .or. IDs%id_zossq > 0) then
-    zos(:,:) = 0.0
+    zos_area_mean = global_area_mean(ssh_ibc, G, tmp_scale=US%Z_to_m)
     do j=js,je ; do i=is,ie
-      zos(i,j) = US%Z_to_m*ssh_ibc(i,j)
-    enddo ; enddo
-    zos_area_mean = global_area_mean(zos, G)
-    do j=js,je ; do i=is,ie
-      zos(i,j) = zos(i,j) - G%mask2dT(i,j)*zos_area_mean
+      zos(i,j) = ssh_ibc(i,j) - G%mask2dT(i,j)*zos_area_mean
     enddo ; enddo
     if (IDs%id_zos > 0) call post_data(IDs%id_zos, zos, diag, mask=G%mask2dT)
     if (IDs%id_zossq > 0) then
@@ -1619,6 +1637,13 @@ subroutine MOM_diagnostics_init(MIS, ADp, CDp, Time, G, GV, US, param_file, diag
         long_name='Sea Water Salinity at Sea Floor', &
         standard_name='sea_water_salinity_at_sea_floor', units='psu')
 
+    CS%id_tosq = register_diag_field('ocean_model', 'tosq', diag%axesTL,&
+      Time, 'Square of Potential Temperature', 'degc2',           &
+      standard_name='Potential Temperature Squared')
+    CS%id_sosq = register_diag_field('ocean_model', 'sosq', diag%axesTL,&
+      Time, 'Square of Salinity', 'psu2',           &
+      standard_name='Salinity Squared')
+
     CS%id_temp_layer_ave = register_diag_field('ocean_model', 'temp_layer_ave', &
         diag%axesZL, Time, 'Layer Average Ocean Temperature', 'degC')
     CS%id_salt_layer_ave = register_diag_field('ocean_model', 'salt_layer_ave', &
@@ -1844,14 +1869,14 @@ subroutine register_surface_diags(Time, G, US, IDs, diag, tv)
       standard_name='sea_water_volume')
   IDs%id_zos = register_diag_field('ocean_model', 'zos', diag%axesT1, Time,&
       standard_name = 'sea_surface_height_above_geoid',                   &
-      long_name= 'Sea surface height above geoid', units='m')
+      long_name= 'Sea surface height above geoid', units='m', conversion=US%Z_to_m)
   IDs%id_zossq = register_diag_field('ocean_model', 'zossq', diag%axesT1, Time,&
       standard_name='square_of_sea_surface_height_above_geoid',             &
-      long_name='Square of sea surface height above geoid', units='m2')
+      long_name='Square of sea surface height above geoid', units='m2', conversion=US%Z_to_m**2)
   IDs%id_ssh = register_diag_field('ocean_model', 'SSH', diag%axesT1, Time, &
       'Sea Surface Height', 'm', conversion=US%Z_to_m)
   IDs%id_ssh_ga = register_scalar_field('ocean_model', 'ssh_ga', Time, diag,&
-      long_name='Area averaged sea surface height', units='m',            &
+      long_name='Area averaged sea surface height', units='m', conversion=US%Z_to_m, &
       standard_name='area_averaged_sea_surface_height')
   IDs%id_ssu = register_diag_field('ocean_model', 'SSU', diag%axesCu1, Time, &
       'Sea Surface Zonal Velocity', 'm s-1', conversion=US%L_T_to_m_s)

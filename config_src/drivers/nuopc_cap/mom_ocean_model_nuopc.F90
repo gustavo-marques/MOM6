@@ -459,7 +459,7 @@ end subroutine ocean_model_init
 !! storing the new ocean properties in Ocean_state.
 subroutine update_ocean_model(Ice_ocean_boundary, OS, Ocean_sfc, &
                               time_start_update, Ocean_coupling_time_step, &
-                              update_dyn, update_thermo, Ocn_fluxes_used)
+                              cesm_coupled, update_dyn, update_thermo, Ocn_fluxes_used)
   type(ice_ocean_boundary_type), &
                      intent(in)    :: Ice_ocean_boundary !< A structure containing the
                                               !! various forcing fields coming from the ice.
@@ -474,6 +474,7 @@ subroutine update_ocean_model(Ice_ocean_boundary, OS, Ocean_sfc, &
   type(time_type),   intent(in)    :: time_start_update  !< The time at the beginning of the update step.
   type(time_type),   intent(in)    :: Ocean_coupling_time_step !< The amount of time over
                                               !! which to advance the ocean.
+  logical,           intent(in)    :: cesm_coupled !< Flag to check if coupled with cesm
   logical, optional, intent(in)    :: update_dyn !< If present and false, do not do updates
                                               !! due to the ocean dynamics.
   logical, optional, intent(in)    :: update_thermo !< If present and false, do not do updates
@@ -523,7 +524,6 @@ subroutine update_ocean_model(Ice_ocean_boundary, OS, Ocean_sfc, &
 
   do_dyn = .true. ; if (present(update_dyn)) do_dyn = update_dyn
   do_thermo = .true. ; if (present(update_thermo)) do_thermo = update_thermo
-
   ! This is benign but not necessary if ocean_model_init_sfc was called or if
   ! OS%sfc_state%tr_fields was spawned in ocean_model_init.  Consider removing it.
   is = OS%grid%isc ; ie = OS%grid%iec ; js = OS%grid%jsc ; je = OS%grid%jec
@@ -690,7 +690,12 @@ subroutine update_ocean_model(Ice_ocean_boundary, OS, Ocean_sfc, &
   call mech_forcing_diags(OS%forces, dt_coupling, OS%grid, OS%Time, OS%diag, OS%forcing_CSp%handles)
 
   if (OS%fluxes%fluxes_used) then
-    call forcing_diagnostics(OS%fluxes, OS%sfc_state, OS%grid, OS%US, OS%Time, OS%diag, OS%forcing_CSp%handles)
+    if (cesm_coupled) then
+      call forcing_diagnostics(OS%fluxes, OS%sfc_state, OS%grid, OS%US, OS%Time, OS%diag, &
+                               OS%forcing_CSp%handles, enthalpy=.true.)
+    else
+      call forcing_diagnostics(OS%fluxes, OS%sfc_state, OS%grid, OS%US, OS%Time, OS%diag, OS%forcing_CSp%handles)
+    endif
   endif
 
 ! Translate state into Ocean.
@@ -725,38 +730,38 @@ subroutine ocean_model_restart(OS, timestamp, restartname, stoch_restartname, nu
       "restart files can only be created after the buoyancy forcing is applied.")
 
   if (present(restartname)) then
-     call save_restart(OS%dirs%restart_output_dir, OS%Time, OS%grid, &
-          OS%restart_CSp, GV=OS%GV, filename=restartname, num_rest_files=num_rest_files)
-     call forcing_save_restart(OS%forcing_CSp, OS%grid, OS%Time, &
-          OS%dirs%restart_output_dir) ! Is this needed?
-     if (OS%use_ice_shelf) then
-        call ice_shelf_save_restart(OS%Ice_shelf_CSp, OS%Time, &
-             OS%dirs%restart_output_dir)
-     endif
+    call save_restart(OS%dirs%restart_output_dir, OS%Time, OS%grid, &
+         OS%restart_CSp, GV=OS%GV, filename=restartname, num_rest_files=num_rest_files)
+    call forcing_save_restart(OS%forcing_CSp, OS%grid, OS%Time, &
+         OS%dirs%restart_output_dir) ! Is this needed?
+    if (OS%use_ice_shelf) then
+      call ice_shelf_save_restart(OS%Ice_shelf_CSp, OS%Time, &
+           OS%dirs%restart_output_dir)
+    endif
   else
-     if (BTEST(OS%Restart_control,1)) then
-        call save_restart(OS%dirs%restart_output_dir, OS%Time, OS%grid, &
-             OS%restart_CSp, .true., GV=OS%GV)
-        call forcing_save_restart(OS%forcing_CSp, OS%grid, OS%Time, &
-             OS%dirs%restart_output_dir, .true.)
-        if (OS%use_ice_shelf) then
-           call ice_shelf_save_restart(OS%Ice_shelf_CSp, OS%Time, OS%dirs%restart_output_dir, .true.)
-        endif
-     endif
-     if (BTEST(OS%Restart_control,0)) then
-        call save_restart(OS%dirs%restart_output_dir, OS%Time, OS%grid, &
-             OS%restart_CSp, GV=OS%GV)
-        call forcing_save_restart(OS%forcing_CSp, OS%grid, OS%Time, &
-             OS%dirs%restart_output_dir)
-        if (OS%use_ice_shelf) then
-           call ice_shelf_save_restart(OS%Ice_shelf_CSp, OS%Time, OS%dirs%restart_output_dir)
-        endif
-     endif
+    if (BTEST(OS%Restart_control,1)) then
+      call save_restart(OS%dirs%restart_output_dir, OS%Time, OS%grid, &
+           OS%restart_CSp, .true., GV=OS%GV)
+      call forcing_save_restart(OS%forcing_CSp, OS%grid, OS%Time, &
+           OS%dirs%restart_output_dir, .true.)
+      if (OS%use_ice_shelf) then
+        call ice_shelf_save_restart(OS%Ice_shelf_CSp, OS%Time, OS%dirs%restart_output_dir, .true.)
+      endif
+    endif
+    if (BTEST(OS%Restart_control,0)) then
+      call save_restart(OS%dirs%restart_output_dir, OS%Time, OS%grid, &
+           OS%restart_CSp, GV=OS%GV)
+      call forcing_save_restart(OS%forcing_CSp, OS%grid, OS%Time, &
+           OS%dirs%restart_output_dir)
+      if (OS%use_ice_shelf) then
+        call ice_shelf_save_restart(OS%Ice_shelf_CSp, OS%Time, OS%dirs%restart_output_dir)
+      endif
+    endif
   endif
   if (present(stoch_restartname)) then
-      if (OS%do_sppt .OR. OS%pert_epbl) then
-         call write_stoch_restart_ocn('RESTART/'//trim(stoch_restartname))
-     endif
+    if (OS%do_sppt .OR. OS%pert_epbl) then
+      call write_stoch_restart_ocn('RESTART/'//trim(stoch_restartname))
+    endif
   endif
 
 end subroutine ocean_model_restart
@@ -840,9 +845,9 @@ subroutine initialize_ocean_public_type(input_domain, Ocean_sfc, diag, maskmap, 
   call mpp_get_layout(input_domain,layout)
   call mpp_get_global_domain(input_domain, xsize=xsz, ysize=ysz)
   if (PRESENT(maskmap)) then
-     call mpp_define_domains((/1,xsz,1,ysz/),layout,Ocean_sfc%Domain, maskmap=maskmap)
+    call mpp_define_domains((/1,xsz,1,ysz/),layout,Ocean_sfc%Domain, maskmap=maskmap)
   else
-     call mpp_define_domains((/1,xsz,1,ysz/),layout,Ocean_sfc%Domain)
+    call mpp_define_domains((/1,xsz,1,ysz/),layout,Ocean_sfc%Domain)
   endif
   call mpp_get_compute_domain(Ocean_sfc%Domain, isc, iec, jsc, jec)
 
@@ -1100,7 +1105,7 @@ subroutine Ocean_stock_pe(OS, index, value, time_index)
     case (ISTOCK_HEAT)  ! Return the heat content of the ocean in J.
       call get_ocean_stocks(OS%MOM_CSp, heat=value, on_PE_only=.true.)
     case (ISTOCK_SALT)  ! Return the mass of the salt in the ocean in kg.
-       call get_ocean_stocks(OS%MOM_CSp, salt=value, on_PE_only=.true.)
+      call get_ocean_stocks(OS%MOM_CSp, salt=value, on_PE_only=.true.)
     case default ; value = 0.0
   end select
   ! If the FMS coupler is changed so that Ocean_stock_PE is only called on
