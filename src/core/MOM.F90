@@ -1292,8 +1292,9 @@ subroutine step_MOM_tracer_dyn(CS, G, GV, US, h, Time_local)
   else
     x_first = (MODULO(G%first_direction,2) == 0)
   endif
-  call advect_tracer(h, CS%uhtr, CS%vhtr, CS%OBC, CS%t_dyn_rel_adv, G, GV, US, &
-                     CS%tracer_adv_CSp, CS%tracer_Reg, x_first_in=x_first)
+  ! GMM, turn off advection
+  !call advect_tracer(h, CS%uhtr, CS%vhtr, CS%OBC, CS%t_dyn_rel_adv, G, GV, US, &
+  !                   CS%tracer_adv_CSp, CS%tracer_Reg, x_first_in=x_first)
   call tracer_hordiff(h, CS%t_dyn_rel_adv, CS%MEKE, CS%VarMix, G, GV, US, &
                       CS%tracer_diff_CSp, CS%tracer_Reg, CS%tv)
   if (showCallTree) call callTree_waypoint("finished tracer advection/diffusion (step_MOM)")

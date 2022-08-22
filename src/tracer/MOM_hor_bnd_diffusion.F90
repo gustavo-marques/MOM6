@@ -154,9 +154,10 @@ logical function hor_bnd_diffusion_init(Time, G, GV, US, param_file, diag, diaba
   allocate(CS%hbd_v_kmax(SZI_(G),SZJB_(G)), source=0)
 
   CS%surface_boundary_scheme = -1
-  if ( .not. ASSOCIATED(CS%energetic_PBL_CSp) .and. .not. ASSOCIATED(CS%KPP_CSp) ) then
-    call MOM_error(FATAL,"Horizontal boundary diffusion is true, but no valid boundary layer scheme was found")
-  endif
+  !GMM, lines below should be commented out in the idealized experiments
+  !if ( .not. ASSOCIATED(CS%energetic_PBL_CSp) .and. .not. ASSOCIATED(CS%KPP_CSp) ) then
+  !  call MOM_error(FATAL,"Horizontal boundary diffusion is true, but no valid boundary layer scheme was found")
+  !endif
 
   call get_param(param_file, mdl, "HBD_TRANSITION", CS%transition, &
                    "Controls if diffusion will transition from neutral to \n"//&
@@ -253,9 +254,13 @@ subroutine hor_bnd_diffusion(G, GV, US, h, Coef_x, Coef_y, dt, VarMix, Reg, CS)
   call cpu_clock_begin(id_clock_hbd)
   Idt = 1./dt
 
-  if (ASSOCIATED(CS%KPP_CSp)) call KPP_get_BLD(CS%KPP_CSp, hbl, G, US, m_to_BLD_units=GV%m_to_H)
-  if (ASSOCIATED(CS%energetic_PBL_CSp)) call energetic_PBL_get_MLD(CS%energetic_PBL_CSp, hbl, G, US, &
-                                                                   m_to_MLD_units=GV%m_to_H)
+  !GMM, in the idealized experiments, the following must be set
+  hbl(:,:) = 100.
+  hbl(4:6,:) = 300.
+
+  !if (ASSOCIATED(CS%KPP_CSp)) call KPP_get_BLD(CS%KPP_CSp, hbl, G, US, m_to_BLD_units=GV%m_to_H)
+  !if (ASSOCIATED(CS%energetic_PBL_CSp)) call energetic_PBL_get_MLD(CS%energetic_PBL_CSp, hbl, G, US, &
+  !                                                                 m_to_MLD_units=GV%m_to_H)
 
   call pass_var(hbl,G%Domain)
 
