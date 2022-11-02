@@ -20,7 +20,6 @@ use MOM_remapping,             only : extract_member_remapping_CS, remapping_cor
 use MOM_remapping,             only : remappingSchemesDoc, remappingDefaultScheme
 use MOM_tracer_registry,       only : tracer_registry_type, tracer_type
 use MOM_unit_scaling,          only : unit_scale_type
-use MOM_lateral_mixing_coeffs, only : VarMix_CS
 use MOM_verticalGrid,          only : verticalGrid_type
 use MOM_CVMix_KPP,             only : KPP_get_BLD, KPP_CS
 use MOM_energetic_PBL,         only : energetic_PBL_get_MLD, energetic_PBL_CS
@@ -32,7 +31,7 @@ use MOM_string_functions,      only : extractWord
 implicit none ; private
 
 public near_boundary_unit_tests, hor_bnd_diffusion, hor_bnd_diffusion_init
-public boundary_k_range, hor_bnd_diffusion_end
+public boundary_k_range, hor_bnd_diffusion_end, harmonic_mean
 
 ! Private parameters to avoid doing string comparisons for bottom or top boundary layer
 integer, public, parameter :: SURFACE = -1 !< Set a value that corresponds to the surface bopundary
@@ -50,11 +49,9 @@ type, public :: hbd_CS ; private
                              !! native grid (default is true).
   logical :: limiter_remap   !< Controls whether a flux limiter is applied in the
                              !! remapped grid (default is false).
-  logical :: transition      !< Controls whether diffusion will transition from neutral to
-                             !! horizontal (default is false).
-  real    :: delta_h         !< The minimum change in thickness between to adjacent cells used to
-                             !! calculate the minimum isopycnal slope (delta_h/dx) that can be
-                             !! represented in the transition layer.
+  logical :: linear          !< If True, apply a linear transition at the base/top of the boundary.
+                             !! The flux will be fully applied at k=k_min and
+                             !! zero at k=k_max.
   real    :: H_subroundoff   !< A thickness that is so small that it can be added to a thickness of
                              !! Angstrom or larger without changing it at the bit level [H ~> m or kg m-2].
                              !! If Angstrom is 0 or exceedingly small, this is negligible compared to 1e-17 m.
@@ -67,25 +64,12 @@ type, public :: hbd_CS ; private
                                                           !! v-points (left and right)      [H ~> m or kg m-2]
   integer, allocatable, dimension(:,:)     :: hbd_u_kmax  !< Maximum vertical index in hbd_grd_u      [nondim]
   integer, allocatable, dimension(:,:)     :: hbd_v_kmax  !< Maximum vertical index in hbd_grd_v      [nondim]
-  ! neutral slopes at BLD base
-  real,    allocatable, dimension(:,:)     :: slp_x       !< Zonal isopycnal slope at the base of the boundary
-                                                          !! layer                                    [nondim]
-  real,    allocatable, dimension(:,:)     :: slp_y       !< Meridional isopycnal slope at the base of the
-                                                          !! boundary layer                           [nondim]
-  real,    allocatable, dimension(:,:)     :: hbd_slp_x   !< Zonal isopycnal slope at the base of the boundary
-                                                          !! layer used in the HBD module             [nondim]
-  real,    allocatable, dimension(:,:)     :: hbd_slp_y   !< Meridional isopycnal slope at the base of the
-                                                          !! boundary layer used in the HBD module    [nondim]
 
   type(remapping_CS)    :: remap_CS !< Control structure to hold remapping configuration.
   type(KPP_CS),           pointer :: KPP_CSp => NULL()  !< KPP control structure needed to get BLD.
   type(energetic_PBL_CS), pointer :: energetic_PBL_CSp => NULL() !< ePBL control structure needed to get BLD.
   type(diag_ctrl), pointer :: diag => NULL() !< A structure that is used to
                                              !! regulate the timing of diagnostic output.
-  !>@{ Diagnostic IDs
-  integer :: id_slp_x = -1, id_slp_y = -1
-  integer :: id_hbd_slp_x = -1, id_hbd_slp_y = -1
-  !>@}
 
 end type hbd_CS
 
@@ -158,17 +142,10 @@ logical function hor_bnd_diffusion_init(Time, G, GV, US, param_file, diag, diaba
     call MOM_error(FATAL,"Horizontal boundary diffusion is true, but no valid boundary layer scheme was found")
   endif
 
-  call get_param(param_file, mdl, "HBD_TRANSITION", CS%transition, &
-                   "Controls if diffusion will transition from neutral to \n"//&
-                   "horizontal.", default=.false.)
-  if (CS%transition) then
-    call get_param(param_file, mdl, "HBD_DELTA_H", CS%delta_h, &
-                   "The maximum change in thickness between two adjacent cells used to \n"//&
-                   "calculate the maximum isopycnal slope (delta_h/dx) that can be \n"    //&
-                   "represented in the transition from neutral to horizontal.", units="m",  &
-                   scale=US%m_to_Z, default=0.1)
-  endif
-
+  call get_param(param_file, mdl, "LBD_LINEAR_TRANSITION", CS%linear, &
+                 "If True, apply a linear transition at the base/top of \n"//&
+                 "the boundary. The flux will be fully applied at k=k_min and \n"//&
+                 "zero at k=k_max.", default=.false.)
   call get_param(param_file, mdl, "APPLY_LIMITER", CS%limiter, &
                    "If True, apply a flux limiter in the native grid.", default=.true.)
   call get_param(param_file, mdl, "APPLY_LIMITER_REMAP", CS%limiter_remap, &
@@ -189,21 +166,6 @@ logical function hor_bnd_diffusion_init(Time, G, GV, US, param_file, diag, diaba
                  "If true, write out verbose debugging data in the HBD module.", &
                  default=.false.)
 
-  ! diagnostics
-  CS%id_slp_x =  register_diag_field('ocean_model', 'bld_slp_x', CS%diag%axesCu1, Time, &
-           'Zonal slope of neutral surface at the base of the BLD', 'nondim', conversion=US%Z_to_L)
-  CS%id_slp_y =  register_diag_field('ocean_model', 'bld_slp_y', CS%diag%axesCv1, Time, &
-           'Meridional slope of neutral surface at the base of the BLD', 'nondim', conversion=US%Z_to_L)
-  CS%id_hbd_slp_x =  register_diag_field('ocean_model', 'hbd_slp_x', CS%diag%axesCu1, Time, &
-           'Zonal slope of neutral surface used in the HBD module', 'nondim', conversion=US%Z_to_L)
-  CS%id_hbd_slp_y =  register_diag_field('ocean_model', 'hbd_slp_y', CS%diag%axesCv1, Time, &
-           'Meridional slope of neutral surface used in the HBD module', 'nondim', conversion=US%Z_to_L)
-
-  if (CS%id_slp_x > 0)  allocate(CS%slp_x(SZIB_(G),SZJ_(G)), source=0.)
-  if (CS%id_slp_y > 0)  allocate(CS%slp_y(SZI_(G),SZJB_(G)), source=0.)
-  if (CS%id_hbd_slp_x > 0)  allocate(CS%hbd_slp_x(SZIB_(G),SZJ_(G)), source=0.)
-  if (CS%id_hbd_slp_y > 0)  allocate(CS%hbd_slp_y(SZI_(G),SZJB_(G)), source=0.)
-
   id_clock_hbd = cpu_clock_id('(Ocean HBD)', grain=CLOCK_MODULE)
 
 end function hor_bnd_diffusion_init
@@ -214,7 +176,7 @@ end function hor_bnd_diffusion_init
 !! 2) calculate diffusive tracer fluxes (F) in the HBD grid using a layer by layer approach
 !! 3) remap fluxes to the native grid
 !! 4) update tracer by adding the divergence of F
-subroutine hor_bnd_diffusion(G, GV, US, h, Coef_x, Coef_y, dt, VarMix, Reg, CS)
+subroutine hor_bnd_diffusion(G, GV, US, h, Coef_x, Coef_y, dt, Reg, CS)
   type(ocean_grid_type),                intent(inout) :: G      !< Grid type
   type(verticalGrid_type),              intent(in)    :: GV     !< ocean vertical grid structure
   type(unit_scale_type),                intent(in)    :: US     !< A dimensional unit scaling type
@@ -224,7 +186,6 @@ subroutine hor_bnd_diffusion(G, GV, US, h, Coef_x, Coef_y, dt, VarMix, Reg, CS)
   real, dimension(SZI_(G),SZJB_(G)),    intent(in)    :: Coef_y !< dt * Kh * dx / dy at v-points [L2 ~> m2]
   real,                                 intent(in)    :: dt     !< Tracer time step * I_numitts
                                                                 !! (I_numitts in tracer_hordiff) [T ~> s]
-  type(VarMix_CS),                      intent(in)    :: VarMix !< Variable mixing type
   type(tracer_registry_type),           pointer       :: Reg    !< Tracer registry
   type(hbd_CS),                         pointer       :: CS     !< Control structure for this module
 
@@ -261,7 +222,7 @@ subroutine hor_bnd_diffusion(G, GV, US, h, Coef_x, Coef_y, dt, VarMix, Reg, CS)
   call pass_var(hbl,G%Domain)
 
   ! build HBD grid
-  call hbd_grid(SURFACE, G, GV, VarMix, hbl, h, CS)
+  call hbd_grid(SURFACE, G, GV, hbl, h, CS)
 
   do m = 1,Reg%ntr
     ! current tracer
@@ -399,11 +360,6 @@ subroutine hor_bnd_diffusion(G, GV, US, h, Coef_x, Coef_y, dt, VarMix, Reg, CS)
     endif
 
   enddo
-  ! diagnostics that are not tracer dependent
-  if (CS%id_hbd_slp_x > 0) call post_data(CS%id_hbd_slp_x, CS%hbd_slp_x, CS%diag)
-  if (CS%id_hbd_slp_y > 0) call post_data(CS%id_hbd_slp_y, CS%hbd_slp_y, CS%diag)
-  if (CS%id_slp_x > 0) call post_data(CS%id_slp_x, CS%slp_x, CS%diag)
-  if (CS%id_slp_y > 0) call post_data(CS%id_slp_y, CS%slp_y, CS%diag)
 
   call cpu_clock_end(id_clock_hbd)
 
@@ -805,11 +761,10 @@ subroutine build_hbd_grid(nk, k_max, slope_bld, dx, hbd1, hbd2, CS)
 end subroutine build_hbd_grid
 
 !> Build the HBD grid where tracers will be rammaped to.
-subroutine hbd_grid(boundary, G, GV, VarMix, hbl, h, CS)
+subroutine hbd_grid(boundary, G, GV, hbl, h, CS)
   integer,                 intent(in   ) :: boundary !< Which boundary layer SURFACE or BOTTOM           [nondim]
   type(ocean_grid_type),   intent(inout) :: G    !< Grid type
   type(verticalGrid_type), intent(in)    :: GV   !< ocean vertical grid structure
-  type(VarMix_CS),         intent(in)    :: VarMix !< Variable mixing type
   real, dimension(SZI_(G),SZJ_(G))       :: hbl      !< Boundary layer depth                   [H ~> m or kg m-2]
   real, dimension(SZI_(G),SZJ_(G),SZK_(GV)), &
                           intent(in)     :: h        !< Layer thickness in the native grid     [H ~> m or kg m-2]
@@ -817,13 +772,6 @@ subroutine hbd_grid(boundary, G, GV, VarMix, hbl, h, CS)
 
   ! Local variables
   real, allocatable :: dz_top(:)     !< temporary HBD grid given by merge_interfaces        [H ~> m or kg m-2]
-  real :: slp_x !< Zonal isopycnal slope at the base of the boundary layer                            [nondim]
-  real :: slp_y !< Meridional isopycnal slope at the base of the boundary layer                       [nondim]
-  real :: hbd_slp_x
-  real :: hbd_slp_y
-  real :: h_vel(SZK_(GV)) !< Thicknesses at u- and v-points in the native grid
-                          !! The harmonic mean is used to avoid zero values      [H ~> m or kg m-2]
-  real    :: max_hbl      !< maximum boundary layer depth between left and right columns [H ~> m or kg m-2]
   integer :: k_bot_min, k_bot_max !< k-indices min and max, respectively.
   integer :: k_bot_L, k_bot_R !< k-indices for left and right columns, respectively.
   integer :: k_bot_diff   !< different between left and right k-indices.
@@ -832,7 +780,6 @@ subroutine hbd_grid(boundary, G, GV, VarMix, hbl, h, CS)
                           !! layer depth in the native grid                                [nondim]
   real    :: zeta_bot     !< distance from the bottom of a layer to the boundary
                                      !! layer depth in the native grid                                [nondim]
-  real    :: max_slope    !< Maximum isopycnal slope that can be represented by the HBD grid          [nondim]
   integer :: nk, i, j, k  !< number of layers in the HBD grid, and integers used in do-loops
 
   ! reset arrays
@@ -840,10 +787,6 @@ subroutine hbd_grid(boundary, G, GV, VarMix, hbl, h, CS)
   CS%hbd_grd_v(:,:,:,:) = CS%H_subroundoff
   CS%hbd_u_kmax(:,:)  = 0
   CS%hbd_v_kmax(:,:)  = 0
-
-  ! neutral surface slopes at the base of the boundary layer in i- and j-direction
-  slp_x = 0.
-  slp_y = 0.
 
   do j=G%jsc,G%jec
     do I=G%isc-1,G%iec
@@ -864,56 +807,12 @@ subroutine hbd_grid(boundary, G, GV, VarMix, hbl, h, CS)
           CS%hbd_grd_u(I,j,k,2) = dz_top(k)
         enddo
 
-        ! thicknesses at u-points on the native grid
-        h_vel(:) = 0.0
-        do k=1,GV%ke
-          h_vel(k) = harmonic_mean(h(I,j,k), h(I+1,j,k))
-        enddo
-
-        ! max hbl
-        max_hbl = max(hbl(I,j), hbl(I+1,j))
-
-        ! get zonal slope
-        call boundary_k_range(boundary, GV%ke, h_vel(:), max_hbl, k_top, zeta_top, k_bot, zeta_bot)
-        ! slp_x is at the interface, hence the + 1
-        slp_x = VarMix%slope_x(I,j,k_bot+1)
-        if (CS%id_slp_x > 0) CS%slp_x(I,j) = slp_x
-
         ! Calculate vertical indices containing the boundary layer in dz_top
         call boundary_k_range(boundary, nk, dz_top, hbl(I,j  ), k_top, zeta_top, k_bot_L, zeta_bot)
         call boundary_k_range(boundary, nk, dz_top, hbl(I+1,j), k_top, zeta_top, k_bot_R, zeta_bot)
         k_bot_min = MIN(k_bot_L, k_bot_R)
         k_bot_max = MAX(k_bot_L, k_bot_R)
         k_bot_diff = (k_bot_max - k_bot_min)
-
-        if ((k_bot_diff > 1) .and. (CS%transition)) then
-          ! compute the maximum slope allowed
-          max_slope = CS%delta_h/G%dxCu(I,j)
-          !max_slope = CS%delta_h
-
-          ! slope is > 0, right column is shallower
-          if (slp_x >= 0.) then
-            ! limit zonal slope
-            if (abs(slp_x) > max_slope) slp_x = max_slope
-            call build_hbd_grid(nk, k_bot_max, slp_x, G%dxCu(I,j), &
-                                CS%hbd_grd_u(I,j,:,1), &
-                                CS%hbd_grd_u(I,j,:,2), &
-                                CS)
-
-          ! slope is < 0, left column is shallower
-          else
-            ! limit zonal slope
-            if (abs(slp_x) > max_slope) slp_x = -max_slope
-            call build_hbd_grid(nk, k_bot_max, slp_x, G%dxCu(I,j), &
-                                CS%hbd_grd_u(I,j,:,2), &
-                                CS%hbd_grd_u(I,j,:,1), &
-                                CS)
-          endif
-        else
-          ! slope used is zero by definition
-          slp_x = 0.0
-        endif
-        if (CS%id_hbd_slp_x > 0) CS%hbd_slp_x(I,j) = slp_x
         deallocate(dz_top)
       endif
     enddo
@@ -939,20 +838,6 @@ subroutine hbd_grid(boundary, G, GV, VarMix, hbl, h, CS)
           CS%hbd_grd_v(i,J,k,2) = dz_top(k)
         enddo
 
-        ! thicknesses at v-points on the native grid
-        h_vel(:) = 0.0
-        do k=1,GV%ke
-          h_vel(k) = harmonic_mean(h(i,J,k), h(i,J+1,k))
-        enddo
-
-        ! max hbl
-        max_hbl = max(hbl(i,J), hbl(i,J+1))
-
-        call boundary_k_range(boundary, GV%ke, h_vel(:), max_hbl, k_top, zeta_top, k_bot, zeta_bot)
-        ! slp_y is at the interface, hence the + 1
-        slp_y = VarMix%slope_y(i,J,k_bot+1)
-        if (CS%id_slp_y > 0) CS%slp_y(i,J) = slp_y
-
         ! Calculate vertical indices containing the boundary layer in dz_top
         call boundary_k_range(boundary, nk, dz_top, hbl(i,J  ), k_top, zeta_top, k_bot_L, zeta_bot)
         call boundary_k_range(boundary, nk, dz_top, hbl(i,J+1), k_top, zeta_top, k_bot_R, zeta_bot)
@@ -960,33 +845,6 @@ subroutine hbd_grid(boundary, G, GV, VarMix, hbl, h, CS)
         k_bot_max = MAX(k_bot_L, k_bot_R)
         k_bot_diff = (k_bot_max - k_bot_min)
 
-        if ((k_bot_diff > 1) .and. (CS%transition)) then
-          ! compute the maximum slope allowed
-          max_slope = CS%delta_h/G%dyCv(i,J)
-          !max_slope = CS%delta_h
-
-          ! slope is > 0, right column is shallower
-          if (slp_y >= 0.) then
-            ! limit meridional slope
-            if (abs(slp_y) > max_slope) slp_y = max_slope
-            call build_hbd_grid(nk, k_bot_max, slp_y, G%dyCv(i,J), &
-                                CS%hbd_grd_v(i,J,:,1), &
-                                CS%hbd_grd_v(i,J,:,2), &
-                                CS)
-          ! slope is < 0, left column is shallower
-          else
-            ! limit meridional slope
-            if (abs(slp_y) > max_slope) slp_y = -max_slope
-            call build_hbd_grid(nk, k_bot_max, slp_y, G%dyCv(i,J), &
-                                CS%hbd_grd_v(i,J,:,2), &
-                                CS%hbd_grd_v(i,J,:,1), &
-                                CS)
-          endif
-        else
-          ! slope used is zero by definition
-          slp_y = 0.0
-        endif
-        if (CS%id_hbd_slp_y > 0) CS%hbd_slp_y(i,J) = slp_y
         deallocate(dz_top)
       endif
     enddo
@@ -1070,17 +928,40 @@ subroutine fluxes_layer_method(boundary, nk, hbd_nk, h_L, h_R, phi_L, phi_R, hbd
     k_bot_max = MAX(k_bot_L, k_bot_R)
     k_bot_diff = (k_bot_max - k_bot_min)
 
-    do k = k_bot_max,1,-1
-      !! GMM, this is the newest method, more general. It uses the actual thicknesses for
-      !! the left and right cells
-      F_layer_z(k) = -khtr_u * ((phi_R_z(k) * hbd_R(k)) - (phi_L_z(k) * hbd_L(k)))
-      if (CS%limiter_remap) call flux_limiter(F_layer_z(k), area_L, area_R, phi_L_z(k), &
-                                             phi_R_z(k), hbd_L(k), hbd_R(k))
-    enddo
+    ! tracer flux where the minimum BLD intersets layer
+    if ((CS%linear) .and. (k_bot_diff > 1)) then
+      ! apply linear decay at the base of hbl
+      do k = k_bot_min,1,-1
+        F_layer_z(k) = -khtr_u * ((phi_R_z(k) * hbd_R(k)) - (phi_L_z(k) * hbd_L(k)))
+        if (CS%limiter_remap) call flux_limiter(F_layer_z(k), area_L, area_R, phi_L_z(k), &
+                                          phi_R_z(k), hbd_L(k), hbd_R(k))
+      enddo
+      htot = 0.0
+      do k = k_bot_min+1,k_bot_max, 1
+        htot = htot + hbd_R(k)
+      enddo
 
-    do k = 1, hbd_nk
-      hbd_h_vel(k) = harmonic_mean(hbd_L(k), hbd_R(k))
-    enddo
+      a = -1.0/htot
+      htot = 0.
+      do k = k_bot_min+1,k_bot_max, 1
+        ! GMM, TODO: we only need hbd_R since hbd_L is the same
+        wgt = (a*(htot + (hbd_R(k) * 0.5))) + 1.0
+        F_layer_z(k) = -khtr_u * ((phi_R_z(k) * hbd_R(k)) - (phi_L_z(k) * hbd_L(k))) * wgt
+        htot = htot + hbd_R(k)
+        if (CS%limiter_remap) call flux_limiter(F_layer_z(k), area_L, area_R, phi_L_z(k), &
+                                          phi_R_z(k), hbd_L(k), hbd_R(k))
+      enddo
+    else
+
+      do k = k_bot_max,1,-1
+        !! GMM, this is the newest method, more general. It uses the actual thicknesses for
+        !! the left and right cells
+        F_layer_z(k) = -khtr_u * ((phi_R_z(k) * hbd_R(k)) - (phi_L_z(k) * hbd_L(k)))
+        if (CS%limiter_remap) call flux_limiter(F_layer_z(k), area_L, area_R, phi_L_z(k), &
+                                               phi_R_z(k), hbd_L(k), hbd_R(k))
+      enddo
+
+    endif
   endif
 
   ! TODO, boundary == BOTTOM
@@ -1088,6 +969,10 @@ subroutine fluxes_layer_method(boundary, nk, hbd_nk, h_L, h_R, phi_L, phi_R, hbd
   !  endif
 
   ! thicknesses at velocity points
+  do k = 1, hbd_nk
+    hbd_h_vel(k) = harmonic_mean(hbd_L(k), hbd_R(k))
+  enddo
+
   do k = 1,nk
     h_vel(k) = harmonic_mean(h_L(k), h_R(k))
   enddo
@@ -1095,7 +980,14 @@ subroutine fluxes_layer_method(boundary, nk, hbd_nk, h_L, h_R, phi_L, phi_R, hbd
   ! remap flux to h_vel (native grid)
   call reintegrate_column(hbd_nk, hbd_h_vel(:), F_layer_z(:), nk, h_vel(:), 0.0, F_layer(:))
 
-  htot_max = SUM(hbd_h_vel)
+  ! used to avoid fluxes below hbl
+  if (CS%linear) then
+    htot_max = MAX(hbl_L, hbl_R)
+  else
+    htot_max = MIN(hbl_L, hbl_R)
+  endif
+
+  !htot_max = SUM(hbd_h_vel)
 
   tmp1 = 0.0; tmp2 = 0.0
   do k = 1,nk
@@ -1143,6 +1035,7 @@ logical function near_boundary_unit_tests( verbose )
 
   allocate(CS)
   ! fill required fields in CS
+  CS%linear=.false.
   call initialize_remapping( CS%remap_CS, 'PLM', boundary_extrapolation = .true. ,&
        check_reconstruction = .true., check_remapping = .true.)
   call extract_member_remapping_CS(CS%remap_CS, degree=CS%deg)
