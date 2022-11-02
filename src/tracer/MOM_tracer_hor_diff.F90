@@ -406,7 +406,7 @@ subroutine tracer_hordiff(h, dt, MEKE, VarMix, G, GV, US, CS, Reg, tv, do_online
       if (itt>1) then ! Update halos for subsequent iterations
         call do_group_pass(CS%pass_t, G%Domain, clock=id_clock_pass)
       endif
-      call hor_bnd_diffusion(G, GV, US, h, Coef_x, Coef_y, I_numitts*dt, VarMix, Reg, &
+      call hor_bnd_diffusion(G, GV, US, h, Coef_x, Coef_y, I_numitts*dt, Reg, &
                              CS%hor_bnd_diffusion_CSp)
     enddo ! itt
   endif
