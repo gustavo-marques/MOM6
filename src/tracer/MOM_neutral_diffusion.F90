@@ -28,7 +28,7 @@ use MOM_CVMix_KPP,             only : KPP_get_BLD, KPP_CS
 use MOM_energetic_PBL,         only : energetic_PBL_get_MLD, energetic_PBL_CS
 use MOM_diabatic_driver,       only : diabatic_CS, extract_diabatic_member
 use MOM_io,                    only : stdout, stderr
-use MOM_hor_bnd_diffusion,     only : boundary_k_range, SURFACE, BOTTOM
+use MOM_hor_bnd_diffusion,     only : boundary_k_range, SURFACE, BOTTOM, harmonic_mean
 
 implicit none ; private
 
@@ -87,6 +87,9 @@ type, public :: neutral_diffusion_CS ; private
   real,    allocatable, dimension(:,:,:,:) :: dRdS_i !< dRho/dS [R S-1 ~> kg m-3 ppt-1] at top edge
   integer, allocatable, dimension(:,:)     :: ns     !< Number of interfaces in a column
   logical, allocatable, dimension(:,:,:) :: stable_cell !< True if the cell is stably stratified wrt to the next cell
+  ! Taper
+  real,    allocatable, dimension(:,:,:) :: taper_x  !< Taper for the zonal fluxes      [nondim]
+  real,    allocatable, dimension(:,:,:) :: taper_y  !< Taper for the meridional fluxes [nondim]
   real :: R_to_kg_m3 = 1.0                   !< A rescaling factor translating density to kg m-3 for
                                              !! use in diagnostic messages [kg m-3 R-1 ~> 1].
   type(diag_ctrl), pointer :: diag => NULL() !< A structure that is used to
@@ -95,8 +98,13 @@ type, public :: neutral_diffusion_CS ; private
   character(len=40)  :: delta_rho_form       !< Determine which (if any) approximation is made to the
                                              !! equation describing the difference in density
 
+  ! GMM, these are not registered via register_diag_field anywhere. Should they be deleted?
   integer :: id_uhEff_2d = -1 !< Diagnostic IDs
   integer :: id_vhEff_2d = -1 !< Diagnostic IDs
+  !>@{ Diagnostic IDs
+  integer :: id_taper_x = -1
+  integer :: id_taper_y = -1
+  !>@}
 
   type(EOS_type), pointer :: EOS => NULL()  !< Equation of state parameters
   type(remapping_CS) :: remap_CS   !< Remapping control structure used to create sublayers
@@ -295,6 +303,16 @@ logical function neutral_diffusion_init(Time, G, GV, US, param_file, diag, EOS, 
   allocate(CS%vKoR(G%isd:G%ied,G%jsd:G%jed, CS%nsurf), source=0)
   allocate(CS%vHeff(G%isd:G%ied,G%jsd:G%jed,CS%nsurf-1), source=0.)
 
+  if (CS%interior_only) then
+    allocate(CS%taper_x(SZIB_(G),SZJ_(G),SZK_(GV)), source=1.)
+    allocate(CS%taper_y(SZI_(G),SZJB_(G),SZK_(GV)), source=1.)
+
+    CS%id_taper_x = register_diag_field('ocean_model', 'taper_x_neutral_diff', CS%diag%axesCuL, Time,    &
+        'Taper function used in the zonal fluxes due to neutral diffusion', 'nondim')
+    CS%id_taper_y = register_diag_field('ocean_model', 'taper_y_neutral_diff', CS%diag%axesCvL, Time,    &
+        'Taper function used in the meridional fluxes due to neutral diffusion', 'nondim')
+  endif
+
 end function neutral_diffusion_init
 
 !> Calculate remapping factors for u/v columns used to map adjoining columns to
@@ -320,18 +338,31 @@ subroutine neutral_diffusion_calc_coeffs(G, GV, US, h, T, S, CS, p_surf)
   integer :: iMethod
   real, dimension(SZI_(G)) :: ref_pres ! Reference pressure used to calculate alpha/beta [R L2 T-2 ~> Pa]
   real :: h_neglect, h_neglect_edge    ! Negligible thicknesses [H ~> m or kg m-2]
-  integer, dimension(SZI_(G), SZJ_(G)) :: k_top  ! Index of the first layer within the boundary
-  real,    dimension(SZI_(G), SZJ_(G)) :: zeta_top ! Distance from the top of a layer to the intersection of the
-                                                   ! top extent of the boundary layer (0 at top, 1 at bottom) [nondim]
-  integer, dimension(SZI_(G), SZJ_(G)) :: k_bot    ! Index of the last layer within the boundary
-  real,    dimension(SZI_(G), SZJ_(G)) :: zeta_bot ! Distance of the lower layer to the boundary layer depth [nondim]
+  integer, dimension(SZIB_(G), SZJ_(G),2) :: k_min_x ! Distance of the lower layer to the boundary layer depth u-pts [nondim]
+  integer, dimension(SZI_(G), SZJB_(G),2) :: k_min_y ! Distance of the lower layer to the boundary layer depth v-pts [nondim]
+  integer, dimension(SZIB_(G), SZJ_(G),2) :: k_max_x ! Distance of the lower layer to the boundary layer depth u-pts [nondim]
+  integer, dimension(SZI_(G), SZJB_(G),2) :: k_max_y ! Distance of the lower layer to the boundary layer depth v-pts [nondim]
+  real,    dimension(SZIB_(G), SZJ_(G),2) :: zeta_k_min_x ! Distance of the lower layer to the boundary layer depth u-pts [nondim]
+  real,    dimension(SZI_(G), SZJB_(G),2) :: zeta_k_min_y ! Distance of the lower layer to the boundary layer depth v-pts [nondim]
+  real,    dimension(SZIB_(G), SZJ_(G),2) :: zeta_k_max_x ! Distance of the lower layer to the boundary layer depth u-pts [nondim]
+  real,    dimension(SZI_(G), SZJB_(G),2) :: zeta_k_max_y ! Distance of the lower layer to the boundary layer depth v-pts [nondim]
+  real,    dimension(SZK_(GV))            :: h_vel        ! thickness at velocity pts (u and v)                 [H ~> m or kg m-2]
   real :: pa_to_H                      ! A conversion factor from rescaled pressure to thickness
                                        ! (H) units [H T2 R-1 Z-2 ~> m Pa-1 or s2 m-1]
+  real :: min_hbl, max_hbl             ! Min/Max boundary layer depth in two adjacent columns
+  integer :: dummy1                    ! dummy variable
+  real    :: dummy2                    ! dummy variable
+  integer :: k_min, k_max              ! TODO: dummy variables
+  real    :: zeta_k_min, zeta_k_max    ! TODO: dummy variables
 
+  real, dimension(SZIB_(G),SZJ_(G))            :: trans_x_2d  ! depth integrated diffusive tracer x-transport diagn
+  real, dimension(SZI_(G),SZJB_(G))            :: trans_y_2d  ! depth integrated diffusive tracer y-transport diagn
   pa_to_H = 1. / (GV%H_to_RZ * GV%g_Earth)
 
-  k_top(:,:) = 1     ; k_bot(:,:) = 1
-  zeta_top(:,:) = 0. ; zeta_bot(:,:) = 0.
+  k_min_x(:,:,:) = 1       ; k_min_y(:,:,:) = 1
+  zeta_k_min_x(:,:,:) = 0. ; zeta_k_min_y(:,:,:) = 0.
+  k_max_x(:,:,:) = 1       ; k_max_y(:,:,:) = 1
+  zeta_k_max_x(:,:,:) = 0. ; zeta_k_max_y(:,:,:) = 0.
 
   ! Check if hbl needs to be extracted
   if (CS%interior_only) then
@@ -339,12 +370,6 @@ subroutine neutral_diffusion_calc_coeffs(G, GV, US, h, T, S, CS, p_surf)
     if (ASSOCIATED(CS%energetic_PBL_CSp)) call energetic_PBL_get_MLD(CS%energetic_PBL_CSp, hbl, G, US, &
                                                                      m_to_MLD_units=GV%m_to_H)
     call pass_var(hbl,G%Domain)
-    ! get k-indices and zeta
-    do j=G%jsc-1, G%jec+1 ; do i=G%isc-1,G%iec+1
-      if (G%mask2dT(i,j) > 0.0) then
-        call boundary_k_range(SURFACE, G%ke, h(i,j,:), hbl(i,j), k_top(i,j), zeta_top(i,j), k_bot(i,j), zeta_bot(i,j))
-      endif
-    enddo; enddo
     ! TODO: add similar code for BOTTOM boundary layer
   endif
 
@@ -457,9 +482,12 @@ subroutine neutral_diffusion_calc_coeffs(G, GV, US, h, T, S, CS, p_surf)
     do j = G%jsc-1, G%jec+1 ; do i = G%isc-1, G%iec+1
       call mark_unstable_cells( CS, GV%ke, CS%T_i(i,j,:,:), CS%S_i(i,j,:,:), CS%P_i(i,j,:,:), CS%stable_cell(i,j,:) )
       if (CS%interior_only) then
-        if (.not. CS%stable_cell(i,j,k_bot(i,j))) zeta_bot(i,j) = -1.
+        ! GMM, transition needs work
+        !if (.not. CS%stable_cell(i,j,k_bot(i,j))) zeta_bot(i,j) = -1.
+        !if (.not. CS%stable_cell(i,j,1))) zeta_top(i,j) = -1.
         ! set values in the surface and bottom boundary layer to false.
-        do k = 1, k_bot(i,j)
+        !do k = 1, k_bot(i,j)
+        do k = 1, 1
           CS%stable_cell(i,j,k) = .false.
         enddo
       endif
@@ -477,6 +505,77 @@ subroutine neutral_diffusion_calc_coeffs(G, GV, US, h, T, S, CS, p_surf)
   CS%uKoR(:,:,:) = 1
   CS%vKoR(:,:,:) = 1
 
+  if (CS%interior_only) then
+    CS%taper_x(:,:,:) = 1.0
+    CS%taper_y(:,:,:) = 1.0
+    ! BLD indices for zonal (x) fluxes
+    do j = G%jsc, G%jec ; do I = G%isc-1, G%iec
+      if (G%mask2dCu(I,j) > 0.0) then
+        ! Calculate vertical indices containing the boundary layer
+        max_hbl = MAX(hbl(I,j), hbl(I+1,j))
+        min_hbl = MIN(hbl(I,j), hbl(I+1,j))
+        ! k_min
+        call boundary_k_range(SURFACE, G%ke, h(I,j,:),   min_hbl, dummy1, dummy2, k_min_x(I,j,1), &
+                              zeta_k_min_x(I,j,1))
+        call boundary_k_range(SURFACE, G%ke, h(I+1,j,:), min_hbl, dummy1, dummy2, k_min_x(I,j,2), &
+                              zeta_k_min_x(I,j,2))
+        ! k_max
+        call boundary_k_range(SURFACE, G%ke, h(I,j,:),   max_hbl, dummy1, dummy2, k_max_x(I,j,1),  &
+                              zeta_k_max_x(I,j,1))
+        call boundary_k_range(SURFACE, G%ke, h(I+1,j,:), max_hbl, dummy1, dummy2, k_max_x(I,j,2),&
+                              zeta_k_max_x(I,j,2))
+
+        ! h at u-pts
+        do k = 1, GV%ke
+          h_vel(k) = harmonic_mean(h(I,j,k),h(I+1,j,k))
+        enddo
+
+        call boundary_k_range(SURFACE, G%ke, h_vel(:),   min_hbl, dummy1, dummy2, k_min, zeta_k_min)
+        call boundary_k_range(SURFACE, G%ke, h_vel(:),   max_hbl, dummy1, dummy2, k_max, zeta_k_max)
+        !do k=1, k_min
+        !  CS%taper_x(I,j,k) = 0.0
+        !enddo
+        ! linear transition
+        !do k=k_min+1, k_max
+        !  CS%taper_x(I,j,k) = real((k - k_min))/real((k_max - k_min))
+        !enddo
+      endif
+    enddo ; enddo
+
+    do J = G%jsc-1, G%jec ; do i = G%isc, G%iec
+      if (G%mask2dCv(i,J) > 0.0) then
+        ! Calculate vertical indices containing the boundary layer
+        max_hbl = MAX(hbl(i,J), hbl(i,J+1))
+        min_hbl = MIN(hbl(i,J), hbl(i,J+1))
+        ! k_min
+        call boundary_k_range(SURFACE, G%ke, h(i,J,:),   min_hbl, dummy1, dummy2, k_min_y(i,J,1), &
+                              zeta_k_min_y(i,J,1))
+        call boundary_k_range(SURFACE, G%ke, h(i,J+1,:), min_hbl, dummy1, dummy2, k_min_y(i,J,2), &
+                              zeta_k_min_y(i,J,2))
+        ! k_max
+        call boundary_k_range(SURFACE, G%ke, h(i,J,:),   max_hbl, dummy1, dummy2, k_max_y(i,J,1),  &
+                              zeta_k_max_y(i,J,1))
+        call boundary_k_range(SURFACE, G%ke, h(i,J+1,:), max_hbl, dummy1, dummy2, k_max_y(i,J,2),&
+                              zeta_k_max_y(i,J,2))
+
+        ! h at v-pts
+        do k = 1, GV%ke
+          h_vel(k) = harmonic_mean(h(i,J,k),h(i,J+1,k))
+        enddo
+
+        call boundary_k_range(SURFACE, G%ke, h_vel(:), min_hbl, dummy1, dummy2, k_min, zeta_k_min)
+        call boundary_k_range(SURFACE, G%ke, h_vel(:), max_hbl, dummy1, dummy2, k_max, zeta_k_max)
+        !do k=1, k_min
+        !  CS%taper_y(i,J,k) = 0.0
+        !enddo
+        ! linear transition
+        !do k=k_min+1, k_max
+        !  CS%taper_y(i,J,k) = real((k - k_min))/real((k_max - k_min))
+        !enddo
+      endif
+    enddo ; enddo
+  endif
+
   ! Neutral surface factors at U points
   do j = G%jsc, G%jec ; do I = G%isc-1, G%iec
     if (G%mask2dCu(I,j) > 0.0) then
@@ -485,7 +584,9 @@ subroutine neutral_diffusion_calc_coeffs(G, GV, US, h, T, S, CS, p_surf)
                 CS%Pint(i,j,:), CS%Tint(i,j,:), CS%Sint(i,j,:), CS%dRdT(i,j,:), CS%dRdS(i,j,:),            &
                 CS%Pint(i+1,j,:), CS%Tint(i+1,j,:), CS%Sint(i+1,j,:), CS%dRdT(i+1,j,:), CS%dRdS(i+1,j,:),  &
                 CS%uPoL(I,j,:), CS%uPoR(I,j,:), CS%uKoL(I,j,:), CS%uKoR(I,j,:), CS%uhEff(I,j,:),           &
-                k_bot(I,j), k_bot(I+1,j), zeta_bot(I,j), zeta_bot(I+1,j))
+                !k_bot_L(I,j), k_bot_R(I+1,j), zeta_bot(I,j), zeta_bot(I+1,j)) !
+                !GMM, transition
+                k_min_x(I,j,1), k_min_x(I,j,2), zeta_k_min_x(I,j,1), zeta_k_min_x(I,j,2))
       else
         call find_neutral_surface_positions_discontinuous(CS, GV%ke, &
             CS%P_i(i,j,:,:), h(i,j,:), CS%T_i(i,j,:,:), CS%S_i(i,j,:,:), CS%ppoly_coeffs_T(i,j,:,:),           &
@@ -506,7 +607,9 @@ subroutine neutral_diffusion_calc_coeffs(G, GV, US, h, T, S, CS, p_surf)
                 CS%Pint(i,j,:), CS%Tint(i,j,:), CS%Sint(i,j,:), CS%dRdT(i,j,:), CS%dRdS(i,j,:),           &
                 CS%Pint(i,j+1,:), CS%Tint(i,j+1,:), CS%Sint(i,j+1,:), CS%dRdT(i,j+1,:), CS%dRdS(i,j+1,:), &
                 CS%vPoL(i,J,:), CS%vPoR(i,J,:), CS%vKoL(i,J,:), CS%vKoR(i,J,:), CS%vhEff(i,J,:),          &
-                k_bot(i,J), k_bot(i,J+1), zeta_bot(i,J), zeta_bot(i,J+1))
+                !k_bot(i,J), k_bot(i,J+1), zeta_bot(i,J), zeta_bot(i,J+1))
+                !GMM, transition
+                k_min_y(i,J,1), k_min_y(i,J,2), zeta_k_min_y(i,J,1), zeta_k_min_y(i,J,2))
       else
         call find_neutral_surface_positions_discontinuous(CS, GV%ke, &
             CS%P_i(i,j,:,:), h(i,j,:), CS%T_i(i,j,:,:), CS%S_i(i,j,:,:), CS%ppoly_coeffs_T(i,j,:,:),           &
@@ -640,20 +743,39 @@ subroutine neutral_diffusion(G, GV, h, Coef_x, Coef_y, dt, Reg, US, CS)
       endif
     enddo ; enddo
 
+    do j = G%jsc,G%jec ; do i = G%isc,G%iec
+      if (G%mask2dT(i,j)>0.) then
+        do ks = 1,CS%nsurf-1
+          kl = CS%uKoL(I,j,ks)
+          kr = CS%uKoR(I-1,j,ks)
+          if (CS%taper_x(I,j,k) < 1. .or. CS%taper_x(I-1,j,k) < 1.) then
+            CS%taper_x(I,j,kl) = min(CS%taper_x(I,j,kl), CS%taper_x(I-1,j,kr))
+            CS%taper_x(I-1,j,kr) = CS%taper_x(I,j,kl)
+          endif
+          kl = CS%vKoL(i,J,ks)
+          kr = CS%vKoR(i,J-1,ks)
+          if (CS%taper_y(i,J,k) < 1. .or. CS%taper_y(i,J-1,k) < 1.) then
+            CS%taper_y(i,J,kl) = min(CS%taper_y(i,J,kl), CS%taper_y(i,J-1,kr))
+            CS%taper_y(i,J-1,kr) = CS%taper_y(i,J,kl)
+          endif
+        enddo
+      endif
+    enddo ; enddo
+
     ! Update the tracer concentration from divergence of neutral diffusive flux components
     do j = G%jsc,G%jec ; do i = G%isc,G%iec
       if (G%mask2dT(i,j)>0.) then
-
         dTracer(:) = 0.
         do ks = 1,CS%nsurf-1
           k = CS%uKoL(I,j,ks)
-          dTracer(k) = dTracer(k) + Coef_x(I,j)   * uFlx(I,j,ks)
+          ! GMM, 3D Coef_x and Coef_y
+          dTracer(k) = dTracer(k) + Coef_x(I,j)   * uFlx(I,j,ks)   * CS%taper_x(I,j,k)
           k = CS%uKoR(I-1,j,ks)
-          dTracer(k) = dTracer(k) - Coef_x(I-1,j) * uFlx(I-1,j,ks)
+          dTracer(k) = dTracer(k) - Coef_x(I-1,j) * uFlx(I-1,j,ks) * CS%taper_x(I-1,j,k)
           k = CS%vKoL(i,J,ks)
-          dTracer(k) = dTracer(k) + Coef_y(i,J)   * vFlx(i,J,ks)
+          dTracer(k) = dTracer(k) + Coef_y(i,J)   * vFlx(i,J,ks)   * CS%taper_y(i,J,k)
           k = CS%vKoR(i,J-1,ks)
-          dTracer(k) = dTracer(k) - Coef_y(i,J-1) * vFlx(i,J-1,ks)
+          dTracer(k) = dTracer(k) - Coef_y(i,J-1) * vFlx(i,J-1,ks) * CS%taper_y(i,J-1,k)
         enddo
         do k = 1, GV%ke
           tracer%t(i,j,k) = tracer%t(i,j,k) + dTracer(k) * &
@@ -684,13 +806,19 @@ subroutine neutral_diffusion(G, GV, h, Coef_x, Coef_y, dt, Reg, US, CS)
         trans_x_2d(I,j) = 0.
         if (G%mask2dCu(I,j)>0.) then
           do ks = 1,CS%nsurf-1
-            trans_x_2d(I,j) = trans_x_2d(I,j) - Coef_x(I,j) * uFlx(I,j,ks)
+            k = CS%uKoL(I,j,ks)
+            ! GMM, TODO: check that trans_x_2d is computed correctly
+            trans_x_2d(I,j) = trans_x_2d(I,j) - Coef_x(I,j) * uFlx(I,j,ks) * CS%taper_x(I,j,k)
           enddo
           trans_x_2d(I,j) = trans_x_2d(I,j) * Idt
         endif
       enddo ; enddo
       call post_data(tracer%id_dfx_2d, trans_x_2d(:,:), CS%diag)
     endif
+
+    ! GMM, post taper
+    if (CS%id_taper_x > 0) call post_data(CS%id_taper_x, CS%taper_x(:,:,:), CS%diag)
+    if (CS%id_taper_y > 0) call post_data(CS%id_taper_y, CS%taper_y(:,:,:), CS%diag)
 
     ! Diagnose vertically summed merid flux, giving meridional tracer transport from ndiff.
     ! Note sign corresponds to downgradient flux convention.
@@ -699,7 +827,9 @@ subroutine neutral_diffusion(G, GV, h, Coef_x, Coef_y, dt, Reg, US, CS)
         trans_y_2d(i,J) = 0.
         if (G%mask2dCv(i,J)>0.) then
           do ks = 1,CS%nsurf-1
-            trans_y_2d(i,J) = trans_y_2d(i,J) - Coef_y(i,J) * vFlx(i,J,ks)
+            k = CS%vKoL(i,J,ks)
+            ! GMM, TODO: check that trans_y_2d is computed correctly
+            trans_y_2d(i,J) = trans_y_2d(i,J) - Coef_y(i,J) * vFlx(i,J,ks) * CS%taper_y(i,J,k)
           enddo
           trans_y_2d(i,J) = trans_y_2d(i,J) * Idt
         endif
