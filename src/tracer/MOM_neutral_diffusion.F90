@@ -27,8 +27,8 @@ use regrid_edge_values,        only : edge_values_implicit_h4
 use MOM_CVMix_KPP,             only : KPP_get_BLD, KPP_CS
 use MOM_energetic_PBL,         only : energetic_PBL_get_MLD, energetic_PBL_CS
 use MOM_diabatic_driver,       only : diabatic_CS, extract_diabatic_member
-use MOM_lateral_boundary_diffusion, only : boundary_k_range, SURFACE, BOTTOM
 use MOM_io,                    only : stdout, stderr
+use MOM_hor_bnd_diffusion,     only : boundary_k_range, SURFACE, BOTTOM
 
 implicit none ; private
 
@@ -251,13 +251,14 @@ logical function neutral_diffusion_init(Time, G, GV, US, param_file, diag, EOS, 
                    default = .true.)
   endif
 
-  if (CS%interior_only) then
-    call extract_diabatic_member(diabatic_CSp, KPP_CSp=CS%KPP_CSp)
-    call extract_diabatic_member(diabatic_CSp, energetic_PBL_CSp=CS%energetic_PBL_CSp)
-    if ( .not. ASSOCIATED(CS%energetic_PBL_CSp) .and. .not. ASSOCIATED(CS%KPP_CSp) ) then
-      call MOM_error(FATAL,"NDIFF_INTERIOR_ONLY is true, but no valid boundary layer scheme was found")
-    endif
-  endif
+  !GMM, the following must be commented out in the idealized exps
+  !if (CS%interior_only) then
+  !  call extract_diabatic_member(diabatic_CSp, KPP_CSp=CS%KPP_CSp)
+  !  call extract_diabatic_member(diabatic_CSp, energetic_PBL_CSp=CS%energetic_PBL_CSp)
+  !  if ( .not. ASSOCIATED(CS%energetic_PBL_CSp) .and. .not. ASSOCIATED(CS%KPP_CSp) ) then
+  !    call MOM_error(FATAL,"NDIFF_INTERIOR_ONLY is true, but no valid boundary layer scheme was found")
+  !  endif
+  !endif
   ! Store a rescaling factor for use in diagnostic messages.
   CS%R_to_kg_m3 = US%R_to_kg_m3
 
@@ -333,12 +334,19 @@ subroutine neutral_diffusion_calc_coeffs(G, GV, US, h, T, S, CS, p_surf)
   k_top(:,:) = 1     ; k_bot(:,:) = 1
   zeta_top(:,:) = 0. ; zeta_bot(:,:) = 0.
 
+
+
   ! Check if hbl needs to be extracted
   if (CS%interior_only) then
-    if (ASSOCIATED(CS%KPP_CSp)) call KPP_get_BLD(CS%KPP_CSp, hbl, G, US, m_to_BLD_units=GV%m_to_H)
-    if (ASSOCIATED(CS%energetic_PBL_CSp)) call energetic_PBL_get_MLD(CS%energetic_PBL_CSp, hbl, G, US, &
-                                                                     m_to_MLD_units=GV%m_to_H)
+    ! GMM, the following must be commented out in the idealized exps
+    !if (ASSOCIATED(CS%KPP_CSp)) call KPP_get_BLD(CS%KPP_CSp, hbl, G, US, m_to_BLD_units=GV%m_to_H)
+    !if (ASSOCIATED(CS%energetic_PBL_CSp)) call energetic_PBL_get_MLD(CS%energetic_PBL_CSp, hbl, G, US, &
+    !                                                                 m_to_MLD_units=GV%m_to_H)
+
     call pass_var(hbl,G%Domain)
+    !GMM, set the following in the idealized exps
+    hbl(:,:) = 100.
+    hbl(4:6,:) = 300.
     ! get k-indices and zeta
     do j=G%jsc-1, G%jec+1 ; do i=G%isc-1,G%iec+1
       if (G%mask2dT(i,j) > 0.0) then
@@ -605,10 +613,14 @@ subroutine neutral_diffusion(G, GV, h, Coef_x, Coef_y, dt, Reg, US, CS)
 
   ! Check if hbl needs to be extracted
   if (CS%interior_only) then
-    if (ASSOCIATED(CS%KPP_CSp)) call KPP_get_BLD(CS%KPP_CSp, hbl, G, US, m_to_BLD_units=GV%m_to_H)
-    if (ASSOCIATED(CS%energetic_PBL_CSp)) call energetic_PBL_get_MLD(CS%energetic_PBL_CSp, hbl, G, US, &
-                                                                     m_to_MLD_units=GV%m_to_H)
+    !GMM, the following must be commented out in the idealized exps
+    !if (ASSOCIATED(CS%KPP_CSp)) call KPP_get_BLD(CS%KPP_CSp, hbl, G, US, m_to_BLD_units=GV%m_to_H)
+    !if (ASSOCIATED(CS%energetic_PBL_CSp)) call energetic_PBL_get_MLD(CS%energetic_PBL_CSp, hbl, G, US, &
+    !                                                                 m_to_MLD_units=GV%m_to_H)
     call pass_var(hbl,G%Domain)
+    !GMM, set the following in the idealized exps
+    hbl(:,:) = 100.
+    hbl(4:6,:) = 300.
     ! TODO: add similar code for BOTTOM boundary layer
   endif
 
