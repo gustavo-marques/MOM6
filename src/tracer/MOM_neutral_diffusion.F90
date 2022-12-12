@@ -53,6 +53,7 @@ type, public :: neutral_diffusion_CS ; private
                       !! density [R L2 T-2 ~> Pa]
   logical :: interior_only !< If true, only applies neutral diffusion in the ocean interior.
                       !! That is, the algorithm will exclude the surface and bottom boundary layers.
+  logical :: tapering !< GMM, TODO If true, neutral diffusion decays towards zero within the transition zone.
   logical :: use_unmasked_transport_bug !< If true, use an older form for the accumulation of
                       !! neutral-diffusion transports that were unmasked, as used prior to Jan 2018.
   ! Positions of neutral surfaces in both the u, v directions
@@ -172,6 +173,9 @@ logical function neutral_diffusion_init(Time, G, GV, US, param_file, diag, EOS, 
                  "If true, only applies neutral diffusion in the ocean interior."//&
                  "That is, the algorithm will exclude the surface and bottom"//&
                  "boundary layers.", default=.false.)
+  call get_param(param_file, mdl, "NDIFF_TAPERING", CS%tapering, &
+                 "If true, neutral deffusion lineraly decays to zero within "//&
+                 "the transition zone.", default=.false.)
   call get_param(param_file, mdl, "NDIFF_USE_UNMASKED_TRANSPORT_BUG", CS%use_unmasked_transport_bug, &
                  "If true, use an older form for the accumulation of neutral-diffusion "//&
                  "transports that were unmasked, as used prior to Jan 2018. This is not "//&
@@ -606,13 +610,13 @@ subroutine neutral_diffusion(G, GV, h, Coef_x, Coef_y, dt, Reg, US, CS)
   real :: min_hbl, max_hbl             ! Min/Max boundary layer depth in two adjacent columns
   integer :: dummy1                    ! dummy variable
   real    :: dummy2                    ! dummy variable
-  integer :: k_min_l, k_min_r              ! TODO: dummy variables
+  integer :: k_min_l, k_min_r, k_max_l, k_max_r  ! TODO: dummy variables
   real    :: zeta_l, zeta_r            ! TODO: dummy variables
 
   h_neglect = GV%H_subroundoff ; h_neglect_edge = GV%H_subroundoff
 
   ! Check if hbl needs to be extracted
-  if (CS%interior_only) then
+  if (CS%tapering) then
     !GMM, the following must be commented out in the idealized exps
     !if (ASSOCIATED(CS%KPP_CSp)) call KPP_get_BLD(CS%KPP_CSp, hbl, G, US, m_to_BLD_units=GV%m_to_H)
     !if (ASSOCIATED(CS%energetic_PBL_CSp)) call energetic_PBL_get_MLD(CS%energetic_PBL_CSp, hbl, G, US, &
@@ -632,8 +636,8 @@ subroutine neutral_diffusion(G, GV, h, Coef_x, Coef_y, dt, Reg, US, CS)
 
   nk = GV%ke
 
-  khtr_l(:) = 1.0
-  khtr_r(:) = 1.0
+  !khtr_l(:) = 1.0
+  !khtr_r(:) = 1.0
   do m = 1,Reg%ntr ! Loop over tracer registry
 
     tracer => Reg%Tr(m)
@@ -653,21 +657,33 @@ subroutine neutral_diffusion(G, GV, h, Coef_x, Coef_y, dt, Reg, US, CS)
       khtr_l(:) = 1.0
       khtr_r(:) = 1.0
       if (G%mask2dCu(I,j)>0.) then
-        if (CS%interior_only) then
+        if (CS%tapering) then
           ! Calculate vertical indices containing the boundary layer
-          !max_hbl = MAX(hbl(I,j), hbl(I+1,j))
+          max_hbl = MAX(hbl(I,j), hbl(I+1,j))
           min_hbl = MIN(hbl(I,j), hbl(I+1,j))
           ! k_min
           call boundary_k_range(SURFACE, G%ke, h(I,j,:),   min_hbl, dummy1, dummy2, k_min_l, &
                               zeta_l)
           call boundary_k_range(SURFACE, G%ke, h(I+1,j,:), min_hbl, dummy1, dummy2, k_min_r, &
                               zeta_r)
+          ! k_max
+          call boundary_k_range(SURFACE, G%ke, h(I,j,:),   max_hbl, dummy1, dummy2, k_max_l, &
+                              zeta_l)
+          call boundary_k_range(SURFACE, G%ke, h(I+1,j,:), max_hbl, dummy1, dummy2, k_max_r, &
+                              zeta_r)
 
-          do k=1, k_min_l+1
+          do k=1,k_min_l
             khtr_l(k) = 0.0
           enddo
-          do k=1, k_min_r+1
+          do k=k_min_l+1,k_max_l+1
+            khtr_l(k) = (real(k - k_min_l) + 1.0)/(real(k_max_l - k_min_l) + 2.0)
+          enddo
+
+          do k=1,k_min_r
             khtr_r(k) = 0.0
+          enddo
+          do k=k_min_r+1,k_max_r+1
+            khtr_r(k) = (real(k - k_min_r) + 1.0)/(real(k_max_r - k_min_r) + 2.0)
           enddo
         endif
 
@@ -686,9 +702,9 @@ subroutine neutral_diffusion(G, GV, h, Coef_x, Coef_y, dt, Reg, US, CS)
       khtr_l(:) = 1.0
       khtr_r(:) = 1.0
       if (G%mask2dCv(i,J)>0.) then
-        if (CS%interior_only) then
+        if (CS%tapering) then
           ! Calculate vertical indices containing the boundary layer
-          !max_hbl = MAX(hbl(i,J), hbl(i,J+1))
+          max_hbl = MAX(hbl(i,J), hbl(i,J+1))
           min_hbl = MIN(hbl(i,J), hbl(i,J+1))
           ! k_min
           call boundary_k_range(SURFACE, G%ke, h(i,J,:),   min_hbl, dummy1, dummy2, k_min_l, &
@@ -696,13 +712,27 @@ subroutine neutral_diffusion(G, GV, h, Coef_x, Coef_y, dt, Reg, US, CS)
           call boundary_k_range(SURFACE, G%ke, h(i,J+1,:), min_hbl, dummy1, dummy2, k_min_r, &
                               zeta_r)
 
-          do k=1, k_min_l+1
+          ! k_max
+          call boundary_k_range(SURFACE, G%ke, h(I,j,:),   max_hbl, dummy1, dummy2, k_max_l, &
+                              zeta_l)
+          call boundary_k_range(SURFACE, G%ke, h(I+1,j,:), max_hbl, dummy1, dummy2, k_max_r, &
+                              zeta_r)
+
+          do k=1,k_min_l
             khtr_l(k) = 0.0
           enddo
-          do k=1, k_min_r+1
+          do k=k_min_l+1,k_max_l+1
+            khtr_l(k) = (real(k - k_min_l) + 1.0)/(real(k_max_l - k_min_l) + 2.0)
+          enddo
+
+          do k=1,k_min_r
             khtr_r(k) = 0.0
           enddo
+          do k=k_min_r+1,k_max_r+1
+            khtr_r(k) = (real(k - k_min_r) + 1.0)/(real(k_max_r - k_min_r) + 2.0)
+          enddo
         endif
+
         call neutral_surface_flux(nk, CS%nsurf, CS%deg, h(i,j,:), h(i,j+1,:),       &
                                   tracer%t(i,j,:), tracer%t(i,j+1,:), &
                                   CS%vPoL(i,J,:), CS%vPoR(i,J,:), &
