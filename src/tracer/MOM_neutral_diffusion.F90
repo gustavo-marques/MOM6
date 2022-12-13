@@ -53,6 +53,7 @@ type, public :: neutral_diffusion_CS ; private
                       !! density [R L2 T-2 ~> Pa]
   logical :: interior_only !< If true, only applies neutral diffusion in the ocean interior.
                       !! That is, the algorithm will exclude the surface and bottom boundary layers.
+  logical :: tapering !< GMM, TODO If true, neutral diffusion decays towards zero within the transition zone.
   logical :: use_unmasked_transport_bug !< If true, use an older form for the accumulation of
                       !! neutral-diffusion transports that were unmasked, as used prior to Jan 2018.
   ! Positions of neutral surfaces in both the u, v directions
@@ -172,6 +173,9 @@ logical function neutral_diffusion_init(Time, G, GV, US, param_file, diag, EOS, 
                  "If true, only applies neutral diffusion in the ocean interior."//&
                  "That is, the algorithm will exclude the surface and bottom"//&
                  "boundary layers.", default=.false.)
+  call get_param(param_file, mdl, "NDIFF_TAPERING", CS%tapering, &
+                 "If true, neutral diffusion linearly decays to zero within "//&
+                 "a transition zone defined using boundary layer depths.", default=.false.)
   call get_param(param_file, mdl, "NDIFF_USE_UNMASKED_TRANSPORT_BUG", CS%use_unmasked_transport_bug, &
                  "If true, use an older form for the accumulation of neutral-diffusion "//&
                  "transports that were unmasked, as used prior to Jan 2018. This is not "//&
@@ -333,11 +337,14 @@ subroutine neutral_diffusion_calc_coeffs(G, GV, US, h, T, S, CS, p_surf)
   k_top(:,:) = 1     ; k_bot(:,:) = 1
   zeta_top(:,:) = 0. ; zeta_bot(:,:) = 0.
 
+
+
   ! Check if hbl needs to be extracted
   if (CS%interior_only) then
     if (ASSOCIATED(CS%KPP_CSp)) call KPP_get_BLD(CS%KPP_CSp, hbl, G, US, m_to_BLD_units=GV%m_to_H)
     if (ASSOCIATED(CS%energetic_PBL_CSp)) call energetic_PBL_get_MLD(CS%energetic_PBL_CSp, hbl, G, US, &
                                                                      m_to_MLD_units=GV%m_to_H)
+
     call pass_var(hbl,G%Domain)
     ! get k-indices and zeta
     do j=G%jsc-1, G%jec+1 ; do i=G%isc-1,G%iec+1
@@ -585,7 +592,12 @@ subroutine neutral_diffusion(G, GV, h, Coef_x, Coef_y, dt, Reg, US, CS)
   real, dimension(SZI_(G),SZJB_(G))            :: trans_y_2d  ! depth integrated diffusive tracer y-transport diagn
   real, dimension(SZK_(GV))                    :: dTracer     ! change in tracer concentration due to ndiffusion
                                                               ! [H L2 conc ~> m3 conc or kg conc]
+  real, dimension(SZI_(G),SZJ_(G))             :: hbl         ! Boundary layer depth [H ~> m or kg m-2]
 
+  real, dimension(SZK_(GV)+1)                  :: coeff_l     ! Coeficients used to apply tapering from neutral to
+                                                              ! horizontal, left column                   [nondim]
+  real, dimension(SZK_(GV)+1)                  :: coeff_r     ! Coeficients used to apply tapering from neutral to
+                                                              ! horizontal, right column                   [nondim]
   type(tracer_type), pointer                   :: Tracer => NULL() ! Pointer to the current tracer
 
   integer :: i, j, k, m, ks, nk
@@ -593,6 +605,15 @@ subroutine neutral_diffusion(G, GV, h, Coef_x, Coef_y, dt, Reg, US, CS)
   real :: h_neglect, h_neglect_edge ! Negligible thicknesses [H ~> m or kg m-2]
 
   h_neglect = GV%H_subroundoff ; h_neglect_edge = GV%H_subroundoff
+
+  ! Check if hbl needs to be extracted
+  if (CS%tapering) then
+    if (ASSOCIATED(CS%KPP_CSp)) call KPP_get_BLD(CS%KPP_CSp, hbl, G, US, m_to_BLD_units=GV%m_to_H)
+    if (ASSOCIATED(CS%energetic_PBL_CSp)) call energetic_PBL_get_MLD(CS%energetic_PBL_CSp, hbl, G, US, &
+                                                                     m_to_MLD_units=GV%m_to_H)
+    call pass_var(hbl,G%Domain)
+    ! TODO: add similar code for BOTTOM boundary layer
+  endif
 
   if (.not. CS%continuous_reconstruction) then
     if (CS%remap_answer_date < 20190101) then
@@ -619,24 +640,52 @@ subroutine neutral_diffusion(G, GV, h, Coef_x, Coef_y, dt, Reg, US, CS)
     ! x-flux
     do j = G%jsc,G%jec ; do I = G%isc-1,G%iec
       if (G%mask2dCu(I,j)>0.) then
-        call neutral_surface_flux(nk, CS%nsurf, CS%deg, h(i,j,:), h(i+1,j,:),       &
-                                  tracer%t(i,j,:), tracer%t(i+1,j,:), &
-                                  CS%uPoL(I,j,:), CS%uPoR(I,j,:), &
-                                  CS%uKoL(I,j,:), CS%uKoR(I,j,:), &
-                                  CS%uhEff(I,j,:), uFlx(I,j,:), &
-                                  CS%continuous_reconstruction, h_neglect, CS%remap_CS, h_neglect_edge)
+        if (CS%tapering) then
+          call compute_tapering_coeffs(G%ke+1, hbl(I,j), hbl(I+1,j), coeff_l(:), coeff_r(:), &
+                                       h(I,j,:), h(I+1,j,:))
+
+          call neutral_surface_flux(nk, CS%nsurf, CS%deg, h(i,j,:), h(i+1,j,:),       &
+                                    tracer%t(i,j,:), tracer%t(i+1,j,:), &
+                                    CS%uPoL(I,j,:), CS%uPoR(I,j,:), &
+                                    CS%uKoL(I,j,:), CS%uKoR(I,j,:), &
+                                    CS%uhEff(I,j,:), uFlx(I,j,:), &
+                                    CS%continuous_reconstruction, h_neglect, &
+                                    CS%remap_CS, h_neglect_edge, coeff_l(:), coeff_r(:))
+        else
+          call neutral_surface_flux(nk, CS%nsurf, CS%deg, h(i,j,:), h(i+1,j,:),       &
+                                    tracer%t(i,j,:), tracer%t(i+1,j,:), &
+                                    CS%uPoL(I,j,:), CS%uPoR(I,j,:), &
+                                    CS%uKoL(I,j,:), CS%uKoR(I,j,:), &
+                                    CS%uhEff(I,j,:), uFlx(I,j,:), &
+                                    CS%continuous_reconstruction, h_neglect, &
+                                    CS%remap_CS, h_neglect_edge)
+        endif
       endif
     enddo ; enddo
 
     ! y-flux
     do J = G%jsc-1,G%jec ; do i = G%isc,G%iec
       if (G%mask2dCv(i,J)>0.) then
-        call neutral_surface_flux(nk, CS%nsurf, CS%deg, h(i,j,:), h(i,j+1,:),       &
-                                  tracer%t(i,j,:), tracer%t(i,j+1,:), &
-                                  CS%vPoL(i,J,:), CS%vPoR(i,J,:), &
-                                  CS%vKoL(i,J,:), CS%vKoR(i,J,:), &
-                                  CS%vhEff(i,J,:), vFlx(i,J,:),   &
-                                  CS%continuous_reconstruction, h_neglect, CS%remap_CS, h_neglect_edge)
+        if (CS%tapering) then
+          call compute_tapering_coeffs(G%ke+1, hbl(i,J), hbl(i,J+1), coeff_l(:), coeff_r(:), &
+                                       h(i,J,:), h(i,J+1,:))
+
+          call neutral_surface_flux(nk, CS%nsurf, CS%deg, h(i,j,:), h(i,j+1,:),       &
+                                    tracer%t(i,j,:), tracer%t(i,j+1,:), &
+                                    CS%vPoL(i,J,:), CS%vPoR(i,J,:), &
+                                    CS%vKoL(i,J,:), CS%vKoR(i,J,:), &
+                                    CS%vhEff(i,J,:), vFlx(i,J,:),   &
+                                    CS%continuous_reconstruction, h_neglect, &
+                                    CS%remap_CS, h_neglect_edge, coeff_l(:), coeff_r(:))
+        else
+          call neutral_surface_flux(nk, CS%nsurf, CS%deg, h(i,j,:), h(i,j+1,:),       &
+                                    tracer%t(i,j,:), tracer%t(i,j+1,:), &
+                                    CS%vPoL(i,J,:), CS%vPoR(i,J,:), &
+                                    CS%vKoL(i,J,:), CS%vKoR(i,J,:), &
+                                    CS%vhEff(i,J,:), vFlx(i,J,:),   &
+                                    CS%continuous_reconstruction, h_neglect, &
+                                    CS%remap_CS, h_neglect_edge)
+        endif
       endif
     enddo ; enddo
 
@@ -735,6 +784,61 @@ subroutine neutral_diffusion(G, GV, h, Coef_x, Coef_y, dt, Reg, US, CS)
   enddo ! Loop over tracer registry
 
 end subroutine neutral_diffusion
+
+!> Computes the tapering coefficients in the left and right columns based on the
+!! boundary layer depths.
+subroutine compute_tapering_coeffs(ne, bld_l, bld_r, coeff_l, coeff_r, h_l, h_r)
+  integer,               intent(in)    :: ne       !< Number of interfaces
+  real,                  intent(in)    :: bld_l    !< Boundary layer depth, left column  [H ~> m or kg m-2]
+  real,                  intent(in)    :: bld_r    !< Boundary layer depth, right column [H ~> m or kg m-2]
+  real, dimension(ne-1), intent(in)    :: h_l      !< Layer thickness, left column       [H ~> m or kg m-2]
+  real, dimension(ne-1), intent(in)    :: h_r      !< Layer thickness, right column       [H ~> m or kg m-2]
+  real, dimension(ne),   intent(inout) :: coeff_l  !< Tapering coefficient, left column  [nondim]
+  real, dimension(ne),   intent(inout) :: coeff_r  !< Tapering coefficient, right column [nondim]
+
+  ! Local variables
+  real :: min_bld, max_bld                       ! Min/Max boundary layer depth in two adjacent columns
+  integer :: dummy1                              ! dummy integer
+  real    :: dummy2                              ! dummy real
+  integer :: k_min_l, k_min_r, k_max_l, k_max_r  ! Min/max vertical indices in two adjacent columns
+  real    :: zeta_l, zeta_r                      ! dummy variables
+  integer :: k
+
+  ! initialize coeffs
+  coeff_l(:) = 1.0
+  coeff_r(:) = 1.0
+
+  ! Calculate vertical indices containing the boundary layer
+  max_bld = MAX(bld_l, bld_r)
+  min_bld = MIN(bld_l, bld_r)
+
+  ! k_min
+  call boundary_k_range(SURFACE, ne-1, h_l, min_bld, dummy1, dummy2, k_min_l, &
+                      zeta_l)
+  call boundary_k_range(SURFACE, ne-1, h_r, min_bld, dummy1, dummy2, k_min_r, &
+                      zeta_r)
+
+  ! k_max
+  call boundary_k_range(SURFACE, ne-1, h_l, max_bld, dummy1, dummy2, k_max_l, &
+                      zeta_l)
+  call boundary_k_range(SURFACE, ne-1, h_r, max_bld, dummy1, dummy2, k_max_r, &
+                      zeta_r)
+
+  do k=1,k_min_l
+    coeff_l(k) = 0.0
+  enddo
+  do k=k_min_l+1,k_max_l+1
+    coeff_l(k) = (real(k - k_min_l) + 1.0)/(real(k_max_l - k_min_l) + 2.0)
+  enddo
+
+  do k=1,k_min_r
+    coeff_r(k) = 0.0
+  enddo
+  do k=k_min_r+1,k_max_r+1
+    coeff_r(k) = (real(k - k_min_r) + 1.0)/(real(k_max_r - k_min_r) + 2.0)
+  enddo
+
+end subroutine compute_tapering_coeffs
 
 !> Returns interface scalar, Si, for a column of layer values, S.
 subroutine interface_scalar(nk, h, S, Si, i_method, h_neglect)
@@ -1921,7 +2025,8 @@ end function absolute_positions
 
 !> Returns a single column of neutral diffusion fluxes of a tracer.
 subroutine neutral_surface_flux(nk, nsurf, deg, hl, hr, Tl, Tr, PiL, PiR, KoL, KoR, &
-                                hEff, Flx, continuous, h_neglect, remap_CS, h_neglect_edge)
+                                hEff, Flx, continuous, h_neglect, remap_CS, h_neglect_edge, &
+                                coeff_l, coeff_r)
   integer,                      intent(in)    :: nk    !< Number of levels
   integer,                      intent(in)    :: nsurf !< Number of neutral surfaces
   integer,                      intent(in)    :: deg   !< Degree of polynomial reconstructions
@@ -1945,11 +2050,14 @@ subroutine neutral_surface_flux(nk, nsurf, deg, hl, hr, Tl, Tr, PiL, PiR, KoL, K
                                              !! to create sublayers
   real,               optional, intent(in)    :: h_neglect_edge !< A negligibly small width used for
                                              !! edge value calculations if continuous is false [H ~> m or kg m-2]
+  real, dimension(nk+1), optional, intent(in) :: coeff_l !< Left-column diffusivity  [L2 T-1 ~> m2 s-1]
+  real, dimension(nk+1), optional, intent(in) :: coeff_r !< Right-column diffusivity [L2 T-1 ~> m2 s-1]
+
   ! Local variables
   integer :: k_sublayer, klb, klt, krb, krt
   real :: T_right_top, T_right_bottom, T_right_layer, T_right_sub, T_right_top_int, T_right_bot_int
   real :: T_left_top, T_left_bottom, T_left_layer, T_left_sub, T_left_top_int, T_left_bot_int
-  real :: dT_top, dT_bottom, dT_layer, dT_ave, dT_sublayer, dT_top_int, dT_bot_int
+  real :: dT_top, dT_bottom, dT_layer, dT_ave, dT_sublayer, dT_top_int, dT_bot_int, khtr_ave
   real, dimension(nk+1) :: Til !< Left-column interface tracer (conc, e.g. degC)
   real, dimension(nk+1) :: Tir !< Right-column interface tracer (conc, e.g. degC)
   real, dimension(nk) :: aL_l !< Left-column left edge value of tracer (conc, e.g. degC)
@@ -1964,7 +2072,12 @@ subroutine neutral_surface_flux(nk, nsurf, deg, hl, hr, Tl, Tr, PiL, PiR, KoL, K
   real, dimension(nk,deg+1) :: ppoly_r_coeffs_r
   real, dimension(nk,deg+1) :: ppoly_r_S_l
   real, dimension(nk,deg+1) :: ppoly_r_S_r
-  logical :: down_flux
+  logical :: down_flux, tapering
+
+  tapering = .false.
+  if (present(coeff_l) .and. present(coeff_r)) tapering = .true.
+  khtr_ave = 1.0
+
   ! Setup reconstruction edge values
   if (continuous) then
     call interface_scalar(nk, hl, Tl, Til, 2, h_neglect)
@@ -1987,6 +2100,13 @@ subroutine neutral_surface_flux(nk, nsurf, deg, hl, hr, Tl, Tr, PiL, PiR, KoL, K
     if (hEff(k_sublayer) == 0.) then
       Flx(k_sublayer) = 0.
     else
+      if (tapering) then
+        klb = KoL(k_sublayer+1)
+        klt = KoL(k_sublayer)
+        krb = KoR(k_sublayer+1)
+        krt = KoR(k_sublayer)
+        khtr_ave = 0.25 * (coeff_l(klb) + coeff_l(klt) + coeff_r(krb) + coeff_r(krt))
+      endif
       if (continuous) then
         klb = KoL(k_sublayer+1)
         T_left_bottom = ( 1. - PiL(k_sublayer+1) ) * Til(klb) + PiL(k_sublayer+1) * Til(klb+1)
@@ -2010,7 +2130,7 @@ subroutine neutral_surface_flux(nk, nsurf, deg, hl, hr, Tl, Tr, PiL, PiR, KoL, K
         else
           dT_ave = dT_layer
         endif
-        Flx(k_sublayer) = dT_ave * hEff(k_sublayer)
+        Flx(k_sublayer) = dT_ave * hEff(k_sublayer) * khtr_ave
       else ! Discontinuous reconstruction
         ! Calculate tracer values on left and right side of the neutral surface
         call neutral_surface_T_eval(nk, nsurf, k_sublayer, KoL, PiL, Tl, Tid_l, deg, iMethod, &
@@ -2036,7 +2156,7 @@ subroutine neutral_surface_flux(nk, nsurf, deg, hl, hr, Tl, Tr, PiL, PiR, KoL, K
                     dT_sublayer >= 0. .and. dT_top_int >= 0. .and. &
                     dT_bot_int >= 0.)
         if (down_flux) then
-          Flx(k_sublayer) = dT_sublayer * hEff(k_sublayer)
+          Flx(k_sublayer) = dT_sublayer * hEff(k_sublayer) * khtr_ave
         else
           Flx(k_sublayer) = 0.
         endif
