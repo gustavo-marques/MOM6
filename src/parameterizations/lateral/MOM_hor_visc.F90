@@ -206,7 +206,8 @@ type, public :: hor_visc_CS ; private
   integer :: num_smooth_gme !< number of smoothing passes for the GME fluxes.
   !>@{
   !! Diagnostic id
-  integer :: id_grid_Re_Ah = -1, id_grid_Re_Kh   = -1
+  !integer :: id_grid_Re_Ah = -1,
+  integer :: id_grid_Re_Kh   = -1
   integer :: id_diffu     = -1, id_diffv         = -1
   ! integer :: id_hf_diffu  = -1, id_hf_diffv      = -1
   integer :: id_h_diffu  = -1, id_h_diffv      = -1
@@ -365,7 +366,7 @@ subroutine horizontal_viscosity(u, v, h, diffu, diffv, MEKE, VarMix, G, GV, US, 
     delu_mag
   real, dimension(SZI_(G),SZJ_(G),SZK_(G)) :: &
     grid_Re_Kh, &    ! Grid Reynolds number for Laplacian horizontal viscosity at h points [nondim]
-    grid_Re_Ah, &    ! Grid Reynolds number for Biharmonic horizontal viscosity at h points [nondim]
+    !grid_Re_Ah, &    ! Grid Reynolds number for Biharmonic horizontal viscosity at h points [nondim]
     GME_coeff_h, &   ! GME coeff. at h-points [L2 T-1 ~> m2 s-1]
     visc_limit_h, &
     visc_limit_h_flag, &
@@ -381,6 +382,8 @@ subroutine horizontal_viscosity(u, v, h, diffu, diffv, MEKE, VarMix, G, GV, US, 
                      ! points; these are first interpolated to u or v velocity
                      ! points where masks are applied [H ~> m or kg m-2].
   real :: h_arith_q  ! The arithmetic mean total thickness at q points [Z ~> m]
+  real :: h_harm_q   ! The harmonic mean total thickness at q points [Z ~> m]
+  real :: I_hq       ! The inverse of the arithmetic mean total thickness at q points [Z-1 ~> m-1]
   real :: I_GME_h0   ! The inverse of GME tapering scale [Z-1 ~> m-1]
   real :: h_neglect  ! thickness so small it can be lost in roundoff and so neglected [H ~> m or kg m-2]
   real :: h_neglect3 ! h_neglect^3 [H3 ~> m3 or kg3 m-6]
@@ -823,8 +826,8 @@ subroutine horizontal_viscosity(u, v, h, diffu, diffv, MEKE, VarMix, G, GV, US, 
     ! Vorticity
     if (CS%no_slip) then
       do J=Jsq-2,Jeq+2 ; do I=Isq-2,Ieq+2
-        rt_xy(I,J) = (2.0-G%mask2dBu(I,J)) * ( dvdx(I,J) - dudy(I,J) )
-      eno ; enddo
+        vort_xy(I,J) = (2.0-G%mask2dBu(I,J)) * ( dvdx(I,J) - dudy(I,J) )
+      enddo ; enddo
     else
       do J=Jsq-2,Jeq+2 ; do I=Isq-2,Ieq+2
         vort_xy(I,J) = G%mask2dBu(I,J) * ( dvdx(I,J) - dudy(I,J) )
@@ -1131,21 +1134,20 @@ subroutine horizontal_viscosity(u, v, h, diffu, diffv, MEKE, VarMix, G, GV, US, 
         enddo ; enddo
       endif
 
-      if (CS%Re_Ah > 0.0 .or. CS%bound_Kh_with_MEKE) then
+      ! GMM, these two if-statements can be combined: NO
+      !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
+      if (CS%Re_Ah > 0.0 .or. CS%bound_Kh_with_MEKE) then ! .or. (CS%id_grid_Re_Ah>0)) then
         do j=Jsq,Jeq+1 ; do i=Isq,Ieq+1
-          !KE = 0.125*((u(I,j,k)+u(I-1,j,k))**2 + (v(i,J,k)+v(i,J-1,k))**2)
           delu_mag(i,j,k) = SQRT( 0.25 * (div_xx(i,j)**2 + sh_xx(i,j)**2 + sh_xy(i,j)**2 + vort_xy(i,j)**2) )
-          !Ah(i,j) = sqrt(KE) * CS%Re_Ah_const_xx(i,j)
         enddo ; enddo
       endif
 
       if (CS%Re_Ah > 0.0) then
         do j=Jsq,Jeq+1 ; do i=Isq,Ieq+1
-          !KE = 0.125*((u(I,j,k)+u(I-1,j,k))**2 + (v(i,J,k)+v(i,J-1,k))**2)
           Ah(i,j) = (delu_mag(i,j,k) * CS%grid_sp_h2(i,j)**2) / CS%Re_Ah
-          !Ah(i,j) = sqrt(KE) * CS%Re_Ah_const_xx(i,j)
         enddo ; enddo
       endif
+      !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
 
       if (CS%better_bound_Ah) then
         if (CS%better_bound_Kh) then
@@ -1177,14 +1179,15 @@ subroutine horizontal_viscosity(u, v, h, diffu, diffv, MEKE, VarMix, G, GV, US, 
         enddo ; enddo
       endif
 
-      if ((CS%id_grid_Re_Ah>0) .or. CS%bound_Kh_with_MEKE) then
-        do j=Jsq,Jeq+1 ; do i=Isq,Ieq+1
-          KE = 0.125 * ((u(I,j,k) + u(I-1,j,k))**2 + (v(i,J,k) + v(i,J-1,k))**2)
-          grid_Ah = max(Ah(i,j), CS%min_grid_Ah)
-          !grid_Re_Ah(i,j,k) = (sqrt(KE) * CS%grid_sp_h3(i,j)) / grid_Ah
-          grid_Re_Ah(i,j,k) = (delu_mag(i,j,k) * CS%grid_sp_h2(i,j)**2) / grid_Ah
-        enddo ; enddo
-      endif
+      ! GMM, is the following right? I added delu_mag...
+      !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
+      !if (CS%id_grid_Re_Ah>0) then
+      !  do j=Jsq,Jeq+1 ; do i=Isq,Ieq+1
+      !    grid_Ah = max(Ah(i,j), CS%min_grid_Ah)
+      !    grid_Re_Ah(i,j,k) = (delu_mag(i,j,k) * CS%grid_sp_h2(i,j)**2) / grid_Ah
+      !  enddo ; enddo
+      !endif
+      !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
 
       do j=Jsq,Jeq+1 ; do i=Isq,Ieq+1
         d_del2u = G%IdyCu(I,j) * Del2u(I,j) - G%IdyCu(I-1,j) * Del2u(I-1,j)
@@ -1200,28 +1203,28 @@ subroutine horizontal_viscosity(u, v, h, diffu, diffv, MEKE, VarMix, G, GV, US, 
     endif
 
     ! Backscatter using MEKE
-      if (CS%bound_Kh_with_MEKE) then
-        do j=Jsq,Jeq+1 ; do i=Isq,Ieq+1
-          if (visc_limit_h_flag(i,j,k) > 0) then
-            tmp = 0.
-          else
-            !tmp = -2.0 * CS%bound_Kh_with_MEKE_coef * MEKE%MEKE(i,j) / &
-            !       SQRT( 0.5*(div_xx(i,j)**2 + sh_xx(i,j)**2) + &
-            !       0.5* (0.25 * ( (sh_xy(I,J) + sh_xy(I-1,J-1)) + (sh_xy(I-1,J) + sh_xy(I,J-1)) ) )**2 + eps)
-            tmp = MEKE%Ku(i,j)
-          endif
-          Kh_BS(i,j) = tmp * ( VarMix%ebt_struct(i,j,k)**(CS%EBT_power))
-        enddo ; enddo
-
-        do j=Jsq,Jeq+1 ; do i=Isq,Ieq+1
-          str_xx_BS(i,j) = -Kh_BS(i,j) * sh_xx(i,j)
-        enddo ; enddo
-
-        if (CS%id_BS_coeff_h>0) then
-          do j=Jsq,Jeq+1 ; do i=Isq,Ieq+1
-            BS_coeff_h(i,j,k) = Kh_BS(i,j)
-          enddo ; enddo
+    if (CS%bound_Kh_with_MEKE) then
+      do j=Jsq,Jeq+1 ; do i=Isq,Ieq+1
+        if (visc_limit_h_flag(i,j,k) > 0) then
+          tmp = 0.
+        else
+          !tmp = -2.0 * CS%bound_Kh_with_MEKE_coef * MEKE%MEKE(i,j) / &
+          !       SQRT( 0.5*(div_xx(i,j)**2 + sh_xx(i,j)**2) + &
+          !       0.5* (0.25 * ( (sh_xy(I,J) + sh_xy(I-1,J-1)) + (sh_xy(I-1,J) + sh_xy(I,J-1)) ) )**2 + eps)
+          tmp = MEKE%Ku(i,j)
         endif
+        Kh_BS(i,j) = tmp * ( VarMix%ebt_struct(i,j,k)**(CS%EBT_power))
+      enddo ; enddo
+
+      do j=Jsq,Jeq+1 ; do i=Isq,Ieq+1
+        str_xx_BS(i,j) = -Kh_BS(i,j) * sh_xx(i,j)
+      enddo ; enddo
+
+      if (CS%id_BS_coeff_h>0) then
+        do j=Jsq,Jeq+1 ; do i=Isq,Ieq+1
+          BS_coeff_h(i,j,k) = Kh_BS(i,j)
+        enddo ; enddo
+      endif
 
       do j=Jsq,Jeq+1 ; do i=Isq,Ieq+1
         str_xx(i,j) = str_xx(i,j) + str_xx_BS(i,j)
@@ -1705,7 +1708,6 @@ subroutine horizontal_viscosity(u, v, h, diffu, diffv, MEKE, VarMix, G, GV, US, 
       if (k==1) then
         do j=js,je ; do i=is,ie
           MEKE%mom_src(i,j) = 0.
-          MEKE%mom_src_bh(i,j) = 0. !cyc
         enddo ; enddo
         if (allocated(MEKE%GME_snk)) then
           do j=js,je ; do i=is,ie
@@ -1754,14 +1756,11 @@ subroutine horizontal_viscosity(u, v, h, diffu, diffv, MEKE, VarMix, G, GV, US, 
                        ((u(I,j,k)-u(I,j-1,k))*G%IdyBu(I,J-1)                          &
                       + (v(i+1,J-1,k)-v(i,J-1,k))*G%IdxBu(I,J-1)) ) ) )
         enddo ; enddo
-      else !cyc
+      endif ! MEKE%backscatter_Ro_c
 
       do j=js,je ; do i=is,ie
         MEKE%mom_src(i,j) = MEKE%mom_src(i,j) + FrictWork(i,j,k)
-        MEKE%mom_src_bh(i,j) = MEKE%mom_src_bh(i,j) + FrictWork_bh(i,j,k) !cyc
       enddo ; enddo
-      endif ! MEKE%backscatter_Ro_c
-
 
       if (CS%use_GME .and. allocated(MEKE%GME_snk)) then
         do j=js,je ; do i=is,ie
@@ -1782,7 +1781,7 @@ subroutine horizontal_viscosity(u, v, h, diffu, diffv, MEKE, VarMix, G, GV, US, 
   if (CS%id_FrictWork_bh>0) call post_data(CS%id_FrictWork_bh, FrictWork_bh, CS%diag) !cyc
   if (CS%id_FrictWork_GME>0) call post_data(CS%id_FrictWork_GME, FrictWork_GME, CS%diag)
   if (CS%id_Ah_h>0)      call post_data(CS%id_Ah_h, Ah_h, CS%diag)
-  if (CS%id_grid_Re_Ah>0) call post_data(CS%id_grid_Re_Ah, grid_Re_Ah, CS%diag)
+  !if (CS%id_grid_Re_Ah>0) call post_data(CS%id_grid_Re_Ah, grid_Re_Ah, CS%diag)
   if (CS%id_div_xx_h>0)  call post_data(CS%id_div_xx_h, div_xx_h, CS%diag)
   if (CS%id_vort_xy_q>0) call post_data(CS%id_vort_xy_q, vort_xy_q, CS%diag)
   if (CS%id_sh_xx_h>0)   call post_data(CS%id_sh_xx_h, sh_xx_h, CS%diag)
@@ -2711,8 +2710,8 @@ subroutine hor_visc_init(Time, G, GV, US, param_file, diag, CS, ADp)
         cmor_standard_name='ocean_momentum_xy_biharmonic_diffusivity')
     CS%id_Ah_q = register_diag_field('ocean_model', 'Ahq', diag%axesBL, Time, &
         'Biharmonic Horizontal Viscosity at q Points', 'm4 s-1', conversion=US%L_to_m**4*US%s_to_T)
-    CS%id_grid_Re_Ah = register_diag_field('ocean_model', 'grid_Re_Ah', diag%axesTL, Time, &
-        'Grid Reynolds number for the Biharmonic horizontal viscosity at h points', 'nondim')
+    !CS%id_grid_Re_Ah = register_diag_field('ocean_model', 'grid_Re_Ah', diag%axesTL, Time, &
+    !    'Grid Reynolds number for the Biharmonic horizontal viscosity at h points', 'nondim')
     CS%id_visc_limit_h_flag = register_diag_field('ocean_model', 'visc_limit_h_flag', diag%axesTL, Time, &
         'Locations where the biharmonic viscosity reached the better_bound limiter at h points', 'nondim')
     CS%id_visc_limit_q_flag = register_diag_field('ocean_model', 'visc_limit_q_flag', diag%axesBL, Time, &
@@ -2726,10 +2725,10 @@ subroutine hor_visc_init(Time, G, GV, US, param_file, diag, CS, ADp)
     CS%id_visc_limit_q_frac = register_diag_field('ocean_model', 'visc_limit_q_frac', diag%axesBL, Time, &
         'Value of the biharmonic viscosity limiter at q points', 'nondim')
 
-    if (CS%id_grid_Re_Ah > 0) &
-      ! Compute the smallest biharmonic viscosity capable of modifying the
-      ! velocity at floating point precision.
-      CS%min_grid_Ah = spacing(1.) * min_grid_sp_h4 * Idt
+    !if (CS%id_grid_Re_Ah > 0) &
+    !  ! Compute the smallest biharmonic viscosity capable of modifying the
+    !  ! velocity at floating point precision.
+    !  CS%min_grid_Ah = spacing(1.) * min_grid_sp_h4 * Idt
   endif
   if (CS%Laplacian) then
     CS%id_Kh_h = register_diag_field('ocean_model', 'Khh', diag%axesTL, Time,   &
