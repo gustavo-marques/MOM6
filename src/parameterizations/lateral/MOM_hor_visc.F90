@@ -66,8 +66,9 @@ type, public :: hor_visc_CS ; private
                              !! The default is 1.0.
   real    :: KS_coef         !! A nondimensional coefficient on the biharmonic viscosity that sets the kill
                              !< switch for backscatter. Default is 1.0.
-  real    :: KS_timescale    !! A timescale for computing CFL limit for turning off backscatter (~DT)
-  real    :: EBT_power       !! Power to raise EBT vertical structure to. Default 1.0.
+  real    :: KS_timescale    !< A timescale for computing CFL limit for turning off backscatter.
+                             !! The default is DT.
+  real    :: EBT_power       !< Power to raise EBT vertical structure to. Default 1.0.
   real    :: BS_vel_scale    !< The velocity scale used to limit the magnitude of the MEKE backscatter.
   logical :: Smagorinsky_Kh  !< If true, use Smagorinsky nonlinear eddy
                              !! viscosity. KH is the background value.
@@ -596,11 +597,11 @@ subroutine horizontal_viscosity(u, v, h, diffu, diffv, MEKE, VarMix, G, GV, US, 
   !$OMP   is, ie, js, je, Isq, Ieq, Jsq, Jeq, nz, &
   !$OMP   apply_OBC, rescale_Kh, legacy_bound, find_FrictWork, &
   !$OMP   use_MEKE_Ku, use_MEKE_Au, boundary_mask_h, boundary_mask_q, &
-  !$OMP   backscat_subround, GME_coeff_limiter, GME_effic_h, GME_effic_q, &
-  !$OMP   h_neglect, h_neglect3, FWfrac, inv_PI3, inv_PI6, H0_GME, &
+  !$OMP   backscat_subround, GME_effic_h, GME_effic_q, &
+  !$OMP   h_neglect, h_neglect3, inv_PI3, inv_PI6, &
   !$OMP   diffu, diffv, Kh_h, Kh_q, Ah_h, Ah_q, FrictWork, FrictWork_bh, FrictWork_GME, & !cyc
   !$OMP   div_xx_h, sh_xx_h, vort_xy_q, sh_xy_q, GME_coeff_h, GME_coeff_q, &
-  !$OMP   KH_u_GME, KH_v_GME, grid_Re_Kh, grid_Re_Ah, NoSt, ShSt &
+  !$OMP   KH_u_GME, KH_v_GME, grid_Re_Kh, NoSt, ShSt &
   !$OMP ) &
   !$OMP private( &
   !$OMP   i, j, k, n, &
@@ -1178,16 +1179,6 @@ subroutine horizontal_viscosity(u, v, h, diffu, diffv, MEKE, VarMix, G, GV, US, 
           Ah_h(i,j,k) = Ah(i,j)
         enddo ; enddo
       endif
-
-      ! GMM, is the following right? I added delu_mag...
-      !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
-      !if (CS%id_grid_Re_Ah>0) then
-      !  do j=Jsq,Jeq+1 ; do i=Isq,Ieq+1
-      !    grid_Ah = max(Ah(i,j), CS%min_grid_Ah)
-      !    grid_Re_Ah(i,j,k) = (delu_mag(i,j,k) * CS%grid_sp_h2(i,j)**2) / grid_Ah
-      !  enddo ; enddo
-      !endif
-      !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
 
       do j=Jsq,Jeq+1 ; do i=Isq,Ieq+1
         d_del2u = G%IdyCu(I,j) * Del2u(I,j) - G%IdyCu(I-1,j) * Del2u(I-1,j)
