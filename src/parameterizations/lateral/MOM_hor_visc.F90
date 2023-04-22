@@ -47,7 +47,7 @@ type, public :: hor_visc_CS ; private
                              !! limited to guarantee stability.
   logical :: better_bound_Kh !< If true, use a more careful bounding of the
                              !! Laplacian viscosity to guarantee stability.
-  logical :: bound_Kh_with_MEKE !! If true, bounds the Laplacian viscosity using an expression
+  logical :: bound_Kh_with_MEKE !< If true, bounds the Laplacian viscosity using an expression
                              !< that is proportional to the EKE.
   logical :: bound_Ah        !< If true, the biharmonic coefficient is locally
                              !! limited to guarantee stability.
@@ -66,8 +66,9 @@ type, public :: hor_visc_CS ; private
                              !! The default is 1.0.
   real    :: KS_coef         !! A nondimensional coefficient on the biharmonic viscosity that sets the kill
                              !< switch for backscatter. Default is 1.0.
-  real    :: KS_timescale    !! A timescale for computing CFL limit for turning off backscatter (~DT)
-  real    :: EBT_power       !! Power to raise EBT vertical structure to. Default 1.0.
+  real    :: KS_timescale    !< A timescale for computing CFL limit for turning off backscatter.
+                             !! The default is DT.
+  real    :: EBT_power       !< Power to raise EBT vertical structure to. Default 1.0.
   real    :: BS_vel_scale    !< The velocity scale used to limit the magnitude of the MEKE backscatter.
   logical :: Smagorinsky_Kh  !< If true, use Smagorinsky nonlinear eddy
                              !! viscosity. KH is the background value.
@@ -596,11 +597,11 @@ subroutine horizontal_viscosity(u, v, h, diffu, diffv, MEKE, VarMix, G, GV, US, 
   !$OMP   is, ie, js, je, Isq, Ieq, Jsq, Jeq, nz, &
   !$OMP   apply_OBC, rescale_Kh, legacy_bound, find_FrictWork, &
   !$OMP   use_MEKE_Ku, use_MEKE_Au, boundary_mask_h, boundary_mask_q, &
-  !$OMP   backscat_subround, GME_coeff_limiter, GME_effic_h, GME_effic_q, &
-  !$OMP   h_neglect, h_neglect3, FWfrac, inv_PI3, inv_PI6, H0_GME, &
+  !$OMP   backscat_subround, GME_effic_h, GME_effic_q, &
+  !$OMP   h_neglect, h_neglect3, inv_PI3, inv_PI6, zero_out_Leith, &
   !$OMP   diffu, diffv, Kh_h, Kh_q, Ah_h, Ah_q, FrictWork, FrictWork_bh, FrictWork_GME, & !cyc
   !$OMP   div_xx_h, sh_xx_h, vort_xy_q, sh_xy_q, GME_coeff_h, GME_coeff_q, &
-  !$OMP   KH_u_GME, KH_v_GME, grid_Re_Kh, grid_Re_Ah, NoSt, ShSt &
+  !$OMP   KH_u_GME, KH_v_GME, grid_Re_Kh, NoSt, ShSt &
   !$OMP ) &
   !$OMP private( &
   !$OMP   i, j, k, n, &
@@ -610,10 +611,10 @@ subroutine horizontal_viscosity(u, v, h, diffu, diffv, MEKE, VarMix, G, GV, US, 
   !$OMP   vort_xy, vort_xy_dx, vort_xy_dy, div_xx, div_xx_dx, div_xx_dy, &
   !$OMP   grad_div_mag_h, grad_div_mag_q, grad_vort_mag_h, grad_vort_mag_q, &
   !$OMP   grad_vort, grad_vort_qg, grad_vort_mag_h_2d, grad_vort_mag_q_2d, &
-  !$OMP   sh_xx_sq, sh_xy_sq, &
+  !$OMP   sh_xx_sq, sh_xy_sq, delu_mag, visc_limit_h_flag, visc_limit_h, d_str_h, Kh_BS, &
   !$OMP   meke_res_fn, Shear_mag, Shear_mag_bc, vert_vort_mag, h_min, hrat_min, visc_bound_rem, &
-  !$OMP   grid_Ah, grid_Kh, d_Del2u, d_Del2v, d_str, &
-  !$OMP   Kh, Ah, AhSm, AhLth, local_strain, Sh_F_pow, &
+  !$OMP   grid_Ah, grid_Kh, d_Del2u, d_Del2v, d_str, BS_coeff_q, &
+  !$OMP   Kh, Ah, AhSm, AhLth, local_strain, Sh_F_pow, str_xy_BS, &
   !$OMP   dDel2vdx, dDel2udy, Del2vort_q, Del2vort_h, KE, &
   !$OMP   h2uq, h2vq, hu, hv, hq, FatH, RoScl, GME_coeff &
   !$OMP )
@@ -1134,9 +1135,7 @@ subroutine horizontal_viscosity(u, v, h, diffu, diffv, MEKE, VarMix, G, GV, US, 
         enddo ; enddo
       endif
 
-      ! GMM, these two if-statements can be combined: NO
-      !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
-      if (CS%Re_Ah > 0.0 .or. CS%bound_Kh_with_MEKE) then ! .or. (CS%id_grid_Re_Ah>0)) then
+      if (CS%Re_Ah > 0.0 .or. CS%bound_Kh_with_MEKE) then
         do j=Jsq,Jeq+1 ; do i=Isq,Ieq+1
           delu_mag(i,j,k) = SQRT( 0.25 * (div_xx(i,j)**2 + sh_xx(i,j)**2 + sh_xy(i,j)**2 + vort_xy(i,j)**2) )
         enddo ; enddo
@@ -1147,7 +1146,6 @@ subroutine horizontal_viscosity(u, v, h, diffu, diffv, MEKE, VarMix, G, GV, US, 
           Ah(i,j) = (delu_mag(i,j,k) * CS%grid_sp_h2(i,j)**2) / CS%Re_Ah
         enddo ; enddo
       endif
-      !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
 
       if (CS%better_bound_Ah) then
         if (CS%better_bound_Kh) then
@@ -1161,12 +1159,15 @@ subroutine horizontal_viscosity(u, v, h, diffu, diffv, MEKE, VarMix, G, GV, US, 
         endif
       endif
 
+      visc_limit_h_frac(:,:,:) = 0.
       visc_limit_h_flag(:,:,:) = 0.
       if (CS%bound_Kh_with_MEKE) then
           do j=Jsq,Jeq+1 ; do i=Isq,Ieq+1
             tmp = CS%KS_coef * hrat_min(i,j) * CS%Ah_Max_xx_KS(i,j)
             visc_limit_h(i,j,k) = tmp
-            visc_limit_h_frac(i,j,k) = Ah(i,j) / (CS%KS_coef * hrat_min(i,j) * CS%Ah_Max_xx_KS(i,j))
+            ! GMM, Willy check here
+            !write(*,*)'i, j, hrat_min(i,j), CS%Ah_Max_xx_KS(i,j)',i, j, hrat_min(i,j), CS%Ah_Max_xx_KS(i,j)
+            !! visc_limit_h_frac(i,j,k) = Ah(i,j) / max((CS%KS_coef * hrat_min(i,j) * CS%Ah_Max_xx_KS(i,j)),1.0)
             if (Ah(i,j) >= tmp) then
               visc_limit_h_flag(i,j,k) = 1.
             endif
@@ -1178,16 +1179,6 @@ subroutine horizontal_viscosity(u, v, h, diffu, diffv, MEKE, VarMix, G, GV, US, 
           Ah_h(i,j,k) = Ah(i,j)
         enddo ; enddo
       endif
-
-      ! GMM, is the following right? I added delu_mag...
-      !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
-      !if (CS%id_grid_Re_Ah>0) then
-      !  do j=Jsq,Jeq+1 ; do i=Isq,Ieq+1
-      !    grid_Ah = max(Ah(i,j), CS%min_grid_Ah)
-      !    grid_Re_Ah(i,j,k) = (delu_mag(i,j,k) * CS%grid_sp_h2(i,j)**2) / grid_Ah
-      !  enddo ; enddo
-      !endif
-      !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
 
       do j=Jsq,Jeq+1 ; do i=Isq,Ieq+1
         d_del2u = G%IdyCu(I,j) * Del2u(I,j) - G%IdyCu(I-1,j) * Del2u(I-1,j)
@@ -1355,7 +1346,8 @@ subroutine horizontal_viscosity(u, v, h, diffu, diffv, MEKE, VarMix, G, GV, US, 
       if (CS%Leith_Kh) then
         if (CS%add_LES_viscosity) then
           do J=js-1,Jeq ; do I=is-1,Ieq
-            Kh(I,J) = Kh(I,J) + zero_out_Leith * CS%Laplac3_const_xx(i,j) * vert_vort_mag(I,J) * inv_PI3 ! Is this right? -AJA
+            ! Is this right? -AJA
+            Kh(I,J) = Kh(I,J) + zero_out_Leith * CS%Laplac3_const_xx(i,j) * vert_vort_mag(I,J) * inv_PI3
           enddo ; enddo
         else
           do J=js-1,Jeq ; do I=is-1,Ieq
@@ -1508,7 +1500,8 @@ subroutine horizontal_viscosity(u, v, h, diffu, diffv, MEKE, VarMix, G, GV, US, 
           do J=js-1,Jeq ; do I=is-1,Ieq
             tmp = CS%KS_coef *hrat_min(I,J) * CS%Ah_Max_xy_KS(I,J)
             visc_limit_q(I,J,k) = tmp
-            visc_limit_q_frac(i,j,k) = Ah(i,j) / (CS%KS_coef * hrat_min(i,j) * CS%Ah_Max_xy_KS(i,j))
+            ! GMM, Willy check here
+            !visc_limit_q_frac(i,j,k) = Ah(i,j) / max((CS%KS_coef * hrat_min(i,j) * CS%Ah_Max_xy_KS(i,j)), 1.0)
             if (Ah(I,J) >= tmp) then
               visc_limit_q_flag(I,J,k) = 1.
             endif
@@ -2592,7 +2585,7 @@ subroutine hor_visc_init(Time, G, GV, US, param_file, diag, CS, ADp)
       if (denom > 0.0) then
         CS%Ah_Max_xx(I,J) = CS%bound_coef * 0.5 * Idt / denom
         if (CS%bound_Kh_with_MEKE) then
-        CS%Ah_Max_xx_KS(i,j) = CS%bound_coef * 0.5 / (CS%KS_timescale * denom)
+          CS%Ah_Max_xx_KS(i,j) = CS%bound_coef * 0.5 / (CS%KS_timescale * denom)
         endif
       endif
 
