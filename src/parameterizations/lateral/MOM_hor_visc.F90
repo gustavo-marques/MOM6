@@ -1172,7 +1172,7 @@ subroutine horizontal_viscosity(u, v, h, diffu, diffv, MEKE, VarMix, G, GV, US, 
             Del2vort_h = 0.25 * ((Del2vort_q(I,J) + Del2vort_q(I-1,J-1)) + &
                                  (Del2vort_q(I-1,J) + Del2vort_q(I,J-1)))
             AhLth  = CS%Biharm6_const_xx(i,j) * inv_PI6 * abs(Del2vort_h)
-            if (AhLth .le. Ah(i,j)) then
+            if (AhLth .le. CS%Ah_bg_xx(i,j)) then
               m_leithy(i,j) = 0.0
             else
               if ((CS%m_const_leithy(i,j)*vert_vort_mag(i,j)) .lt. abs(vort_xy_smooth(i,j))) then
@@ -1190,7 +1190,7 @@ subroutine horizontal_viscosity(u, v, h, diffu, diffv, MEKE, VarMix, G, GV, US, 
                                  (Del2vort_q(I-1,J) + Del2vort_q(I,J-1)))
             AhLthy = CS%Biharm6_const_xx(i,j) * inv_PI6 * &
                     sqrt(max(0.,Del2vort_h**2 - m_leithy(i,j)*vert_vort_mag_smooth(i,j)**2))
-            Ah(i,j) = max(Ah(i,j), AhLthy)
+            Ah(i,j) = max(CS%Ah_bg_xx(i,j), AhLthy)
           enddo ; enddo
           ! Smooth Ah before applying upper bound
           ! square, then smooth, then square root
