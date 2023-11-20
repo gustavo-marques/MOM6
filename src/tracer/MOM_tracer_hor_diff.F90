@@ -52,6 +52,7 @@ type, public :: tracer_hor_diff_CS ; private
   real    :: max_diff_CFL         !< If positive, locally limit the along-isopycnal
                                   !! tracer diffusivity to keep the diffusive CFL
                                   !! locally at or below this value [nondim].
+  real    :: khTr_EBT_power       !< Power to raise khtr EBT vertical structure to. Default 1.0.
   logical :: KhTh_use_ebt_struct  !< If true, uses the equivalent barotropic structure
                                   !! as the vertical structure of tracer diffusivity.
   logical :: Diffuse_ML_interior  !< If true, diffuse along isopycnals between
@@ -416,14 +417,16 @@ subroutine tracer_hordiff(h, dt, MEKE, VarMix, G, GV, US, CS, Reg, tv, do_online
       do K=2,nz+1
         do J=js-1,je
           do i=is,ie
-            Coef_y(i,J,K) = Coef_y(i,J,1) * 0.5 * ( VarMix%ebt_struct(i,j,k-1) + VarMix%ebt_struct(i,j+1,k-1) )
+            Coef_y(i,J,K) = Coef_y(i,J,1) * 0.5 * ((VarMix%ebt_struct(i,j,k-1)**CS%khTr_EBT_power) + &
+                                                  (VarMix%ebt_struct(i,j+1,k-1)**CS%khTr_EBT_power))
           enddo
         enddo
       enddo
       do k=2,nz+1
         do j=js,je
           do I=is-1,ie
-            Coef_x(I,j,K) = Coef_x(I,j,1) * 0.5 * ( VarMix%ebt_struct(i,j,k-1) + VarMix%ebt_struct(i+1,j,k-1) )
+            Coef_x(I,j,K) = Coef_x(I,j,1) * 0.5 * ((VarMix%ebt_struct(i,j,k-1)**CS%khTr_EBT_power) + &
+                                                   (VarMix%ebt_struct(i+1,j,k-1)**CS%khTr_EBT_power))
           enddo
         enddo
       enddo
@@ -472,14 +475,16 @@ subroutine tracer_hordiff(h, dt, MEKE, VarMix, G, GV, US, CS, Reg, tv, do_online
       do K=2,nz+1
         do J=js-1,je
           do i=is,ie
-            Coef_y(i,J,K) = Coef_y(i,J,1) * 0.5 * ( VarMix%ebt_struct(i,j,k-1) + VarMix%ebt_struct(i,j+1,k-1) )
+            Coef_y(i,J,K) = Coef_y(i,J,1) * 0.5 * ((VarMix%ebt_struct(i,j,k-1)**CS%khTr_EBT_power) + &
+                                                   (VarMix%ebt_struct(i,j+1,k-1)**CS%khTr_EBT_power))
           enddo
         enddo
       enddo
       do k=2,nz+1
         do j=js,je
           do I=is-1,ie
-            Coef_x(I,j,K) = Coef_x(I,j,1) * 0.5 * ( VarMix%ebt_struct(i,j,k-1) + VarMix%ebt_struct(i+1,j,k-1) )
+            Coef_x(I,j,K) = Coef_x(I,j,1) * 0.5 * ((VarMix%ebt_struct(i,j,k-1)**CS%khTr_EBT_power) + &
+                                                   (VarMix%ebt_struct(i+1,j,k-1)**CS%khTr_EBT_power))
           enddo
         enddo
       enddo
@@ -598,7 +603,8 @@ subroutine tracer_hordiff(h, dt, MEKE, VarMix, G, GV, US, CS, Reg, tv, do_online
       do K=2,nz+1
         do j=js,je
           do I=is-1,ie
-            Kh_u(I,j,K) = Kh_u(I,j,1) * 0.5 * ( VarMix%ebt_struct(i,j,k-1) + VarMix%ebt_struct(i+1,j,k-1) )
+            Kh_u(I,j,K) = Kh_u(I,j,1) * 0.5 * ((VarMix%ebt_struct(i,j,k-1)**CS%khTr_EBT_power) + &
+                                               (VarMix%ebt_struct(i+1,j,k-1)**CS%khTr_EBT_power))
           enddo
         enddo
       enddo
@@ -614,7 +620,8 @@ subroutine tracer_hordiff(h, dt, MEKE, VarMix, G, GV, US, CS, Reg, tv, do_online
       do K=2,nz+1
         do J=js-1,je
           do i=is,ie
-            Kh_v(i,J,K) = Kh_v(i,J,1) * 0.5 * ( VarMix%ebt_struct(i,j,k-1) + VarMix%ebt_struct(i,j+1,k-1) )
+            Kh_v(i,J,K) = Kh_v(i,J,1) * 0.5 * ((VarMix%ebt_struct(i,j,k-1)**CS%khTr_EBT_power) + &
+                                               (VarMix%ebt_struct(i,j+1,k-1)**2))
           enddo
         enddo
       enddo
@@ -638,8 +645,8 @@ subroutine tracer_hordiff(h, dt, MEKE, VarMix, G, GV, US, CS, Reg, tv, do_online
                                              (Kh_v(i,J-1,1)+Kh_v(i,J,1)))
       if (CS%KhTh_use_ebt_struct) then
         do K=2,nz+1
-          Kh_h(i,j,K) = normalize*G%mask2dT(i,j)*VarMix%ebt_struct(i,j,k-1)*((Kh_u(I-1,j,1)+Kh_u(I,j,1)) + &
-                                                                            (Kh_v(i,J-1,1)+Kh_v(i,J,1)))
+          Kh_h(i,j,K) = normalize*G%mask2dT(i,j)*(VarMix%ebt_struct(i,j,k-1)**CS%khTr_EBT_power) * &
+                        ((Kh_u(I-1,j,1)+Kh_u(I,j,1)) + (Kh_v(i,J-1,1)+Kh_v(i,J,1)))
         enddo
       endif
     enddo ; enddo
@@ -1565,6 +1572,11 @@ subroutine tracer_hor_diff_init(Time, G, GV, US, param_file, diag, EOS, diabatic
                  "If true, uses the equivalent barotropic structure "//&
                  "as the vertical structure of the tracer diffusivity.",&
                  default=.false.)
+  if (CS%KhTh_use_ebt_struct) then
+    call get_param(param_file, mdl, "KHTR_EBT_POWER", CS%khTr_EBT_power, &
+                 "Power to raise EBT vertical structure to", units="nondim", &
+                 default=1.0)
+  endif
   call get_param(param_file, mdl, "KHTR_SLOPE_CFF", CS%KhTr_Slope_Cff, &
                  "The scaling coefficient for along-isopycnal tracer "//&
                  "diffusivity using a shear-based (Visbeck-like) "//&
