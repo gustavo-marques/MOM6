@@ -714,7 +714,9 @@ subroutine KPP_calculate(CS, G, GV, US, h, uStar, buoyFlux, Kt, Ks, Kv, &
            LangEnhK = CS%KPP_K_ENH_FAC
         elseif (CS%LT_K_METHOD==LT_K_MODE_VR12) then
           if (present(lamult)) then
-            LangEnhK = lamult(i,j)
+            ! Fig A.1 Luke's paper on JAMES
+            LangEnhK = max(0.5, lamult(i,j))
+            LangEnhK = min(2.5, LangEnhK)
           else
             LangEnhK = sqrt(1.+(1.5*CS%La_SL(i,j))**(-2) + &
                 (5.4*CS%La_SL(i,j))**(-4))
