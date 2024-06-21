@@ -180,11 +180,10 @@ type, public :: MOM_dyn_split_RK2_CS ; private
                      !! Euler (1) [nondim].  0 is often used.
   logical :: debug   !< If true, write verbose checksums for debugging purposes.
   logical :: debug_OBC !< If true, do debugging calls for open boundary conditions.
-  logical :: fpmix = .false.                 !< If true, applies profiles of momentum flux magnitude and direction.
+  logical :: fpmix     !< If true, add non-local momentum flux increments and diffuse down the Eulerian gradient.
   logical :: module_is_initialized = .false. !< Record whether this module has been initialized.
 
   !>@{ Diagnostic IDs
-  integer :: id_uold   = -1, id_vold   = -1
   integer :: id_uh     = -1, id_vh     = -1
   integer :: id_umo    = -1, id_vmo    = -1
   integer :: id_umo_2d = -1, id_vmo_2d = -1
@@ -271,6 +270,7 @@ public step_MOM_dyn_split_RK2
 public register_restarts_dyn_split_RK2
 public initialize_dyn_split_RK2
 public remap_dyn_split_RK2_aux_vars
+public init_dyn_split_RK2_diabatic
 public end_dyn_split_RK2
 
 !>@{ CPU time clock IDs
@@ -397,7 +397,7 @@ subroutine step_MOM_dyn_split_RK2(u, v, h, tv, visc, Time_local, dt, forces, p_s
   logical :: Use_Stokes_PGF ! If true, add Stokes PGF to hydrostatic PGF
   !---For group halo pass
   logical :: showCallTree, sym
-
+  logical :: lFPpost        ! post diagnostics from vertFPmix when fpmix=true
   integer :: i, j, k, is, ie, js, je, Isq, Ieq, Jsq, Jeq, nz
   integer :: cont_stencil, obc_stencil
 
@@ -712,17 +712,21 @@ subroutine step_MOM_dyn_split_RK2(u, v, h, tv, visc, Time_local, dt, forces, p_s
   call thickness_to_dz(h, tv, dz, G, GV, US, halo_size=1)
   call vertvisc_coef(up, vp, h, dz, forces, visc, tv, dt_pred, G, GV, US, CS%vertvisc_CSp, &
                      CS%OBC, VarMix)
-  call vertvisc(up, vp, h, forces, visc, dt_pred, CS%OBC, CS%AD_pred, CS%CDp, G, &
-                GV, US, CS%vertvisc_CSp, CS%taux_bot, CS%tauy_bot, waves=waves)
 
   if (CS%fpmix) then
     hbl(:,:) = 0.0
     if (ASSOCIATED(CS%KPP_CSp)) call KPP_get_BLD(CS%KPP_CSp, hbl, G, US, m_to_BLD_units=GV%m_to_H)
     if (ASSOCIATED(CS%energetic_PBL_CSp)) &
       call energetic_PBL_get_MLD(CS%energetic_PBL_CSp, hbl, G, US, m_to_MLD_units=GV%m_to_H)
-    call vertFPmix(up, vp, uold, vold, hbl, h, forces, &
-                   dt_pred, G, GV, US, CS%vertvisc_CSp, CS%OBC)
-    call vertvisc(up, vp, h, forces, visc, dt_pred, CS%OBC, CS%ADp, CS%CDp, G, &
+
+    ! lFPpost must be false in the predictor step to avoid averaging into the diagnostics
+    lFPpost = .false.
+    call vertFPmix(up, vp, uold, vold, hbl, h, forces, dt_pred, lFPpost,  &
+                    G, GV, US, CS%vertvisc_CSp, CS%OBC, waves=waves)
+    call vertvisc(up, vp, h, forces, visc, dt_pred, CS%OBC, CS%AD_pred, CS%CDp, G, &
+                    GV, US, CS%vertvisc_CSp, CS%taux_bot, CS%tauy_bot, fpmix=CS%fpmix, waves=waves)
+  else
+    call vertvisc(up, vp, h, forces, visc, dt_pred, CS%OBC, CS%AD_pred, CS%CDp, G, &
                 GV, US, CS%vertvisc_CSp, CS%taux_bot, CS%tauy_bot, waves=waves)
   endif
 
@@ -964,12 +968,15 @@ subroutine step_MOM_dyn_split_RK2(u, v, h, tv, visc, Time_local, dt, forces, p_s
 
   call thickness_to_dz(h, tv, dz, G, GV, US, halo_size=1)
   call vertvisc_coef(u, v, h, dz, forces, visc, tv, dt, G, GV, US, CS%vertvisc_CSp, CS%OBC, VarMix)
-  call vertvisc(u, v, h, forces, visc, dt, CS%OBC, CS%ADp, CS%CDp, G, GV, US, &
-                CS%vertvisc_CSp, CS%taux_bot, CS%tauy_bot,waves=waves)
 
   if (CS%fpmix) then
-    call vertFPmix(u, v, uold, vold, hbl, h, forces, dt, &
-                   G, GV, US, CS%vertvisc_CSp, CS%OBC)
+    lFPpost = .true.
+    call vertFPmix(u, v, uold, vold, hbl, h, forces, dt, lFPpost, &
+                   G, GV, US, CS%vertvisc_CSp, CS%OBC, Waves=Waves)
+    call vertvisc(u, v, h, forces, visc, dt, CS%OBC, CS%ADp, CS%CDp, G, GV, US, &
+         CS%vertvisc_CSp, CS%taux_bot, CS%tauy_bot, fpmix=CS%fpmix, waves=waves)
+
+  else
     call vertvisc(u, v, h, forces, visc, dt, CS%OBC, CS%ADp, CS%CDp, G, GV, US, &
                   CS%vertvisc_CSp, CS%taux_bot, CS%tauy_bot, waves=waves)
   endif
@@ -1052,11 +1059,6 @@ subroutine step_MOM_dyn_split_RK2(u, v, h, tv, visc, Time_local, dt, forces, p_s
     if (showCallTree) call callTree_wayPoint("done with CorAdCalc (step_MOM_dyn_split_RK2)")
   else
     CS%CAu_pred_stored = .false.
-  endif
-
-  if (CS%fpmix) then
-    if (CS%id_uold > 0) call post_data(CS%id_uold, uold, CS%diag)
-    if (CS%id_vold > 0) call post_data(CS%id_vold, vold, CS%diag)
   endif
 
   ! The time-averaged free surface height has already been set by the last call to btstep.
@@ -1292,6 +1294,16 @@ subroutine remap_dyn_split_RK2_aux_vars(G, GV, CS, h_old_u, h_old_v, h_new_u, h_
 
 end subroutine remap_dyn_split_RK2_aux_vars
 
+!> Initializes aspects of the dyn_split_RK2 that depend on diabatic processes.
+subroutine init_dyn_split_RK2_diabatic(diabatic_CSp, CS)
+  type(diabatic_CS),                intent(in) :: diabatic_CSp !< diabatic structure
+  type(MOM_dyn_split_RK2_CS),       pointer    :: CS           !< module control structure
+
+  call extract_diabatic_member(diabatic_CSp, KPP_CSp=CS%KPP_CSp)
+  call extract_diabatic_member(diabatic_CSp, energetic_PBL_CSp=CS%energetic_PBL_CSp)
+
+end subroutine init_dyn_split_RK2_diabatic
+
 !> This subroutine initializes all of the variables that are used by this
 !! dynamic core, including diagnostics and the cpu clocks.
 subroutine initialize_dyn_split_RK2(u, v, h, uh, vh, eta, Time, G, GV, US, param_file, &
@@ -1403,8 +1415,8 @@ subroutine initialize_dyn_split_RK2(u, v, h, uh, vh, eta, Time, G, GV, US, param
                  "timestep for use in the predictor step of the next split RK2 timestep.", &
                  default=.true.)
   call get_param(param_file, mdl, "FPMIX", CS%fpmix, &
-                 "If true, apply profiles of momentum flux magnitude and "//&
-                 " direction", default=.false.)
+                 "If true, add non-local momentum flux increments and diffuse down the Eulerian gradient.", &
+                 default=.false.)
   call get_param(param_file, mdl, "REMAP_AUXILIARY_VARS", CS%remap_aux, &
                  "If true, apply ALE remapping to all of the auxiliary 3-dimensional "//&
                  "variables that are needed to reproduce across restarts, similarly to "//&
@@ -1483,7 +1495,7 @@ subroutine initialize_dyn_split_RK2(u, v, h, uh, vh, eta, Time, G, GV, US, param
                           CS%SAL_CSp, CS%tides_CSp)
   call hor_visc_init(Time, G, GV, US, param_file, diag, CS%hor_visc, ADp=CS%ADp)
   call vertvisc_init(MIS, Time, G, GV, US, param_file, diag, CS%ADp, dirs, &
-                     ntrunc, CS%vertvisc_CSp)
+                     ntrunc, CS%vertvisc_CSp, CS%fpmix)
   CS%set_visc_CSp => set_visc
   call updateCFLtruncationValue(Time, CS%vertvisc_CSp, US, &
                                 activate=is_new_run(restart_CS) )

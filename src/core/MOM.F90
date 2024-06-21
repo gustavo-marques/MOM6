@@ -77,6 +77,7 @@ use MOM_dynamics_unsplit,      only : MOM_dyn_unsplit_CS
 use MOM_dynamics_split_RK2,    only : step_MOM_dyn_split_RK2, register_restarts_dyn_split_RK2
 use MOM_dynamics_split_RK2,    only : initialize_dyn_split_RK2, end_dyn_split_RK2
 use MOM_dynamics_split_RK2,    only : MOM_dyn_split_RK2_CS, remap_dyn_split_rk2_aux_vars
+use MOM_dynamics_split_RK2,    only : init_dyn_split_RK2_diabatic
 use MOM_dynamics_unsplit_RK2,  only : step_MOM_dyn_unsplit_RK2, register_restarts_dyn_unsplit_RK2
 use MOM_dynamics_unsplit_RK2,  only : initialize_dyn_unsplit_RK2, end_dyn_unsplit_RK2
 use MOM_dynamics_unsplit_RK2,  only : MOM_dyn_unsplit_RK2_CS
@@ -1512,6 +1513,7 @@ subroutine step_MOM_thermo(CS, G, GV, US, u, v, h, tv, fluxes, dtdia, &
                                                ! velocity points [H ~> m or kg m-2]
   logical :: PCM_cell(SZI_(G),SZJ_(G),SZK_(GV)) ! If true, PCM remapping should be used in a cell.
   logical :: use_ice_shelf ! Needed for selecting the right ALE interface.
+  logical :: fpmix ! Needed to decide if BLD should be passed to RK2.
   logical :: showCallTree
   type(group_pass_type) :: pass_T_S, pass_T_S_h, pass_uv_T_S_h
   integer :: dynamics_stencil  ! The computational stencil for the calculations
@@ -2165,6 +2167,16 @@ subroutine initialize_MOM(Time, Time_init, param_file, dirs, CS, &
     call get_param(param_file, "MOM", "USE_RK2", CS%use_RK2, &
                  "If true, use RK2 instead of RK3 in the unsplit time stepping.", &
                  default=.false.)
+  endif
+
+  ! FPMIX is needed to decide if boundary layer depth should be passed to RK2
+  call get_param(param_file, '', "FPMIX", fpmix, &
+                 "If true, add non-local momentum flux increments and diffuse down the Eulerian gradient.", &
+                 default=.false., do_not_log=.true.)
+
+  if (fpmix .and. .not. CS%split)  then
+    call MOM_error(FATAL, "initialize_MOM: "//&
+       "FPMIX=True only works when SPLIT=True.")
   endif
 
   call get_param(param_file, "MOM", "BOUSSINESQ", Boussinesq, &
@@ -3241,6 +3253,11 @@ subroutine initialize_MOM(Time, Time_init, param_file, dirs, CS, &
                               CS%sponge_CSp, CS%ALE_sponge_CSp, CS%oda_incupd_CSp, CS%int_tide_CSp)
   endif
 
+  ! GMM
+  if (CS%split .and. fpmix) then
+    call init_dyn_split_RK2_diabatic(CS%diabatic_CSp, CS%dyn_split_RK2_CSp)
+  endif
+
   if (associated(CS%sponge_CSp)) &
     call init_sponge_diags(Time, G, GV, US, diag, CS%sponge_CSp)
 
@@ -3533,6 +3550,7 @@ subroutine set_restart_fields(GV, US, param_file, CS, restart_CSp)
   ! hML is needed when using the ice shelf module
   call get_param(param_file, '', "ICE_SHELF", use_ice_shelf, default=.false., &
                  do_not_log=.true.)
+
   if (use_ice_shelf .and. associated(CS%Hml)) then
     call register_restart_field(CS%Hml, "hML", .false., restart_CSp, &
                                 "Mixed layer thickness", "m", conversion=US%Z_to_m)
