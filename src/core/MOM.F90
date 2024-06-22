@@ -1513,7 +1513,6 @@ subroutine step_MOM_thermo(CS, G, GV, US, u, v, h, tv, fluxes, dtdia, &
                                                ! velocity points [H ~> m or kg m-2]
   logical :: PCM_cell(SZI_(G),SZJ_(G),SZK_(GV)) ! If true, PCM remapping should be used in a cell.
   logical :: use_ice_shelf ! Needed for selecting the right ALE interface.
-  logical :: fpmix ! Needed to decide if BLD should be passed to RK2.
   logical :: showCallTree
   type(group_pass_type) :: pass_T_S, pass_T_S_h, pass_uv_T_S_h
   integer :: dynamics_stencil  ! The computational stencil for the calculations
@@ -2071,6 +2070,7 @@ subroutine initialize_MOM(Time, Time_init, param_file, dirs, CS, &
   logical :: symmetric         ! If true, use symmetric memory allocation.
   logical :: save_IC           ! If true, save the initial conditions.
   logical :: do_unit_tests     ! If true, call unit tests.
+  logical :: fpmix             ! Needed to decide if BLD should be passed to RK2.
   logical :: test_grid_copy = .false.
 
   logical :: bulkmixedlayer    ! If true, a refined bulk mixed layer scheme is used
