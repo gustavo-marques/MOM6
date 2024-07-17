@@ -45,8 +45,13 @@ type, public :: optics_type
   !! FOB 5.29.2024
   !! Lookup tables for Ohlmann solar penetration scheme
   !! These would naturally exist as private module variables but that is prohibited in MOM6
-  real :: dlog10chl, log10chl_min, log10chl_max
-  real, allocatable, dimension(:) :: a1_lut, a2_lut, b1_lut, b2_lut
+  real :: dlog10chl           !< Chl increment within lookup table
+  real :: log10chl_min        !< Lower bound of Chl in lookup table
+  real :: log10chl_max        !< Upper bound of Chl in lookup table
+  real, allocatable, dimension(:) :: a1_lut,&       !< Coefficient for band 1
+       &                             a2_lut,&       !< Coefficient for band 2
+       &                             b1_lut,&       !< Exponential decay scale for band 1
+       &                             b2_lut         !< Exponential decay scale for band 2
   !! FOB 5.29.2024
   
   integer :: answer_date  !< The vintage of the order of arithmetic and expressions in the optics
@@ -1228,7 +1233,7 @@ subroutine opacity_init(Time, G, GV, US, param_file, diag, CS, optics)
 end subroutine opacity_init
 
 !! FOB 5.29.2024
-!! Initialize the lookup table for Ohlmann solar penetration scheme.
+!< Initialize the lookup table for Ohlmann solar penetration scheme.
 !! Step size in Chl is a constant in log-space to make lookups easy.
 !! Step size is fine enough that nearest neighbor lookup is sufficiently
 !! accurate.
@@ -1296,7 +1301,7 @@ subroutine init_ohlmann_table(optics)
        0.5477, 0.5588, 0.5682, 0.5764,      &
        0.6042, 0.6206, 0.6324, 0.6425,      &
        0.66172, 0.68144, 0.70086, 0.72144,  &
-       0.74178, 0.76190, 0.78155 /) 
+       0.74178, 0.76190, 0.78155 /)
 
   !! Make the table big enough so step size is smaller
   !! in log-space that any increment in Table 1a
@@ -1342,7 +1347,7 @@ subroutine init_ohlmann_table(optics)
   return
 end subroutine init_ohlmann_table
 
-!! Get the partion of total solar into bands
+!< Get the partion of total solar into bands from Ohlmann lookup table
 function lookup_ohlmann_swpen(chl,optics) result(A)
 
   implicit none
@@ -1352,7 +1357,7 @@ function lookup_ohlmann_swpen(chl,optics) result(A)
   real, dimension(2) :: A
 
   ! Local variables
-  
+
   real :: log10chl
   integer :: n
 
@@ -1363,10 +1368,10 @@ function lookup_ohlmann_swpen(chl,optics) result(A)
 
   A(1) = optics%a1_lut(n)
   A(2) = optics%a2_lut(n)
-    
+
 end function lookup_ohlmann_swpen
-  
-!! Get the opacity (decay scale) 
+
+!< Get the opacity (decay scale) from Ohlmann lookup table
 function lookup_ohlmann_opacity(chl,optics) result(B)
 
   implicit none
@@ -1388,7 +1393,7 @@ function lookup_ohlmann_opacity(chl,optics) result(B)
 
   return
 end function lookup_ohlmann_opacity
-!! FOB 5.29.2024  
+!! FOB 5.29.2024
 
 subroutine opacity_end(CS, optics)
   type(opacity_CS)  :: CS     !< Opacity control structure
