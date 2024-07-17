@@ -1233,7 +1233,7 @@ subroutine opacity_init(Time, G, GV, US, param_file, diag, CS, optics)
 end subroutine opacity_init
 
 !! FOB 5.29.2024
-!< Initialize the lookup table for Ohlmann solar penetration scheme.
+!> Initialize the lookup table for Ohlmann solar penetration scheme.
 !! Step size in Chl is a constant in log-space to make lookups easy.
 !! Step size is fine enough that nearest neighbor lookup is sufficiently
 !! accurate.
@@ -1347,7 +1347,7 @@ subroutine init_ohlmann_table(optics)
   return
 end subroutine init_ohlmann_table
 
-!< Get the partion of total solar into bands from Ohlmann lookup table
+!> Get the partion of total solar into bands from Ohlmann lookup table
 function lookup_ohlmann_swpen(chl,optics) result(A)
 
   implicit none
@@ -1371,7 +1371,7 @@ function lookup_ohlmann_swpen(chl,optics) result(A)
 
 end function lookup_ohlmann_swpen
 
-!< Get the opacity (decay scale) from Ohlmann lookup table
+!> Get the opacity (decay scale) from Ohlmann lookup table
 function lookup_ohlmann_opacity(chl,optics) result(B)
 
   implicit none
