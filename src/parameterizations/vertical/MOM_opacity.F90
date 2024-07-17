@@ -53,7 +53,7 @@ type, public :: optics_type
        &                             b1_lut,&       !< Exponential decay scale for band 1
        &                             b2_lut         !< Exponential decay scale for band 2
   !! FOB 5.29.2024
-  
+
   integer :: answer_date  !< The vintage of the order of arithmetic and expressions in the optics
                           !! calculations.  Values below 20190101 recover the answers from the
                           !! end of 2018, while higher values use updated and more robust
