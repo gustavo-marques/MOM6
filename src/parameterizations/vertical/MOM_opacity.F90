@@ -42,7 +42,7 @@ type, public :: optics_type
   real :: PenSW_absorb_Invlen !< The inverse of the thickness that is used to absorb the remaining
   !! shortwave heat flux when it drops below PEN_SW_FLUX_ABSORB [H ~> m or kg m-2].
 
-  !! FOB 5.29.2024
+  !! FOB
   !! Lookup tables for Ohlmann solar penetration scheme
   !! These would naturally exist as private module variables but that is prohibited in MOM6
   real :: dlog10chl           !< Chl increment within lookup table
@@ -52,7 +52,7 @@ type, public :: optics_type
        &                             a2_lut,&       !< Coefficient for band 2
        &                             b1_lut,&       !< Exponential decay scale for band 1
        &                             b2_lut         !< Exponential decay scale for band 2
-  !! FOB 5.29.2024
+  !! FOB
 
   integer :: answer_date  !< The vintage of the order of arithmetic and expressions in the optics
                           !! calculations.  Values below 20190101 recover the answers from the
@@ -89,7 +89,7 @@ type, public :: opacity_CS ; private
   !>@}
 end type opacity_CS
 
-!! FOB 5.29.2024
+!! FOB
 !>@{ Coded integers to specify the opacity scheme
 integer, parameter :: NO_SCHEME = 0, MANIZZA_05 = 1, MOREL_88 = 2, SINGLE_EXP = 3, DOUBLE_EXP = 4,&
      &                OHLMANN_03 = 5
@@ -100,7 +100,7 @@ character*(10), parameter :: MOREL_88_STRING   = "MOREL_88"   !< String to speci
 character*(10), parameter :: OHLMANN_03_STRING = "OHLMANN_03" !< String to specify the opacity scheme
 character*(10), parameter :: SINGLE_EXP_STRING = "SINGLE_EXP" !< String to specify the opacity scheme
 character*(10), parameter :: DOUBLE_EXP_STRING = "DOUBLE_EXP" !< String to specify the opacity scheme
-!! FOB 5.29.2024
+!! FOB
 
 contains
 
@@ -271,18 +271,18 @@ subroutine opacity_from_chl(optics, sw_total, sw_vis_dir, sw_vis_dif, sw_nir_dir
 ! use the "blue" band in the parameterizations to determine the e-folding
 ! depth of the incoming shortwave attenuation. The red portion is lumped
 ! into the net heating at the surface.
-!FOB 5.29.2024
+!FOB
   ! Adding Ohlmann scheme. Needs sw_total and chl as inputs. Produces 2 penetrating bands.
   ! This implementation follows that in CESM-POP using a lookup table in log10(chl) space.
   ! The table is initialized in subroutine init_ohlmann and the coefficients are recovered
   ! with routines lookup_ohlmann_swpen and lookup_ohlmann_opacity.
   ! Note that this form treats the IR solar input implicitly: the sum of partioning
   ! coefficients < 1.0. The remainder is non-penetrating and is deposited in first layer
-  ! irrespective of thickness. The paper states that the scheme is not valid for vertcal grids
-  ! with first layer thickness < 2.0 meters.
+  ! irrespective of thickness. The Ohlmann (2003) paper states that the scheme is not valid
+  ! for vertcal grids with first layer thickness < 2.0 meters.
   !
   ! Ohlmann, J.C. Ocean radiant heating in climate models. J. Climate, 16, 1337-1351, 2003.
-!!FOB 5.29.2024
+!!FOB
 !
 ! Morel, A., Optical modeling of the upper ocean in relation to its biogenous
 !   matter content (case-i waters)., J. Geo. Res., {93}, 10,749--10,768, 1988.
@@ -383,7 +383,7 @@ subroutine opacity_from_chl(optics, sw_total, sw_vis_dir, sw_vis_dif, sw_nir_dir
           optics%sw_pen_band(n,i,j) = Inv_nbands*sw_pen_tot
         enddo
      enddo; enddo
-    !! FOB 5.29.2024
+    !! FOB
     case (OHLMANN_03)
       ! want exactly two penetrating bands. If not, throw an error.
       if ( nbands /= 2 ) then
@@ -408,20 +408,20 @@ subroutine opacity_from_chl(optics, sw_total, sw_vis_dir, sw_vis_dif, sw_nir_dir
           optics%sw_pen_band(1:2,i,j)  = lookup_ohlmann_swpen(chl_data(i,j),optics)*SW_vis_tot
         endif
       enddo; enddo
-      !! FOB 5.29.2024
+      !! FOB
     case default
       call MOM_error(FATAL, "opacity_from_chl: CS%opacity_scheme is not valid.")
   end select
 
   !$OMP parallel do default(shared) firstprivate(chl_data)
   do k=1,nz
-    !! FOB 5.29.2024
+    !! FOB
     !!! I don't think this is what we want to do with Ohlmann.
     !!! The surface CHL is used in developing the parameterization.
     !!! Only the surface CHL is used above in setting optics%sw_pen_band for all schemes.
     !!! Seems inconsistent to use depth dependent CHL in opacity calculation.
     !!! Nevertheless, leaving as is for now.
-    !! FOB 5.29.204
+    !! FOB
     if (present(chl_3d)) then
       do j=js,je ; do i=is,ie ; chl_data(i,j) = chl_3d(i,j,k) ; enddo ; enddo
     endif
@@ -452,7 +452,7 @@ subroutine opacity_from_chl(optics, sw_total, sw_vis_dir, sw_vis_dif, sw_nir_dir
             optics%opacity_band(n,i,j,k) = optics%opacity_band(1,i,j,k)
           enddo
         enddo; enddo
-      !! FOB 5.29.2024
+      !! FOB
       case (OHLMANN_03)
         !! not testing for 2 bands since we did it above
         do j=js,je ; do i=is,ie
@@ -463,7 +463,7 @@ subroutine opacity_from_chl(optics, sw_total, sw_vis_dir, sw_vis_dif, sw_nir_dir
             optics%opacity_band(1:2,i,j,k) = lookup_ohlmann_opacity(chl_data(i,j),optics) * US%Z_to_m
           endif
         enddo; enddo
-      !! FOB 5.29.2024
+      !! FOB
       case default
         call MOM_error(FATAL, "opacity_from_chl: CS%opacity_scheme is not valid.")
     end select
@@ -1147,11 +1147,11 @@ subroutine opacity_init(Time, G, GV, US, param_file, diag, CS, optics)
   elseif (CS%Opacity_scheme == SINGLE_EXP ) then
     if (optics%nbands /= 1) call MOM_error(FATAL, &
         "set_opacity: \Cannot use a single_exp opacity scheme with nbands!=1.")
-  !! FOB 5.29.2024
+  !! FOB
   elseif (CS%Opacity_scheme == OHLMANN_03 ) then
     if (optics%nbands /= 2) call MOM_error(FATAL, &
          "set_opacity: \OHLMANN_03 scheme requires nbands==2")
-  !! FOB.3.31.2024
+  !! FOB
   endif
 
   call get_param(param_file, mdl, "DEFAULT_ANSWER_DATE", default_answer_date, &
@@ -1223,16 +1223,16 @@ subroutine opacity_init(Time, G, GV, US, param_file, diag, CS, optics)
       longname, 'm-1', conversion=US%m_to_Z)
   enddo
 
-  !! FOB 5.29.2024
+  !! FOB
   if (CS%opacity_scheme == OHLMANN_03) then
      ! Set up the lookup table
      call init_ohlmann_table(optics)
   endif
-  !! FOB 5.29.2024
+  !! FOB
 
 end subroutine opacity_init
 
-!! FOB 5.29.2024
+!! FOB
 !> Initialize the lookup table for Ohlmann solar penetration scheme.
 !! Step size in Chl is a constant in log-space to make lookups easy.
 !! Step size is fine enough that nearest neighbor lookup is sufficiently
@@ -1246,7 +1246,7 @@ subroutine init_ohlmann_table(optics)
   ! Local variables
 
   !! These are the data from Ohlmann (2003) Table 1a with additional
-  !! values provided by C. Ohlman and implemented in CESM-POP by B. Briegleb
+  !! values provided by C. Ohlmann and implemented in CESM-POP by B. Briegleb
   integer, parameter :: nval_tab1a = 31
   real, parameter, dimension(nval_tab1a) :: &
        chl_tab1a = (/                       &
@@ -1393,7 +1393,7 @@ function lookup_ohlmann_opacity(chl,optics) result(B)
 
   return
 end function lookup_ohlmann_opacity
-!! FOB 5.29.2024
+!! FOB
 
 subroutine opacity_end(CS, optics)
   type(opacity_CS)  :: CS     !< Opacity control structure
@@ -1409,12 +1409,12 @@ subroutine opacity_end(CS, optics)
     deallocate(optics%max_wavelength_band)
   if (allocated(optics%min_wavelength_band)) &
        deallocate(optics%min_wavelength_band)
-!! FOB 5.29.2024
+!! FOB
   if (allocated(optics%a1_lut)) deallocate(optics%a1_lut)
   if (allocated(optics%a2_lut)) deallocate(optics%a2_lut)
   if (allocated(optics%b1_lut)) deallocate(optics%b1_lut)
   if (allocated(optics%b2_lut)) deallocate(optics%b2_lut)
-!! FOB.5.29.2024
+!! FOB
 end subroutine opacity_end
 
 !> \namespace mom_opacity
