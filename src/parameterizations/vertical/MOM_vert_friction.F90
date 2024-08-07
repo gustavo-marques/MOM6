@@ -646,6 +646,8 @@ subroutine vertvisc(u, v, h, forces, visc, dt, OBC, ADp, CDp, G, GV, US, CS, &
   do j=G%jsc,G%jec
     do I=Isq,Ieq ; do_i(I) = (G%mask2dCu(I,j) > 0.0) ; enddo
 
+    ! WGL: Brandon Reichl says the following is obsolete. u(I,j,k) already
+    ! includes Stokes.
     ! When mixing down Eulerian current + Stokes drift add before calling solver
     if (DoStokesMixing) then ; do k=1,nz ; do I=Isq,Ieq
       if (do_i(I)) u(I,j,k) = u(I,j,k) + Waves%Us_x(I,j,k)

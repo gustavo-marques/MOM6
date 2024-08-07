@@ -397,7 +397,8 @@ subroutine step_MOM_dyn_split_RK2(u, v, h, tv, visc, Time_local, dt, forces, p_s
   logical :: Use_Stokes_PGF ! If true, add Stokes PGF to hydrostatic PGF
   !---For group halo pass
   logical :: showCallTree, sym
-  logical :: lFPpost        ! post diagnostics from vertFPmix when fpmix=true
+  logical :: lFPpost        ! Used to only post diagnostics in vertFPmix when fpmix=true and
+                            ! in the  corrector step (not the predict)
   integer :: i, j, k, is, ie, js, je, Isq, Ieq, Jsq, Jeq, nz
   integer :: cont_stencil, obc_stencil
 
@@ -722,12 +723,12 @@ subroutine step_MOM_dyn_split_RK2(u, v, h, tv, visc, Time_local, dt, forces, p_s
     ! lFPpost must be false in the predictor step to avoid averaging into the diagnostics
     lFPpost = .false.
     call vertFPmix(up, vp, uold, vold, hbl, h, forces, dt_pred, lFPpost,  &
-                    G, GV, US, CS%vertvisc_CSp, CS%OBC, waves=waves)
+                   G, GV, US, CS%vertvisc_CSp, CS%OBC, waves=waves)
     call vertvisc(up, vp, h, forces, visc, dt_pred, CS%OBC, CS%AD_pred, CS%CDp, G, &
-                    GV, US, CS%vertvisc_CSp, CS%taux_bot, CS%tauy_bot, fpmix=CS%fpmix, waves=waves)
+                  GV, US, CS%vertvisc_CSp, CS%taux_bot, CS%tauy_bot, fpmix=CS%fpmix, waves=waves)
   else
     call vertvisc(up, vp, h, forces, visc, dt_pred, CS%OBC, CS%AD_pred, CS%CDp, G, &
-                GV, US, CS%vertvisc_CSp, CS%taux_bot, CS%tauy_bot, waves=waves)
+                  GV, US, CS%vertvisc_CSp, CS%taux_bot, CS%tauy_bot, waves=waves)
   endif
 
   if (showCallTree) call callTree_wayPoint("done with vertvisc (step_MOM_dyn_split_RK2)")
@@ -1295,6 +1296,7 @@ subroutine remap_dyn_split_RK2_aux_vars(G, GV, CS, h_old_u, h_old_v, h_new_u, h_
 end subroutine remap_dyn_split_RK2_aux_vars
 
 !> Initializes aspects of the dyn_split_RK2 that depend on diabatic processes.
+!! Needed when BLDs are used in the dynamics.
 subroutine init_dyn_split_RK2_diabatic(diabatic_CSp, CS)
   type(diabatic_CS),                intent(in) :: diabatic_CSp !< diabatic structure
   type(MOM_dyn_split_RK2_CS),       pointer    :: CS           !< module control structure

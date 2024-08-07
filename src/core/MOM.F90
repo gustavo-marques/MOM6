@@ -3253,7 +3253,7 @@ subroutine initialize_MOM(Time, Time_init, param_file, dirs, CS, &
                               CS%sponge_CSp, CS%ALE_sponge_CSp, CS%oda_incupd_CSp, CS%int_tide_CSp)
   endif
 
-  ! GMM
+  ! GMM, the following is needed to get BLDs into the dynamics module
   if (CS%split .and. fpmix) then
     call init_dyn_split_RK2_diabatic(CS%diabatic_CSp, CS%dyn_split_RK2_CSp)
   endif

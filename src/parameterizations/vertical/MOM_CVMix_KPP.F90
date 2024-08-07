@@ -83,7 +83,7 @@ type, public :: KPP_CS ; private
   logical :: enhance_diffusion         !< If True, add enhanced diffusivity at base of boundary layer.
   character(len=32) :: interpType      !< Type of interpolation to compute bulk Richardson number
   character(len=32) :: interpType2     !< Type of interpolation to compute diff and visc at OBL_depth
-  logical :: StokesMOST                !< If True, use Stokes similarity packages
+  logical :: StokesMOST                !< If True, use Stokes similarity package
   logical :: computeEkman              !< If True, compute Ekman depth limit for OBLdepth
   logical :: computeMoninObukhov       !< If True, compute Monin-Obukhov limit for OBLdepth
   logical :: passiveMode               !< If True, makes KPP passive meaning it does NOT alter the diffusivity
@@ -521,11 +521,9 @@ logical function KPP_init(paramFile, G, GV, US, diag, Time, CS, passive)
   endif
   if( CS%StokesMOST ) then
   CS%id_StokesXI = register_diag_field('ocean_model', 'StokesXI', diag%axesT1, Time, &
-      'Stokes Similarity Parameter', ' ', &
-      cmor_field_name='none', cmor_long_name='none', cmor_units=' ', cmor_standard_name='none')
+      'Stokes Similarity Parameter', 'nondim')
   CS%id_Lam2     = register_diag_field('ocean_model', 'Lam2',  diag%axesT1, Time, &
-      'Ustk0_ustar', ' ', &
-      cmor_field_name='none', cmor_long_name='none', cmor_units=' ', cmor_standard_name='none')
+      'Ustk0_ustar', 'nondim')
   endif
   CS%id_BulkDrho = register_diag_field('ocean_model', 'KPP_BulkDrho', diag%axesTL, Time, &
       'Bulk difference in density used in Bulk Richardson number, as used by [CVMix] KPP', &
@@ -1002,6 +1000,7 @@ subroutine KPP_compute_BLD(CS, G, GV, US, h, Temp, Salt, u, v, tv, uStar, buoyFl
   real :: Uk, Vk        ! Layer velocities relative to their averages in the surface layer [L T-1 ~> m s-1]
   real :: SLdepth_0d    ! Surface layer depth = surf_layer_ext*OBLdepth [Z ~> m]
   real :: hTot          ! Running sum of thickness used in the surface layer average [Z ~> m]
+  real :: I_hTot        ! The inverse of hTot [Z-1 ~> m-1]
   real :: buoy_scale    ! A unit conversion factor for buoyancy fluxes [m2 T3 L-2 s-3 ~> 1]
   real :: delH          ! Thickness of a layer [Z ~> m]
   real :: surfTemp      ! Average of temperature over the surface layer [C ~> degC]
@@ -1023,23 +1022,16 @@ subroutine KPP_compute_BLD(CS, G, GV, US, h, Temp, Salt, u, v, tv, uStar, buoyFl
 
   integer :: i, j, k, km1, kk, ksfc, ktmp    ! Loop indices
 
-  real, dimension(GV%ke)   :: uE_H, vE_H        ! Eulerian velocities H-points, Centers
-  real, dimension(GV%ke)   :: uS_H, vS_H        ! Stokes drift components H-points, Centers
-  real, dimension(GV%ke)   :: uSbar_H, vSbar_H  ! Cell Average Stokes Drift H-points
-  real, dimension(GV%ke+1) :: uS_Hi, vS_Hi      ! Stokes Drift components at interfaces
+  real, dimension(GV%ke)   :: uE_H, vE_H        ! Eulerian velocities h-points, centers [L T-1 ~> m s-1]
+  real, dimension(GV%ke)   :: uS_H, vS_H        ! Stokes drift components h-points, centers [L T-1 ~> m s-1]
+  real, dimension(GV%ke)   :: uSbar_H, vSbar_H  ! Cell Average Stokes drift h-points [L T-1 ~> m s-1]
+  real, dimension(GV%ke+1) :: uS_Hi, vS_Hi      ! Stokes Drift components at interfaces [L T-1 ~> m s-1]
   real :: uS_SLD , vS_SLD, uS_SLC , vS_SLC, uSbar_SLD, vSbar_SLD ! Stokes at/to to Surface Layer Extent
-  real :: StokesXI     ! ==> CS%StokesParXI, Stokes similarity parameter
-  real, dimension( GV%ke )     :: StokesXI_1d ,   StokesVt_1d           !  Parameters of TKE production
-  real :: Llimit ! Stable boundary Layer Limit =  vonk Lstar
-  integer :: kbl
-
-
-  real :: rho1, rhoK,  sigma, sigmaRatio
-  real :: surfHuL, surfHvL, wavedir, currentdir
-  real :: VarUp, VarDn, M, VarLo, VarAvg
-  real :: H10pct, H20pct,CMNFACT, USx20pct, USy20pct, enhvt2
-  integer :: B
-  real    :: WST
+                                                                 ! [L T-1 ~> m s-1]
+  real :: StokesXI     ! Stokes similarity parameter [nondim]
+  real, dimension( GV%ke )     :: StokesXI_1d ,   StokesVt_1d    !  Parameters of TKE production ratio [nondim]
+  real :: Llimit ! Stable boundary Layer Limit =  vonk Lstar [Z ~> m]
+  integer :: kbl ! index of cell containing boundary layer depth
 
   if (CS%Stokes_Mixing .and. .not.associated(Waves)) call MOM_error(FATAL, &
       "KPP_compute_BLD: The Waves control structure must be associated if STOKES_MIXING is True.")
@@ -1069,7 +1061,7 @@ subroutine KPP_compute_BLD(CS, G, GV, US, h, Temp, Salt, u, v, tv, uStar, buoyFl
   !$OMP parallel do default(none) private(surfFricVel, iFaceHeight, hcorr, dh, cellHeight,  &
   !$OMP                           surfBuoyFlux, U_H, V_H, Coriolis, pRef, SLdepth_0d, vt2_1d, &
   !$OMP                           ksfc, surfHtemp, surfHsalt, surfHu, surfHv, surfHuS,      &
-  !$OMP                           surfHvS, hTot, delH, surftemp, surfsalt, surfu, surfv,    &
+  !$OMP                           surfHvS, hTot, I_hTot, delH, surftemp, surfsalt, surfu, surfv,    &
   !$OMP                           surfUs, surfVs, Uk, Vk, deltaU2, km1, kk, pres_1D, N_col, &
   !$OMP                           Temp_1D, salt_1D, surfBuoyFlux2, MLD_guess, LA, rho_1D,   &
   !$OMP                           deltarho, deltaBuoy, N2_1d, ws_1d, LangEnhVT2,KPP_OBL_depth, z_cell, &
@@ -1080,10 +1072,10 @@ subroutine KPP_compute_BLD(CS, G, GV, US, h, Temp, Salt, u, v, tv, uStar, buoyFl
     do i = G%isc, G%iec ; if (G%mask2dT(i,j) > 0.0) then
 
       do k=1,GV%ke
-        U_H(k) = 0.5 * (u(i,j,k)+u(i-1,j,k))
-        V_H(k) = 0.5 * (v(i,j,k)+v(i,j-1,k))
-        uE_H(k) = 0.5 * US%L_T_to_m_s*(u(i,j,k)+u(i-1,j,k)-Waves%US_x(i,j,k)-Waves%US_x(i-1,j,k))
-        vE_H(k) = 0.5 * US%L_T_to_m_s*(v(i,j,k)+v(i,j-1,k)-Waves%US_y(i,j,k)-Waves%US_y(i,j-1,k))
+        U_H(k) = 0.5 * (u(I,j,k)+u(I-1,j,k))
+        V_H(k) = 0.5 * (v(i,J,k)+v(i,J-1,k))
+        uE_H(k) = 0.5 * (u(I,j,k)+u(I-1,j,k)-Waves%US_x(I,j,k)-Waves%US_x(I-1,j,k))
+        vE_H(k) = 0.5 * (v(i,J,k)+v(i,J-1,k)-Waves%US_y(i,J,k)-Waves%US_y(i,J-1,k))
       enddo
 
       ! things independent of position within the column
@@ -1152,10 +1144,11 @@ subroutine KPP_compute_BLD(CS, G, GV, US, h, Temp, Salt, u, v, tv, uStar, buoyFl
             surfHu    = surfHu + (uE_H(ktmp) + uSbar_H(ktmp)) * delH
             surfHv    = surfHv + (vE_H(ktmp) + vSbar_H(ktmp)) * delH
           enddo
-          surfTemp = surfHtemp / hTot
-          surfSalt = surfHsalt / hTot
-          surfU    = surfHu    / hTot
-          surfV    = surfHv    / hTot
+          I_hTot = 1./hTot
+          surfTemp = surfHtemp * I_hTot
+          surfSalt = surfHsalt * I_hTot
+          surfU    = surfHu    * I_hTot
+          surfV    = surfHv    * I_hTot
           Uk       = uE_H(k) + uS_H(k) - surfU
           Vk       = vE_H(k) + vS_H(k) - surfV
 
@@ -1192,12 +1185,13 @@ subroutine KPP_compute_BLD(CS, G, GV, US, h, Temp, Salt, u, v, tv, uStar, buoyFl
             endif
 
           enddo
-          surfTemp = surfHtemp / hTot
-          surfSalt = surfHsalt / hTot
-          surfU    = surfHu    / hTot
-          surfV    = surfHv    / hTot
-          surfUs   = surfHus   / hTot
-          surfVs   = surfHvs   / hTot
+          I_hTot = 1./hTot
+          surfTemp = surfHtemp * I_hTot
+          surfSalt = surfHsalt * I_hTot
+          surfU    = surfHu    * I_hTot
+          surfV    = surfHv    * I_hTot
+          surfUs   = surfHus   * I_hTot
+          surfVs   = surfHvs   * I_hTot
 
           ! vertical shear between present layer and surface layer averaged surfU and surfV.
           ! C-grid average to get Uk and Vk on T-points.
@@ -1382,10 +1376,10 @@ subroutine KPP_compute_BLD(CS, G, GV, US, h, Temp, Salt, u, v, tv, uStar, buoyFl
 
       ! A hack to avoid KPP reaching the bottom. It was needed during development
       ! because KPP was unable to handle vanishingly small layers near the bottom.
-       if (CS%deepOBLoffset>0.) then
-         zBottomMinusOffset = iFaceHeight(GV%ke+1) + min(CS%deepOBLoffset, -0.1*iFaceHeight(GV%ke+1))
-         CS%OBLdepth(i,j) = min( CS%OBLdepth(i,j), -zBottomMinusOffset )
-       endif
+      if (CS%deepOBLoffset>0.) then
+        zBottomMinusOffset = iFaceHeight(GV%ke+1) + min(CS%deepOBLoffset, -0.1*iFaceHeight(GV%ke+1))
+        CS%OBLdepth(i,j) = min( CS%OBLdepth(i,j), -zBottomMinusOffset )
+      endif
 
       ! apply some constraints on OBLdepth
       if (CS%fixedOBLdepth) CS%OBLdepth(i,j) = CS%fixedOBLdepth_value
