@@ -196,7 +196,7 @@ end type vertvisc_CS
 contains
 
 !> Add nonlocal stress increments to ui^n and vi^n.
-subroutine vertFPmix(ui, vi, uold, vold, hbl_h, h, forces, dt, lpost, G, GV, US, CS, OBC, Waves)
+subroutine vertFPmix(ui, vi, uold, vold, hbl_h, h, forces, dt, lpost, Cemp_NL, G, GV, US, CS, OBC, Waves)
   type(ocean_grid_type),   intent(in)    :: G      !< Ocean grid structure
   type(verticalGrid_type), intent(in)    :: GV     !< Ocean vertical grid structure
   real, dimension(SZIB_(G),SZJ_(G),SZK_(GV)), &
@@ -209,15 +209,16 @@ subroutine vertFPmix(ui, vi, uold, vold, hbl_h, h, forces, dt, lpost, G, GV, US,
                            intent(inout) :: vold   !< Old Meridional velocity [L T-1 ~> m s-1]
   real, dimension(SZI_(G),SZJ_(G)), intent(inout) :: hbl_h !<  boundary layer depth [H ~> m]
   real, dimension(SZI_(G),SZJ_(G),SZK_(GV)), &
-                           intent(in) :: h      !< Layer thicknesses [H ~> m or kg m-2]
-  type(mech_forcing),      intent(in) :: forces !< A structure with the driving mechanical forces
-  real,                    intent(in) :: dt     !< Time increment [T ~> s]
-  logical,                 intent(in) :: lpost  !< Compute and make available FPMix diagnostics
-  type(unit_scale_type),   intent(in) :: US     !< A dimensional unit scaling type
-  type(vertvisc_CS),       pointer    :: CS     !< Vertical viscosity control structure
-  type(ocean_OBC_type),    pointer    :: OBC    !< Open boundary condition structure
+                           intent(in) :: h       !< Layer thicknesses [H ~> m or kg m-2]
+  type(mech_forcing),      intent(in) :: forces  !< A structure with the driving mechanical forces
+  real,                    intent(in) :: dt      !< Time increment [T ~> s]
+  real,                    intent(in) :: Cemp_NL !< empirical coefficient of non-local momentum mixing [nondim]
+  logical,                 intent(in) :: lpost   !< Compute and make available FPMix diagnostics
+  type(unit_scale_type),   intent(in) :: US      !< A dimensional unit scaling type
+  type(vertvisc_CS),       pointer    :: CS      !< Vertical viscosity control structure
+  type(ocean_OBC_type),    pointer    :: OBC     !< Open boundary condition structure
   type(wave_parameters_CS), &
-                   optional, pointer  :: Waves  !< Container for wave/Stokes information
+                   optional, pointer  :: Waves   !< Container for wave/Stokes information
 
   ! local variables
   real, dimension(SZIB_(G),SZJ_(G))  :: hbl_u   !< boundary layer depth (u-pts) [H ~> m]
@@ -241,7 +242,7 @@ subroutine vertFPmix(ui, vi, uold, vold, hbl_h, h, forces, dt, lpost, G, GV, US,
   real, dimension(SZI_(G) ,SZJ_(G),SZK_(GV)+1) :: omega_tau2s !< angle stress to shear (h-pts) [rad]
   real, dimension(SZI_(G) ,SZJ_(G),SZK_(GV)+1) :: omega_tau2w !< angle stress to wind  (h-pts) [rad]
 
-  real :: pi, Cemp_NL, tmp_u, tmp_v, omega_tmp, Irho0, fexp      !< constants and dummy variables
+  real :: pi, tmp_u, tmp_v, omega_tmp, Irho0, fexp      !< constants and dummy variables
   real :: sigma,Gat1,Gsig,dGdsig                                !< Shape parameters
   real :: du, dv, depth, Wind_x, Wind_y                         !< intermediate variables
   real :: taux, tauy, tauxDG, tauyDG, tauxDGup, tauyDGup, ustar2, ustar2min, tauh !< intermediate variables
@@ -254,8 +255,6 @@ subroutine vertFPmix(ui, vi, uold, vold, hbl_h, h, forces, dt, lpost, G, GV, US,
   Isq = G%IscB ; Ieq = G%IecB ; Jsq = G%JscB ; Jeq = G%JecB ; nz = GV%ke
 
   pi = 4. * atan2(1.,1.)
-  ! empirical coefficient of non-local momentum mixing
-  Cemp_NL = 3.6
   Irho0 = 1.0 / GV%Rho0
 
   call pass_var(hbl_h , G%Domain, halo=1)

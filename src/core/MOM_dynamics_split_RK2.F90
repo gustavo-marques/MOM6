@@ -178,7 +178,8 @@ type, public :: MOM_dyn_split_RK2_CS ; private
                      !! the extent to which the treatment of gravity waves
                      !! is forward-backward (0) or simulated backward
                      !! Euler (1) [nondim].  0 is often used.
-  logical :: debug   !< If true, write verbose checksums for debugging purposes.
+  real    :: Cemp_NL   !< Empirical coefficient of non-local momentum mixing [nondim]
+  logical :: debug     !< If true, write verbose checksums for debugging purposes.
   logical :: debug_OBC !< If true, do debugging calls for open boundary conditions.
   logical :: fpmix     !< If true, add non-local momentum flux increments and diffuse down the Eulerian gradient.
   logical :: module_is_initialized = .false. !< Record whether this module has been initialized.
@@ -722,7 +723,7 @@ subroutine step_MOM_dyn_split_RK2(u, v, h, tv, visc, Time_local, dt, forces, p_s
 
     ! lFPpost must be false in the predictor step to avoid averaging into the diagnostics
     lFPpost = .false.
-    call vertFPmix(up, vp, uold, vold, hbl, h, forces, dt_pred, lFPpost,  &
+    call vertFPmix(up, vp, uold, vold, hbl, h, forces, dt_pred, CS%Cemp_NL, lFPpost,  &
                    G, GV, US, CS%vertvisc_CSp, CS%OBC, waves=waves)
     call vertvisc(up, vp, h, forces, visc, dt_pred, CS%OBC, CS%AD_pred, CS%CDp, G, &
                   GV, US, CS%vertvisc_CSp, CS%taux_bot, CS%tauy_bot, fpmix=CS%fpmix, waves=waves)
@@ -972,7 +973,7 @@ subroutine step_MOM_dyn_split_RK2(u, v, h, tv, visc, Time_local, dt, forces, p_s
 
   if (CS%fpmix) then
     lFPpost = .true.
-    call vertFPmix(u, v, uold, vold, hbl, h, forces, dt, lFPpost, &
+    call vertFPmix(u, v, uold, vold, hbl, h, forces, dt, CS%Cemp_NL, lFPpost, &
                    G, GV, US, CS%vertvisc_CSp, CS%OBC, Waves=Waves)
     call vertvisc(u, v, h, forces, visc, dt, CS%OBC, CS%ADp, CS%CDp, G, GV, US, &
          CS%vertvisc_CSp, CS%taux_bot, CS%tauy_bot, fpmix=CS%fpmix, waves=waves)
@@ -1419,6 +1420,11 @@ subroutine initialize_dyn_split_RK2(u, v, h, uh, vh, eta, Time, G, GV, US, param
   call get_param(param_file, mdl, "FPMIX", CS%fpmix, &
                  "If true, add non-local momentum flux increments and diffuse down the Eulerian gradient.", &
                  default=.false.)
+  if (CS%fpmix) then
+    call get_param(param_file, "MOM", "CEMP_NL", CS%Cemp_NL, &
+                 "Empirical coefficient of non-local momentum mixing.", &
+                 units="nondim", default=3.6)
+  endif
   call get_param(param_file, mdl, "REMAP_AUXILIARY_VARS", CS%remap_aux, &
                  "If true, apply ALE remapping to all of the auxiliary 3-dimensional "//&
                  "variables that are needed to reproduce across restarts, similarly to "//&
