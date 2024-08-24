@@ -65,7 +65,7 @@ use MOM_domains, only : pass_var, pass_var_start, pass_var_complete
 use MOM_domains, only : pass_vector, pass_vector_start, pass_vector_complete
 use MOM_domains, only : To_South, To_West, To_All, CGRID_NE, SCALAR_PAIR
 use MOM_error_handler, only : MOM_error, MOM_mesg, FATAL, WARNING, is_root_pe
-use MOM_file_parser, only : get_param, log_version, param_file_type
+use MOM_file_parser, only : get_param, log_param, log_version, param_file_type
 use MOM_get_input, only : directories
 use MOM_time_manager, only : time_type, real_to_time, operator(+)
 use MOM_time_manager, only : operator(-), operator(>), operator(*), operator(/)
@@ -87,8 +87,9 @@ use MOM_open_boundary, only : radiation_open_bdry_conds
 use MOM_open_boundary, only : open_boundary_zero_normal_flow
 use MOM_PressureForce, only : PressureForce, PressureForce_init, PressureForce_CS
 use MOM_set_visc, only : set_viscous_ML, set_visc_CS
-use MOM_self_attr_load, only : SAL_init, SAL_end, SAL_CS
+use MOM_stochastics,   only : stochastic_CS
 use MOM_tidal_forcing, only : tidal_forcing_init, tidal_forcing_end, tidal_forcing_CS
+use MOM_self_attr_load, only : SAL_init, SAL_end, SAL_CS
 use MOM_unit_scaling,  only : unit_scale_type
 use MOM_vert_friction, only : vertvisc, vertvisc_coef, vertvisc_init, vertvisc_CS
 use MOM_verticalGrid, only : verticalGrid_type, get_thickness_units
@@ -116,13 +117,13 @@ type, public :: MOM_dyn_unsplit_CS ; private
   real, pointer, dimension(:,:) :: tauy_bot => NULL() !< frictional y-bottom stress from the ocean
                                                       !! to the seafloor [R L Z T-2 ~> Pa]
 
-  logical :: use_correct_dt_visc !< If true, use the correct timestep in the viscous terms applied
-                                 !! in the first predictor step with the unsplit time stepping scheme,
-                                 !! and in the calculation of the turbulent mixed layer properties
-                                 !! for viscosity.  The default should be true, but it is false.
-  logical :: debug           !< If true, write verbose checksums for debugging purposes.
-  logical :: calculate_SAL        !< If true, calculate self-attraction and loading.
-  logical :: use_tides            !< If true, tidal forcing is enabled.
+  logical :: dt_visc_bug    !< If false, use the correct timestep in viscous terms applied in the
+                            !! first predictor step and in the calculation of the turbulent mixed
+                            !! layer properties for viscosity.  If this is true, an older incorrect
+                            !! setting is used.
+  logical :: debug          !< If true, write verbose checksums for debugging purposes.
+  logical :: calculate_SAL  !< If true, calculate self-attraction and loading.
+  logical :: use_tides      !< If true, tidal forcing is enabled.
 
   logical :: module_is_initialized = .false. !< Record whether this module has been initialized.
 
@@ -189,7 +190,7 @@ contains
 !! 3rd order (for the inviscid momentum equations) order scheme
 subroutine step_MOM_dyn_unsplit(u, v, h, tv, visc, Time_local, dt, forces, &
                   p_surf_begin, p_surf_end, uh, vh, uhtr, vhtr, eta_av, G, GV, US, CS, &
-                  VarMix, MEKE, pbv, Waves)
+                  VarMix, MEKE, pbv, STOCH, Waves)
   type(ocean_grid_type),   intent(inout) :: G      !< The ocean's grid structure.
   type(verticalGrid_type), intent(in)    :: GV     !< The ocean's vertical grid structure.
   type(unit_scale_type),   intent(in)    :: US     !< A dimensional unit scaling type
@@ -223,6 +224,7 @@ subroutine step_MOM_dyn_unsplit(u, v, h, tv, visc, Time_local, dt, forces, &
   type(VarMix_CS),         intent(inout) :: VarMix !< Variable mixing control structure
   type(MEKE_type),         intent(inout) :: MEKE   !< MEKE fields
   type(porous_barrier_type), intent(in) :: pbv     !< porous barrier fractional cell metrics
+  type(stochastic_CS),   intent(inout) :: STOCH    !< Stochastic control structure
   type(wave_parameters_CS), optional, pointer :: Waves !< A pointer to a structure containing
                                  !! fields related to the surface wave conditions
 
@@ -263,7 +265,7 @@ subroutine step_MOM_dyn_unsplit(u, v, h, tv, visc, Time_local, dt, forces, &
 ! diffu = horizontal viscosity terms (u,h)
   call enable_averages(dt, Time_local, CS%diag)
   call cpu_clock_begin(id_clock_horvisc)
-  call horizontal_viscosity(u, v, h, CS%diffu, CS%diffv, MEKE, Varmix, G, GV, US, CS%hor_visc)
+  call horizontal_viscosity(u, v, h, CS%diffu, CS%diffv, MEKE, Varmix, G, GV, US, CS%hor_visc, tv, dt, STOCH=STOCH)
   call cpu_clock_end(id_clock_horvisc)
   call disable_averaging(CS%diag)
 
@@ -346,11 +348,11 @@ subroutine step_MOM_dyn_unsplit(u, v, h, tv, visc, Time_local, dt, forces, &
  ! up <- up + dt/2 d/dz visc d/dz up
   call cpu_clock_begin(id_clock_vertvisc)
   call enable_averages(dt, Time_local, CS%diag)
-  dt_visc = 0.5*dt ; if (CS%use_correct_dt_visc) dt_visc = dt
+  dt_visc = dt ; if (CS%dt_visc_bug) dt_visc = 0.5*dt
   call set_viscous_ML(u, v, h_av, tv, forces, visc, dt_visc, G, GV, US, CS%set_visc_CSp)
   call disable_averaging(CS%diag)
 
-  dt_visc = 0.5*dt ; if (CS%use_correct_dt_visc) dt_visc = dt_pred
+  dt_visc = dt_pred ; if (CS%dt_visc_bug) dt_visc = 0.5*dt
   call thickness_to_dz(h_av, tv, dz, G, GV, US, halo_size=1)
   call vertvisc_coef(up, vp, h_av, dz, forces, visc, tv, dt_visc, G, GV, US, CS%vertvisc_CSp, CS%OBC, VarMix)
   call vertvisc(up, vp, h_av, forces, visc, dt_visc, CS%OBC, CS%ADp, CS%CDp, &
@@ -630,6 +632,9 @@ subroutine initialize_dyn_unsplit(u, v, h, Time, G, GV, US, param_file, diag, CS
   character(len=48) :: flux_units
   ! This include declares and sets the variable "version".
 # include "version_variable.h"
+  logical :: use_correct_dt_visc
+  logical :: test_value  ! This is used to determine whether a logical parameter is being set explicitly.
+  logical :: explicit_bug, explicit_fix ! These indicate which parameters are set explicitly.
   integer :: isd, ied, jsd, jed, nz, IsdB, IedB, JsdB, JedB
   isd = G%isd ; ied = G%ied ; jsd = G%jsd ; jed = G%jed ; nz = GV%ke
   IsdB = G%IsdB ; IedB = G%IedB ; JsdB = G%JsdB ; JedB = G%JedB
@@ -646,11 +651,41 @@ subroutine initialize_dyn_unsplit(u, v, h, Time, G, GV, US, param_file, diag, CS
   CS%diag => diag
 
   call log_version(param_file, mdl, version, "")
-  call get_param(param_file, mdl, "FIX_UNSPLIT_DT_VISC_BUG", CS%use_correct_dt_visc, &
+
+  call get_param(param_file, mdl, "UNSPLIT_DT_VISC_BUG", CS%dt_visc_bug, &
+                 "If false, use the correct timestep in the viscous terms applied in the first "//&
+                 "predictor step with the unsplit time stepping scheme, and in the calculation "//&
+                 "of the turbulent mixed layer properties for viscosity with unsplit or "//&
+                 "unsplit_RK2.  If true, an older incorrect value is used.", &
+                 default=.false., do_not_log=.true.)
+  ! This is used to test whether UNSPLIT_DT_VISC_BUG is being actively set.
+  call get_param(param_file, mdl, "UNSPLIT_DT_VISC_BUG", test_value, default=.true., do_not_log=.true.)
+  explicit_bug = CS%dt_visc_bug .eqv. test_value
+  call get_param(param_file, mdl, "FIX_UNSPLIT_DT_VISC_BUG", use_correct_dt_visc, &
                  "If true, use the correct timestep in the viscous terms applied in the first "//&
                  "predictor step with the unsplit time stepping scheme, and in the calculation "//&
                  "of the turbulent mixed layer properties for viscosity with unsplit or "//&
-                 "unsplit_RK2.", default=.true.)
+                 "unsplit_RK2.", default=.true., do_not_log=.true.)
+  call get_param(param_file, mdl, "FIX_UNSPLIT_DT_VISC_BUG", test_value, default=.false., do_not_log=.true.)
+  explicit_fix = use_correct_dt_visc .eqv. test_value
+
+  if (explicit_bug .and. explicit_fix .and. (use_correct_dt_visc .eqv. CS%dt_visc_bug)) then
+    ! UNSPLIT_DT_VISC_BUG is being explicitly set, and should not be changed.
+    call MOM_error(FATAL, "UNSPLIT_DT_VISC_BUG and FIX_UNSPLIT_DT_VISC_BUG are both being set "//&
+                   "with inconsistent values.  FIX_UNSPLIT_DT_VISC_BUG is an obsolete "//&
+                   "parameter and should be removed.")
+  elseif (explicit_fix) then
+    call MOM_error(WARNING, "FIX_UNSPLIT_DT_VISC_BUG is an obsolete parameter.  "//&
+                   "Use UNSPLIT_DT_VISC_BUG instead (noting that it has the opposite sense).")
+    CS%dt_visc_bug = .not.use_correct_dt_visc
+  endif
+  call log_param(param_file, mdl, "UNSPLIT_DT_VISC_BUG", CS%dt_visc_bug, &
+                 "If false, use the correct timestep in the viscous terms applied in the first "//&
+                 "predictor step with the unsplit time stepping scheme, and in the calculation "//&
+                 "of the turbulent mixed layer properties for viscosity with unsplit or "//&
+                 "unsplit_RK2.  If true, an older incorrect value is used.", &
+                 default=.false.)
+
   call get_param(param_file, mdl, "DEBUG", CS%debug, &
                  "If true, write out verbose debugging data.", &
                  default=.false., debuggingParam=.true.)

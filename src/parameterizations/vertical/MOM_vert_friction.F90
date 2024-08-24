@@ -227,7 +227,6 @@ subroutine vertFPmix(ui, vi, uold, vold, hbl_h, h, forces, dt, lpost, Cemp_NL, G
   real, dimension(SZI_(G),SZJB_(G))  :: tauy_v  !< kinematic merid wind stress (v-pts) [L2 T-2 ~> m2 s-2]
   real, dimension(SZI_(G),SZJB_(G))  :: uS0     !< surface zonal Stokes drift [L T-1 ~> m s-1]
   real, dimension(SZI_(G),SZJB_(G))  :: vS0     !< surface zonal Stokes drift [L T-1 ~> m s-1]
-
   real, dimension(SZIB_(G),SZJ_(G),SZK_(GV)) :: uE_u    !< zonal Eulerian u-pts [L T-1 ~> m s-1]
   real, dimension(SZI_(G) ,SZJ_(G),SZK_(GV)) :: uE_h    !< zonal Eulerian h-pts [L T-1 ~> m s-1]
   real, dimension(SZI_(G),SZJB_(G),SZK_(GV)) :: vE_v    !< merid Eulerian v-pts [L T-1 ~> m s-1]
@@ -238,18 +237,16 @@ subroutine vertFPmix(ui, vi, uold, vold, hbl_h, h, forces, dt, lpost, Cemp_NL, G
   real, dimension(SZI_(G) ,SZJ_(G),SZK_(GV)) :: vInc_h  !< merid Eulerian h-pts [L T-1 ~> m s-1]
   real, dimension(SZI_(G) ,SZJ_(G),SZK_(GV)) :: uStk    !< zonal Stokes Drift (h-pts) [L T-1 ~> m s-1]
   real, dimension(SZI_(G) ,SZJ_(G),SZK_(GV)) :: vStk    !< merid Stokes Drift (h-pts) [L T-1 ~> m s-1]
-
   real, dimension(SZI_(G) ,SZJ_(G),SZK_(GV)+1) :: omega_tau2s !< angle stress to shear (h-pts) [rad]
   real, dimension(SZI_(G) ,SZJ_(G),SZK_(GV)+1) :: omega_tau2w !< angle stress to wind  (h-pts) [rad]
-
   real :: pi, tmp_u, tmp_v, omega_tmp, Irho0, fexp      !< constants and dummy variables
-  real :: sigma,Gat1,Gsig,dGdsig                                !< Shape parameters
-  real :: du, dv, depth, Wind_x, Wind_y                         !< intermediate variables
+  real :: sigma,Gat1,Gsig,dGdsig                        !< Shape parameters
+  real :: du, dv, depth, Wind_x, Wind_y                 !< intermediate variables
   real :: taux, tauy, tauxDG, tauyDG, tauxDGup, tauyDGup, ustar2, ustar2min, tauh !< intermediate variables
   real :: tauNLup, tauNLdn, tauNL_CG, tauNL_DG, tauNL_X, tauNL_Y, tau_MAG !< intermediate variables
   real :: omega_w2s, omega_s2x, omega_tau2x, omega_s2w ,  omega_e2x, omega_l2x  !< intermediate angles
   integer :: b, kbld, kp1, k, nz !< band and vertical indices
-  integer :: i, j, is, ie, js, je, Isq, Ieq, Jsq, Jeq ! horizontal indices
+  integer :: i, j, is, ie, js, je, Isq, Ieq, Jsq, Jeq !< horizontal indices
 
   is = G%isc ; ie = G%iec; js = G%jsc; je = G%jec
   Isq = G%IscB ; Ieq = G%IecB ; Jsq = G%JscB ; Jeq = G%JecB ; nz = GV%ke
@@ -383,7 +380,6 @@ subroutine vertFPmix(ui, vi, uold, vold, hbl_h, h, forces, dt, lpost, Cemp_NL, G
           ! cell bottom
           depth = depth + h(i,j,k)
         enddo
-
       enddo
     enddo
 
@@ -2496,7 +2492,7 @@ subroutine vertvisc_init(MIS, Time, G, GV, US, param_file, diag, ADp, dirs, &
 # include "version_variable.h"
   character(len=40)  :: mdl = "MOM_vert_friction" ! This module's name.
   character(len=40)  :: thickness_units
-  real :: Kv_mks ! KVML in MKS
+  real :: Kv_mks ! KVML in MKS [m2 s-1]
 
   if (associated(CS)) then
     call MOM_error(WARNING, "vertvisc_init called with an associated "// &
