@@ -46,7 +46,9 @@ use MOM_continuity,            only : continuity, continuity_CS
 use MOM_continuity,            only : continuity_init, continuity_stencil
 use MOM_CoriolisAdv,           only : CorAdCalc, CoriolisAdv_CS
 use MOM_CoriolisAdv,           only : CoriolisAdv_init, CoriolisAdv_end
+use MOM_CVMix_KPP,             only : KPP_get_BLD, KPP_CS
 use MOM_debugging,             only : check_redundant
+use MOM_energetic_PBL,         only : energetic_PBL_get_MLD, energetic_PBL_CS
 use MOM_grid,                  only : ocean_grid_type
 use MOM_hor_index,             only : hor_index_type
 use MOM_hor_visc,              only : horizontal_viscosity, hor_visc_CS, hor_visc_vel_stencil
@@ -138,14 +140,16 @@ type, public :: MOM_dyn_split_RK2_CS ; private
   real ALLOCABLE_, dimension(NIMEM_,NJMEM_,NKMEM_)      :: pbce   !< pbce times eta gives the baroclinic pressure
                                                                   !! anomaly in each layer due to free surface height
                                                                   !! anomalies [L2 H-1 T-2 ~> m s-2 or m4 kg-1 s-2].
+  type(KPP_CS),           pointer :: KPP_CSp => NULL() !< KPP control structure needed to ge
+  type(energetic_PBL_CS), pointer :: energetic_PBL_CSp => NULL()  !< ePBL control structure
 
-  real, pointer, dimension(:,:) :: taux_bot => NULL() !< frictional x-bottom stress from the ocean
-                                                      !! to the seafloor [R L Z T-2 ~> Pa]
-  real, pointer, dimension(:,:) :: tauy_bot => NULL() !< frictional y-bottom stress from the ocean
-                                                      !! to the seafloor [R L Z T-2 ~> Pa]
-  type(BT_cont_type), pointer   :: BT_cont  => NULL() !<  A structure with elements that describe the
-                                                      !! effective summed open face areas as a function
-                                                      !! of barotropic flow.
+  real, pointer, dimension(:,:) :: taux_bot => NULL()  !< frictional x-bottom stress from the ocean
+                                                       !! to the seafloor [R L Z T-2 ~> Pa]
+  real, pointer, dimension(:,:) :: tauy_bot => NULL()  !< frictional y-bottom stress from the ocean
+                                                       !! to the seafloor [R L Z T-2 ~> Pa]
+  type(BT_cont_type), pointer   :: BT_cont  => NULL()  !<  A structure with elements that describe the
+                                                       !! effective summed open face areas as a function
+                                                       !! of barotropic flow.
 
   ! This is to allow the previous, velocity-based coupling with between the
   ! baroclinic and barotropic modes.
@@ -722,7 +726,7 @@ subroutine step_MOM_dyn_split_RK2(u_inst, v_inst, h, tv, visc, Time_local, dt, f
 
     ! lFPpost must be false in the predictor step to avoid averaging into the diagnostics
     lFPpost = .false.
-    call vertFPmix(up, vp, uold, vold, hbl, h, forces, dt_pred, CS%Cemp_NL, lFPpost,  &
+    call vertFPmix(up, vp, uold, vold, hbl, h, forces, dt_pred, lFPpost, CS%Cemp_NL,  &
                    G, GV, US, CS%vertvisc_CSp, CS%OBC, waves=waves)
     call vertvisc(up, vp, h, forces, visc, dt_pred, CS%OBC, CS%AD_pred, CS%CDp, G, &
                   GV, US, CS%vertvisc_CSp, CS%taux_bot, CS%tauy_bot, fpmix=CS%fpmix, waves=waves)
@@ -968,17 +972,17 @@ subroutine step_MOM_dyn_split_RK2(u_inst, v_inst, h, tv, visc, Time_local, dt, f
   endif
 
   call thickness_to_dz(h, tv, dz, G, GV, US, halo_size=1)
-  call vertvisc_coef(u, v, h, dz, forces, visc, tv, dt, G, GV, US, CS%vertvisc_CSp, CS%OBC, VarMix)
+  call vertvisc_coef(u_inst, v_inst, h, dz, forces, visc, tv, dt, G, GV, US, CS%vertvisc_CSp, CS%OBC, VarMix)
 
   if (CS%fpmix) then
     lFPpost = .true.
-    call vertFPmix(u, v, uold, vold, hbl, h, forces, dt, CS%Cemp_NL, lFPpost, &
+    call vertFPmix(u_inst, v_inst, uold, vold, hbl, h, forces, dt, lFPpost, CS%Cemp_NL, &
                    G, GV, US, CS%vertvisc_CSp, CS%OBC, Waves=Waves)
-    call vertvisc(u, v, h, forces, visc, dt, CS%OBC, CS%ADp, CS%CDp, G, GV, US, &
+    call vertvisc(u_inst, v_inst, h, forces, visc, dt, CS%OBC, CS%ADp, CS%CDp, G, GV, US, &
          CS%vertvisc_CSp, CS%taux_bot, CS%tauy_bot, fpmix=CS%fpmix, waves=waves)
 
   else
-    call vertvisc(u, v, h, forces, visc, dt, CS%OBC, CS%ADp, CS%CDp, G, GV, US, &
+    call vertvisc(u_inst, v_inst, h, forces, visc, dt, CS%OBC, CS%ADp, CS%CDp, G, GV, US, &
                   CS%vertvisc_CSp, CS%taux_bot, CS%tauy_bot, waves=waves)
   endif
 
