@@ -1089,9 +1089,13 @@ subroutine KPP_compute_BLD(CS, G, GV, US, h, Temp, Salt, u, v, tv, uStar, buoyFl
       do k=1,GV%ke
         U_H(k) = 0.5 * (u(I,j,k)+u(I-1,j,k))
         V_H(k) = 0.5 * (v(i,J,k)+v(i,J-1,k))
-        uE_H(k) = 0.5 * (u(I,j,k)+u(I-1,j,k)-Waves%US_x(I,j,k)-Waves%US_x(I-1,j,k))
-        vE_H(k) = 0.5 * (v(i,J,k)+v(i,J-1,k)-Waves%US_y(i,J,k)-Waves%US_y(i,J-1,k))
       enddo
+      if (CS%StokesMOST) then
+        do k=1,GV%ke
+          uE_H(k) = 0.5 * (u(I,j,k)+u(I-1,j,k)-Waves%US_x(I,j,k)-Waves%US_x(I-1,j,k))
+          vE_H(k) = 0.5 * (v(i,J,k)+v(i,J-1,k)-Waves%US_y(i,J,k)-Waves%US_y(i,J-1,k))
+        enddo
+      endif
 
       ! things independent of position within the column
       Coriolis = 0.25*US%s_to_T*( (G%CoriolisBu(i,j)   + G%CoriolisBu(i-1,j-1)) + &
@@ -1168,8 +1172,6 @@ subroutine KPP_compute_BLD(CS, G, GV, US, h, Temp, Salt, u, v, tv, uStar, buoyFl
           Vk       = vE_H(k) + vS_H(k) - surfV
 
         else   !not StokesMOST
-          uS_H(k) = 0.5*(Waves%US_x(i,j,ktmp)+Waves%US_x(i-1,j,ktmp))
-          vS_H(k) = 0.5*(Waves%US_y(i,j,ktmp)+Waves%US_y(i,j-1,ktmp))
           StokesXI_1d(k) = 0.0
 
           ! average temperature, salinity, u and v over surface layer
@@ -1200,13 +1202,12 @@ subroutine KPP_compute_BLD(CS, G, GV, US, h, Temp, Salt, u, v, tv, uStar, buoyFl
             endif
 
           enddo
-          I_hTot = 1./hTot
-          surfTemp = surfHtemp * I_hTot
-          surfSalt = surfHsalt * I_hTot
-          surfU    = surfHu    * I_hTot
-          surfV    = surfHv    * I_hTot
-          surfUs   = surfHus   * I_hTot
-          surfVs   = surfHvs   * I_hTot
+          surfTemp = surfHtemp / hTot
+          surfSalt = surfHsalt / hTot
+          surfU    = surfHu    / hTot
+          surfV    = surfHv    / hTot
+          surfUs   = surfHus   / hTot
+          surfVs   = surfHvs   / hTot
 
           ! vertical shear between present layer and surface layer averaged surfU and surfV.
           ! C-grid average to get Uk and Vk on T-points.
@@ -1426,7 +1427,7 @@ subroutine KPP_compute_BLD(CS, G, GV, US, h, Temp, Salt, u, v, tv, uStar, buoyFl
             US%Z_to_m*CS%OBLdepth(i,j),            & ! (in)  OBL depth [m]
             surfBuoyFlux,                          & ! (in)  Buoyancy flux at surface [m2 s-3]
             surfFricVel,                           & ! (in)  Turbulent friction velocity at surface [m s-1]
-             xi=StokesXI,                        & ! (in) Stokes similarity parameter-->1/CHI(xi) enhance
+            xi=StokesXI,                           & ! (in) Stokes similarity parameter-->1/CHI(xi) enhance
             w_s=Ws_1d,                             & ! (out) Turbulent velocity scale profile [m s-1]
             CVMix_kpp_params_user=CS%KPP_params)     !       KPP parameters
         CS%Ws(i,j,:) = US%m_to_Z*US%T_to_s*Ws_1d(:)
