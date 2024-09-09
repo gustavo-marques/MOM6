@@ -548,7 +548,7 @@ subroutine vertvisc(u, v, h, forces, visc, dt, OBC, ADp, CDp, G, GV, US, CS, &
   real, dimension(SZI_(G),SZJB_(G)), &
                    optional, intent(out) :: tauy_bot !< Meridional bottom stress from ocean to
                                                      !! rock [R L Z T-2 ~> Pa]
-  logical,         optional, intent(in)  :: fpmix    ! fpmix along Eulerian shear
+  logical,         optional, intent(in)  :: fpmix !< fpmix along Eulerian shear
   type(wave_parameters_CS), &
                    optional, pointer     :: Waves !< Container for wave/Stokes information
 
