@@ -1080,7 +1080,10 @@ subroutine KPP_compute_BLD(CS, G, GV, US, h, Temp, Salt, u, v, tv, uStar, buoyFl
   !$OMP                           surfUs, surfVs, Uk, Vk, deltaU2, km1, kk, pres_1D, N_col, &
   !$OMP                           Temp_1D, salt_1D, surfBuoyFlux2, MLD_guess, LA, rho_1D,   &
   !$OMP                           deltarho, deltaBuoy, N2_1d, ws_1d, LangEnhVT2,KPP_OBL_depth, z_cell, &
-  !$OMP                           z_inter, OBL_depth, BulkRi_1d, zBottomMinusOffset)        &
+  !$OMP                           z_inter, OBL_depth, BulkRi_1d, zBottomMinusOffset, uE_H, vE_H, &
+  !$OMP                           uS_H, vS_H, uSbar_H, vSbar_H , uS_Hi, vS_Hi, &
+  !$OMP                           uS_SLD, vS_SLD, uS_SLC, vS_SLC, uSbar_SLD, vSbar_SLD, &
+  !$OMP                           StokesXI, StokesXI_1d, StokesVt_1d, kbl) &
   !$OMP                           shared(G, GV, CS, US, uStar, h, dz, buoy_scale, buoyFlux, &
   !$OMP                           Temp, Salt, waves, tv, GoRho, GoRho_Z_L2, u, v, lamult)
   do j = G%jsc, G%jec
