@@ -1093,10 +1093,13 @@ subroutine KPP_compute_BLD(CS, G, GV, US, h, Temp, Salt, u, v, tv, uStar, buoyFl
       do k=1,GV%ke
         U_H(k) = 0.5 * (u(I,j,k)+u(I-1,j,k))
         V_H(k) = 0.5 * (v(i,J,k)+v(i,J-1,k))
-        uE_H(k) = 0.5 * (u(I,j,k)+u(I-1,j,k)-Waves%US_x(I,j,k)-Waves%US_x(I-1,j,k))
-        vE_H(k) = 0.5 * (v(i,J,k)+v(i,J-1,k)-Waves%US_y(i,J,k)-Waves%US_y(i,J-1,k))
       enddo
-
+      if (CS%StokesMOST) then
+        do k=1,GV%ke
+          uE_H(k) = 0.5 * (u(I,j,k)+u(I-1,j,k)-Waves%US_x(I,j,k)-Waves%US_x(I-1,j,k))
+          vE_H(k) = 0.5 * (v(i,J,k)+v(i,J-1,k)-Waves%US_y(i,J,k)-Waves%US_y(i,J-1,k))
+        enddo
+      endif
       ! things independent of position within the column
       Coriolis = 0.25*US%s_to_T*( (G%CoriolisBu(i,j)   + G%CoriolisBu(i-1,j-1)) + &
                                   (G%CoriolisBu(i-1,j) + G%CoriolisBu(i,j-1)) )
@@ -1134,7 +1137,7 @@ subroutine KPP_compute_BLD(CS, G, GV, US, h, Temp, Salt, u, v, tv, uStar, buoyFl
           endif
         enddo
 
-         if (CS%StokesMOST) then
+        if (CS%StokesMOST) then
           surfBuoyFlux   = buoy_scale * &
                           (buoyFlux(i,j,1) - 0.5*(buoyFlux(i,j,k)+buoyFlux(i,j,k+1)) )
           surfBuoyFlux2(k) = surfBuoyFlux
@@ -1168,14 +1171,12 @@ subroutine KPP_compute_BLD(CS, G, GV, US, h, Temp, Salt, u, v, tv, uStar, buoyFl
           surfSalt = surfHsalt * I_hTot
           surfU    = surfHu    * I_hTot
           surfV    = surfHv    * I_hTot
+
           Uk       = uE_H(k) + uS_H(k) - surfU
           Vk       = vE_H(k) + vS_H(k) - surfV
 
         else   !not StokesMOST
-          uS_H(k) = 0.5*(Waves%US_x(i,j,ktmp)+Waves%US_x(i-1,j,ktmp))
-          vS_H(k) = 0.5*(Waves%US_y(i,j,ktmp)+Waves%US_y(i,j-1,ktmp))
           StokesXI_1d(k) = 0.0
-
           ! average temperature, salinity, u and v over surface layer
           ! use C-grid average to get u and v on T-points.
           surfHtemp = 0.0
@@ -1204,14 +1205,20 @@ subroutine KPP_compute_BLD(CS, G, GV, US, h, Temp, Salt, u, v, tv, uStar, buoyFl
             endif
 
           enddo
-          I_hTot = 1./hTot
-          surfTemp = surfHtemp * I_hTot
-          surfSalt = surfHsalt * I_hTot
-          surfU    = surfHu    * I_hTot
-          surfV    = surfHv    * I_hTot
-          surfUs   = surfHus   * I_hTot
-          surfVs   = surfHvs   * I_hTot
+          !I_hTot = 1./hTot
+          !surfTemp = surfHtemp * I_hTot
+          !surfSalt = surfHsalt * I_hTot
+          !surfU    = surfHu    * I_hTot
+          !surfV    = surfHv    * I_hTot
+          !surfUs   = surfHus   * I_hTot
+          !surfVs   = surfHvs   * I_hTot
 
+          surfTemp = surfHtemp / hTot
+          surfSalt = surfHsalt / hTot
+          surfU    = surfHu    / hTot
+          surfV    = surfHv    / hTot
+          surfUs   = surfHus   / hTot
+          surfVs   = surfHvs   / hTot
           ! vertical shear between present layer and surface layer averaged surfU and surfV.
           ! C-grid average to get Uk and Vk on T-points.
           Uk         = 0.5*(u(i,j,k)+u(i-1,j,k)) - surfU
