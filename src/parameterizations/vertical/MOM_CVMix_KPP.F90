@@ -1376,7 +1376,7 @@ subroutine KPP_compute_BLD(CS, G, GV, US, h, Temp, Salt, u, v, tv, uStar, buoyFl
       CS%OBLdepth(i,j) = US%m_to_Z * KPP_OBL_depth
 
     if (CS%StokesMOST) then
-      kbl = nint(CS%kOBL(i,j))
+      kbl = min(nint(CS%kOBL(i,j)), GV%ke)
       SLdepth_0d = CS%surf_layer_ext*CS%OBLdepth(i,j)
       surfBuoyFlux = surfBuoyFlux2(kbl)
         ! find ksfc for cell where "surface layer" sits
