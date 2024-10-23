@@ -1158,14 +1158,17 @@ subroutine KPP_compute_BLD(CS, G, GV, US, h, Temp, Salt, u, v, tv, uStar, buoyFl
           surfHu    = (uE_H(ksfc) + uSbar_SLD)  * delH
           surfHv    = (vE_H(ksfc) + vSbar_SLD)  * delH
           hTot      = delH
-          do ktmp = 1,ksfc-1                            ! if ksfc >=2
-            delH = h(i,j,ktmp)*GV%H_to_Z
-            hTot = hTot + delH
-            surfHtemp = surfHtemp + Temp(i,j,ktmp) * delH
-            surfHsalt = surfHsalt + Salt(i,j,ktmp) * delH
-            surfHu    = surfHu + (uE_H(ktmp) + uSbar_H(ktmp)) * delH
-            surfHv    = surfHv + (vE_H(ktmp) + vSbar_H(ktmp)) * delH
-          enddo
+          ! only loop if ksfc >=2
+          if (ksfc >=2) then
+            do ktmp = 1,ksfc-1
+              delH = h(i,j,ktmp)*GV%H_to_Z
+              hTot = hTot + delH
+              surfHtemp = surfHtemp + Temp(i,j,ktmp) * delH
+              surfHsalt = surfHsalt + Salt(i,j,ktmp) * delH
+              surfHu    = surfHu + (uE_H(ktmp) + uSbar_H(ktmp)) * delH
+              surfHv    = surfHv + (vE_H(ktmp) + vSbar_H(ktmp)) * delH
+            enddo
+          endif
           I_hTot = 1./hTot
           surfTemp = surfHtemp * I_hTot
           surfSalt = surfHsalt * I_hTot
