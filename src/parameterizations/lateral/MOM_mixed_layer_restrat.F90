@@ -51,6 +51,7 @@ type, public :: mixedlayer_restrat_CS ; private
   logical :: MLE_use_PBL_MLD       !< If true, use the MLD provided by the PBL parameterization.
                                    !! if false, MLE will calculate a MLD based on a density difference
                                    !! based on the parameter MLE_DENSITY_DIFF.
+  logical :: Bodner_use_MLD_003    !< If true, use the MLD_003 calculation in the Bodner et al. parameterization.
   real    :: vonKar                !< The von Karman constant as used for mixed layer viscosity [nondim]
   real    :: MLE_MLD_decay_time    !< Time-scale to use in a running-mean when MLD is retreating [T ~> s].
   real    :: MLE_MLD_decay_time2   !< Time-scale to use in a running-mean when filtered MLD is retreating [T ~> s].
@@ -244,14 +245,9 @@ subroutine mixedlayer_restrat_OM4(h, uhtr, vhtr, tv, forces, dt, h_MLD, VarMix, 
   real :: vtimescale_diag(SZI_(G),SZJB_(G)) ! Meridional restratification timescale [T ~> s], stored for diagnostics.
   real :: uDml_diag(SZIB_(G),SZJ_(G))  ! A 2D copy of uDml for diagnostics [H L2 T-1 ~> m3 s-1 or kg s-1]
   real :: vDml_diag(SZI_(G),SZJB_(G))  ! A 2D copy of vDml for diagnostics [H L2 T-1 ~> m3 s-1 or kg s-1]
-  real, dimension(SZI_(G)) :: rhoSurf, deltaRhoAtKm1, deltaRhoAtK ! Densities and density differences [R ~> kg m-3]
-  real, dimension(SZI_(G)) :: dK, dKm1 ! Depths of layer centers [H ~> m or kg m-2].
-  real, dimension(SZI_(G)) :: pRef_MLD ! A reference pressure for calculating the mixed layer
-                                       ! densities [R L2 T-2 ~> Pa].
   real, dimension(SZI_(G)) :: covTS, & ! SGS TS covariance in Stanley param; currently 0 [C S ~> degC ppt]
                               varS     ! SGS S variance in Stanley param; currently 0    [S2 ~> ppt2]
   real :: aFac, bFac ! Nondimensional ratios [nondim]
-  real :: ddRho     ! A density difference [R ~> kg m-3]
   real :: hAtVel    ! Thickness at the velocity points [H ~> m or kg m-2]
   real :: zpa       ! Fractional position within the mixed layer of the interface above a layer [nondim]
   real :: zpb       ! Fractional position within the mixed layer of the interface below a layer [nondim]
@@ -286,48 +282,7 @@ subroutine mixedlayer_restrat_OM4(h, uhtr, vhtr, tv, forces, dt, h_MLD, VarMix, 
   call find_ustar(forces, tv, U_star_2d, G, GV, US, halo=1, H_T_units=.true.)
 
   if (CS%MLE_density_diff > 0.) then ! We need to calculate a mixed layer depth, MLD.
-    !! TODO: use derivatives and mid-MLD pressure. Currently this is sigma-0. -AJA
-    pRef_MLD(:) = 0.
-    EOSdom(:) = EOS_domain(G%HI, halo=1)
-    do j=js-1,je+1
-      dK(:) = 0.5 * h(:,j,1) ! Depth of center of surface layer
-      if (CS%use_Stanley_ML) then
-        call calculate_density(tv%T(:,j,1), tv%S(:,j,1), pRef_MLD, tv%varT(:,j,1), covTS, varS, &
-          rhoSurf, tv%eqn_of_state, EOSdom)
-      else
-        call calculate_density(tv%T(:,j,1), tv%S(:,j,1), pRef_MLD, rhoSurf, tv%eqn_of_state, EOSdom)
-      endif
-      deltaRhoAtK(:) = 0.
-      MLD_fast(:,j) = 0.
-      do k=2,nz
-        dKm1(:) = dK(:) ! Depth of center of layer K-1
-        dK(:) = dK(:) + 0.5 * ( h(:,j,k) + h(:,j,k-1) ) ! Depth of center of layer K
-        ! Mixed-layer depth, using sigma-0 (surface reference pressure)
-        deltaRhoAtKm1(:) = deltaRhoAtK(:) ! Store value from previous iteration of K
-        if (CS%use_Stanley_ML) then
-          call calculate_density(tv%T(:,j,k), tv%S(:,j,k), pRef_MLD, tv%varT(:,j,k), covTS, varS, &
-            deltaRhoAtK, tv%eqn_of_state, EOSdom)
-        else
-          call calculate_density(tv%T(:,j,k), tv%S(:,j,k), pRef_MLD, deltaRhoAtK, tv%eqn_of_state, EOSdom)
-        endif
-        do i=is-1,ie+1
-          deltaRhoAtK(i) = deltaRhoAtK(i) - rhoSurf(i) ! Density difference between layer K and surface
-        enddo
-        do i=is-1,ie+1
-          ddRho = deltaRhoAtK(i) - deltaRhoAtKm1(i)
-          if ((MLD_fast(i,j)==0.) .and. (ddRho>0.) .and. &
-              (deltaRhoAtKm1(i)<CS%MLE_density_diff) .and. (deltaRhoAtK(i)>=CS%MLE_density_diff)) then
-            aFac = ( CS%MLE_density_diff - deltaRhoAtKm1(i) ) / ddRho
-            MLD_fast(i,j) = dK(i) * aFac + dKm1(i) * (1. - aFac)
-          endif
-        enddo ! i-loop
-      enddo ! k-loop
-      do i=is-1,ie+1
-        MLD_fast(i,j) = CS%MLE_MLD_stretch * MLD_fast(i,j)
-        if ((MLD_fast(i,j)==0.) .and. (deltaRhoAtK(i)<CS%MLE_density_diff)) &
-          MLD_fast(i,j) = dK(i) ! Assume mixing to the bottom
-      enddo
-    enddo ! j-loop
+    call calculate_mld_003(h, tv, MLD_fast, G, GV, CS)
   elseif (CS%MLE_use_PBL_MLD) then
     do j=js-1,je+1 ; do i=is-1,ie+1
       MLD_fast(i,j) = CS%MLE_MLD_stretch * h_MLD(i,j)
@@ -787,6 +742,7 @@ subroutine mixedlayer_restrat_Bodner(CS, G, GV, US, h, uhtr, vhtr, tv, forces, d
   real, dimension(SZI_(G),SZJ_(G)) :: &
     little_h, &           ! "Little h" representing active mixing layer depth [H ~> m or kg m-2]
     big_H, &              ! "Big H" representing the mixed layer depth [H ~> m or kg m-2]
+    mld_003, &            ! The mixed layer depth returned by calculate_MLD_003 [H ~> m or kg m-2]
     htot, &               ! The sum of the thicknesses of layers in the mixed layer [H ~> m or kg m-2]
     buoy_av, &            ! g_Rho0 times the average mixed layer density or G_Earth
                           ! times the average specific volume [L2 H-1 T-2 ~> m s-2 or m4 kg-1 s-2]
@@ -853,14 +809,19 @@ subroutine mixedlayer_restrat_Bodner(CS, G, GV, US, h, uhtr, vhtr, tv, forces, d
 
   if (.not.associated(tv%eqn_of_state)) call MOM_error(FATAL, "mixedlayer_restrat_Bodner: "// &
          "An equation of state must be used with this module.")
-  if (.not.CS%MLE_use_PBL_MLD) call MOM_error(FATAL, "mixedlayer_restrat_Bodner: "// &
-         "To use the Bodner et al., 2023, MLE parameterization, MLE_USE_PBL_MLD must be True.")
-  if (CS%MLE_density_diff > 0.) call MOM_error(FATAL, "mixedlayer_restrat_Bodner: "// &
-         "MLE_density_diff is +ve and should not be in mixedlayer_restrat_Bodner.")
-  if (.not.associated(bflux)) call MOM_error(FATAL, "mixedlayer_restrat_Bodner: "// &
-         "Surface buoyancy flux was not associated.")
+  if (CS%MLE_use_PBL_MLD) then
+    if (CS%MLE_density_diff > 0.) call MOM_error(FATAL, "mixedlayer_restrat_Bodner: "// &
+           "MLE_density_diff is +ve and should not be in mixedlayer_restrat_Bodner.")
+    if (.not.associated(bflux)) call MOM_error(FATAL, "mixedlayer_restrat_Bodner: "// &
+           "Surface buoyancy flux was not associated.")
+  else
+    if (.not.CS%Bodner_use_MLD_003) call MOM_error(FATAL, "mixedlayer_restrat_Bodner: "// &
+           "To use the Bodner et al., 2023, MLE parameterization, either MLE_USE_PBL_MLD or "// &
+           "Bodner_use_MLD_003 must be True.")
+  endif
 
-  call pass_var(bflux, G%domain, halo=1)
+  if (associated(bflux)) &
+    call pass_var(bflux, G%domain, halo=1)
 
   ! Extract the friction velocity from the forcing type.
   call find_ustar(forces, tv, U_star_2d, G, GV, US, halo=1)
@@ -887,9 +848,19 @@ subroutine mixedlayer_restrat_Bodner(CS, G, GV, US, h, uhtr, vhtr, tv, forces, d
   enddo ; enddo
 
   ! Calculate "big H", representative of the mixed layer depth, used in B22 formula (eq 27).
+  if (CS%Bodner_use_MLD_003) then
+    call calculate_mld_003(h, tv, MLD_003, G, GV, CS)
+    do j=js-1,je+1 ; do i=is-1,ie+1
+      big_H(i,j) = rmean2ts(MLD_003(i,j), CS%MLD_filtered_slow(i,j), &
+                            CS%MLD_growing_Tfilt, CS%MLD_decaying_Tfilt, dt)
+    enddo ; enddo
+  else
+    do j=js-1,je+1 ; do i=is-1,ie+1
+      big_H(i,j) = rmean2ts(little_h(i,j), CS%MLD_filtered_slow(i,j), &
+                            CS%MLD_growing_Tfilt, CS%MLD_decaying_Tfilt, dt)
+    enddo ; enddo
+  endif
   do j=js-1,je+1 ; do i=is-1,ie+1
-    big_H(i,j) = rmean2ts(little_h(i,j), CS%MLD_filtered_slow(i,j), &
-                          CS%MLD_growing_Tfilt, CS%MLD_decaying_Tfilt, dt)
     CS%MLD_filtered_slow(i,j) = big_H(i,j)
   enddo ; enddo
 
@@ -1485,6 +1456,75 @@ subroutine mixedlayer_restrat_BML(h, uhtr, vhtr, tv, forces, dt, G, GV, US, CS)
 
 end subroutine mixedlayer_restrat_BML
 
+!> Calculates the mixed layer depth using a density difference criterion.
+subroutine calculate_mld_003(h, tv, MLD_fast, G, GV, CS)
+  type(mixedlayer_restrat_CS),                intent(inout) :: CS     !< Module control structure
+  type(ocean_grid_type),                      intent(inout) :: G
+  type(verticalGrid_type),                    intent(in)    :: GV     !< Ocean vertical grid structure
+  real, dimension(SZI_(G),SZJ_(G),SZK_(GV)),  intent(inout) :: h      !< Layer thickness [H ~> m or kg m-2]
+  real, dimension(SZI_(G),SZJ_(G)),           intent(out)   :: MLD_fast
+  type(thermo_var_ptrs),                      intent(in)    :: tv     !< Thermodynamic variables structure
+
+  ! Local variables
+  real, dimension(SZI_(G)) :: pRef_MLD ! A reference pressure for calculating the mixed layer
+                                       ! densities [R L2 T-2 ~> Pa].
+  real, dimension(SZI_(G)) :: rhoSurf, deltaRhoAtKm1, deltaRhoAtK ! Densities and density differences [R ~> kg m-3]
+  real, dimension(SZI_(G)) :: dK, dKm1 ! Depths of layer centers [H ~> m or kg m-2].
+  real :: ddRho     ! A density difference [R ~> kg m-3]
+  real :: aFac  ! A nondimensional ratio [nondim]
+  real :: covTS(SZI_(G))  ! SGS TS covariance in Stanley param; currently 0 [C S ~> degC ppt]
+  real :: varS(SZI_(G))   ! SGS S variance in Stanley param; currently 0 [S2 ~> ppt2]
+  integer, dimension(2) :: EOSdom ! The i-computational domain for the equation of state
+  integer :: i, j, k, is, ie, js, je, nz
+
+  is  = G%isc  ; ie  = G%iec  ; js  = G%jsc  ; je  = G%jec ; nz = GV%ke
+
+  covTS(:) = 0.0 ! Might be in tv% in the future. Not implemented for the time being.
+  varS(:) = 0.0  ! Ditto.
+
+  !! TODO: use derivatives and mid-MLD pressure. Currently this is sigma-0. -AJA
+  pRef_MLD(:) = 0.
+  EOSdom(:) = EOS_domain(G%HI, halo=1)
+  do j=js-1,je+1
+    dK(:) = 0.5 * h(:,j,1) ! Depth of center of surface layer
+    if (CS%use_Stanley_ML) then
+      call calculate_density(tv%T(:,j,1), tv%S(:,j,1), pRef_MLD, tv%varT(:,j,1), covTS, varS, &
+        rhoSurf, tv%eqn_of_state, EOSdom)
+    else
+      call calculate_density(tv%T(:,j,1), tv%S(:,j,1), pRef_MLD, rhoSurf, tv%eqn_of_state, EOSdom)
+    endif
+    deltaRhoAtK(:) = 0.
+    MLD_fast(:,j) = 0.
+    do k=2,nz
+      dKm1(:) = dK(:) ! Depth of center of layer K-1
+      dK(:) = dK(:) + 0.5 * ( h(:,j,k) + h(:,j,k-1) ) ! Depth of center of layer K
+      ! Mixed-layer depth, using sigma-0 (surface reference pressure)
+      deltaRhoAtKm1(:) = deltaRhoAtK(:) ! Store value from previous iteration of K
+      if (CS%use_Stanley_ML) then
+        call calculate_density(tv%T(:,j,k), tv%S(:,j,k), pRef_MLD, tv%varT(:,j,k), covTS, varS, &
+          deltaRhoAtK, tv%eqn_of_state, EOSdom)
+      else
+        call calculate_density(tv%T(:,j,k), tv%S(:,j,k), pRef_MLD, deltaRhoAtK, tv%eqn_of_state, EOSdom)
+      endif
+      do i=is-1,ie+1
+        deltaRhoAtK(i) = deltaRhoAtK(i) - rhoSurf(i) ! Density difference between layer K and surface
+      enddo
+      do i=is-1,ie+1
+        ddRho = deltaRhoAtK(i) - deltaRhoAtKm1(i)
+        if ((MLD_fast(i,j)==0.) .and. (ddRho>0.) .and. &
+            (deltaRhoAtKm1(i)<CS%MLE_density_diff) .and. (deltaRhoAtK(i)>=CS%MLE_density_diff)) then
+          aFac = ( CS%MLE_density_diff - deltaRhoAtKm1(i) ) / ddRho
+          MLD_fast(i,j) = dK(i) * aFac + dKm1(i) * (1. - aFac)
+        endif
+      enddo ! i-loop
+    enddo ! k-loop
+    do i=is-1,ie+1
+      MLD_fast(i,j) = CS%MLE_MLD_stretch * MLD_fast(i,j)
+      if ((MLD_fast(i,j)==0.) .and. (deltaRhoAtK(i)<CS%MLE_density_diff)) &
+        MLD_fast(i,j) = dK(i) ! Assume mixing to the bottom
+    enddo
+  enddo ! j-loop
+end subroutine calculate_mld_003
 ! NOTE: This function appears to change answers on some platforms, so it is
 ! currently unused in the model, but we intend to introduce it in the future.
 
@@ -1643,9 +1683,15 @@ logical function mixedlayer_restrat_init(Time, G, GV, US, param_file, diag, CS, 
              "If true, the MLE parameterization will use the mixed-layer "//&
              "depth provided by the active PBL parameterization. If false, "//&
              "MLE will estimate a MLD based on a density difference with the "//&
-             "surface using the parameter MLE_DENSITY_DIFF.", default=.false.)
-    if (.not.CS%MLE_use_PBL_MLD) call MOM_error(FATAL, "mixedlayer_restrat_init: "// &
-             "To use MLE%USE_BODNER23=True then MLE_USE_PBL_MLD must be True.")
+             "surface using the parameter MLE_DENSITY_DIFF, unless "//&
+              "BODNER_USE_MLD_003 is true.", default=.false.)
+    call get_param(param_file, mdl, "BODNER_USE_MLD_003", CS%Bodner_use_MLD_003, &
+             "If true, the Bodner parameterization will use the mixed-layer "//&
+             "depth based on MLD_003.", default=.false.)
+    if (.not.(CS%MLE_use_PBL_MLD.or.CS%Bodner_use_MLD_003)) call MOM_error(FATAL, "mixedlayer_restrat_init: "// &
+             "To use MLE%USE_BODNER23=True then MLE_USE_PBL_MLD or BODNER_USE_MLD_003 must be true.")
+    if (CS%MLE_use_PBL_MLD.and.CS%Bodner_use_MLD_003) call MOM_error(FATAL, "mixedlayer_restrat_init: "// &
+             "MLE_USE_PBL_MLD and BODNER_USE_MLD_003 cannot both be true.")
   else
     call closeParameterBlock(param_file) ! The remaining parameters do not have MLE% prepended
   endif
