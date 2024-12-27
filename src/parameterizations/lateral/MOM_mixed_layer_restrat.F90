@@ -51,7 +51,8 @@ type, public :: mixedlayer_restrat_CS ; private
   logical :: MLE_use_PBL_MLD       !< If true, use the MLD provided by the PBL parameterization.
                                    !! if false, MLE will calculate a MLD based on a density difference
                                    !! based on the parameter MLE_DENSITY_DIFF.
-  logical :: Bodner_use_MLD_003    !< If true, use the MLD_003 calculation in the Bodner et al. parameterization.
+  logical :: Bodner_detect_MLD        !< If true, detect the MLD based on given density difference criterion
+                                   !! (MLE_DENSITY_DIFF) in the Bodner et al. parameterization.
   real    :: vonKar                !< The von Karman constant as used for mixed layer viscosity [nondim]
   real    :: MLE_MLD_decay_time    !< Time-scale to use in a running-mean when MLD is retreating [T ~> s].
   real    :: MLE_MLD_decay_time2   !< Time-scale to use in a running-mean when filtered MLD is retreating [T ~> s].
@@ -282,7 +283,7 @@ subroutine mixedlayer_restrat_OM4(h, uhtr, vhtr, tv, forces, dt, h_MLD, VarMix, 
   call find_ustar(forces, tv, U_star_2d, G, GV, US, halo=1, H_T_units=.true.)
 
   if (CS%MLE_density_diff > 0.) then ! We need to calculate a mixed layer depth, MLD.
-    call calculate_mld_003(h, tv, MLD_fast, G, GV, CS)
+    call detect_mld(h, tv, MLD_fast, G, GV, CS)
   elseif (CS%MLE_use_PBL_MLD) then
     do j=js-1,je+1 ; do i=is-1,ie+1
       MLD_fast(i,j) = CS%MLE_MLD_stretch * h_MLD(i,j)
@@ -742,7 +743,7 @@ subroutine mixedlayer_restrat_Bodner(CS, G, GV, US, h, uhtr, vhtr, tv, forces, d
   real, dimension(SZI_(G),SZJ_(G)) :: &
     little_h, &           ! "Little h" representing active mixing layer depth [H ~> m or kg m-2]
     big_H, &              ! "Big H" representing the mixed layer depth [H ~> m or kg m-2]
-    mld_003, &            ! The mixed layer depth returned by calculate_MLD_003 [H ~> m or kg m-2]
+    mld, &                ! The mixed layer depth returned by detect_mld [H ~> m or kg m-2]
     htot, &               ! The sum of the thicknesses of layers in the mixed layer [H ~> m or kg m-2]
     buoy_av, &            ! g_Rho0 times the average mixed layer density or G_Earth
                           ! times the average specific volume [L2 H-1 T-2 ~> m s-2 or m4 kg-1 s-2]
@@ -815,9 +816,9 @@ subroutine mixedlayer_restrat_Bodner(CS, G, GV, US, h, uhtr, vhtr, tv, forces, d
     if (.not.associated(bflux)) call MOM_error(FATAL, "mixedlayer_restrat_Bodner: "// &
            "Surface buoyancy flux was not associated.")
   else
-    if (.not.CS%Bodner_use_MLD_003) call MOM_error(FATAL, "mixedlayer_restrat_Bodner: "// &
+    if (.not.CS%Bodner_detect_MLD) call MOM_error(FATAL, "mixedlayer_restrat_Bodner: "// &
            "To use the Bodner et al., 2023, MLE parameterization, either MLE_USE_PBL_MLD or "// &
-           "Bodner_use_MLD_003 must be True.")
+           "Bodner_detect_MLD must be True.")
   endif
 
   if (associated(bflux)) &
@@ -848,10 +849,10 @@ subroutine mixedlayer_restrat_Bodner(CS, G, GV, US, h, uhtr, vhtr, tv, forces, d
   enddo ; enddo
 
   ! Calculate "big H", representative of the mixed layer depth, used in B22 formula (eq 27).
-  if (CS%Bodner_use_MLD_003) then
-    call calculate_mld_003(h, tv, MLD_003, G, GV, CS)
+  if (CS%Bodner_detect_MLD) then
+    call detect_mld(h, tv, MLD, G, GV, CS)
     do j=js-1,je+1 ; do i=is-1,ie+1
-      big_H(i,j) = rmean2ts(MLD_003(i,j), CS%MLD_filtered_slow(i,j), &
+      big_H(i,j) = rmean2ts(MLD(i,j), CS%MLD_filtered_slow(i,j), &
                             CS%MLD_growing_Tfilt, CS%MLD_decaying_Tfilt, dt)
     enddo ; enddo
   else
@@ -1456,13 +1457,13 @@ subroutine mixedlayer_restrat_BML(h, uhtr, vhtr, tv, forces, dt, G, GV, US, CS)
 
 end subroutine mixedlayer_restrat_BML
 
-!> Calculates the mixed layer depth using a density difference criterion.
-subroutine calculate_mld_003(h, tv, MLD_fast, G, GV, CS)
+!> Detects the mixed layer depth using a density difference criterion (MLE_DENSITY_DIFF)
+subroutine detect_mld(h, tv, MLD_fast, G, GV, CS)
   type(mixedlayer_restrat_CS),                intent(inout) :: CS     !< Module control structure
-  type(ocean_grid_type),                      intent(inout) :: G
+  type(ocean_grid_type),                      intent(inout) :: G      !< Ocean grid structure
   type(verticalGrid_type),                    intent(in)    :: GV     !< Ocean vertical grid structure
   real, dimension(SZI_(G),SZJ_(G),SZK_(GV)),  intent(inout) :: h      !< Layer thickness [H ~> m or kg m-2]
-  real, dimension(SZI_(G),SZJ_(G)),           intent(out)   :: MLD_fast
+  real, dimension(SZI_(G),SZJ_(G)),           intent(out)   :: MLD_fast !< detected mixed layer depth [H ~> m or kg m-2]
   type(thermo_var_ptrs),                      intent(in)    :: tv     !< Thermodynamic variables structure
 
   ! Local variables
@@ -1524,7 +1525,8 @@ subroutine calculate_mld_003(h, tv, MLD_fast, G, GV, CS)
         MLD_fast(i,j) = dK(i) ! Assume mixing to the bottom
     enddo
   enddo ! j-loop
-end subroutine calculate_mld_003
+end subroutine detect_mld
+
 ! NOTE: This function appears to change answers on some platforms, so it is
 ! currently unused in the model, but we intend to introduce it in the future.
 
@@ -1684,14 +1686,14 @@ logical function mixedlayer_restrat_init(Time, G, GV, US, param_file, diag, CS, 
              "depth provided by the active PBL parameterization. If false, "//&
              "MLE will estimate a MLD based on a density difference with the "//&
              "surface using the parameter MLE_DENSITY_DIFF, unless "//&
-              "BODNER_USE_MLD_003 is true.", default=.false.)
-    call get_param(param_file, mdl, "BODNER_USE_MLD_003", CS%Bodner_use_MLD_003, &
-             "If true, the Bodner parameterization will use the mixed-layer "//&
-             "depth based on MLD_003.", default=.false.)
-    if (.not.(CS%MLE_use_PBL_MLD.or.CS%Bodner_use_MLD_003)) call MOM_error(FATAL, "mixedlayer_restrat_init: "// &
-             "To use MLE%USE_BODNER23=True then MLE_USE_PBL_MLD or BODNER_USE_MLD_003 must be true.")
-    if (CS%MLE_use_PBL_MLD.and.CS%Bodner_use_MLD_003) call MOM_error(FATAL, "mixedlayer_restrat_init: "// &
-             "MLE_USE_PBL_MLD and BODNER_USE_MLD_003 cannot both be true.")
+              "BODNER_DETECT_MLD is true.", default=.false.)
+    call get_param(param_file, mdl, "BODNER_DETECT_MLD", CS%Bodner_detect_MLD, &
+             "If true, the Bodner parameterization will use the mixed-layer depth "//&
+             "detected via the density difference criterion MLE_DENSITY_DIFF.", default=.false.)
+    if (.not.(CS%MLE_use_PBL_MLD.or.CS%Bodner_detect_MLD)) call MOM_error(FATAL, "mixedlayer_restrat_init: "// &
+             "To use MLE%USE_BODNER23=True then MLE_USE_PBL_MLD or BODNER_DETECT_MLD must be true.")
+    if (CS%MLE_use_PBL_MLD.and.CS%Bodner_detect_MLD) call MOM_error(FATAL, "mixedlayer_restrat_init: "// &
+             "MLE_USE_PBL_MLD and BODNER_DETECT_MLD cannot both be true.")
   else
     call closeParameterBlock(param_file) ! The remaining parameters do not have MLE% prepended
   endif
@@ -1777,6 +1779,15 @@ logical function mixedlayer_restrat_init(Time, G, GV, US, param_file, diag, CS, 
                  "restratification module.  This can be tiny, but if this is greater than 0, "//&
                  "it will prevent divisions by zero when f and KV_RESTRAT are zero.", &
                  units="m s-1", default=US%Z_to_m*US%s_to_T*ustar_min_dflt, scale=GV%m_to_H*US%T_to_s)
+  elseif (CS%Bodner_detect_MLD) then
+    call get_param(param_file, mdl, "MLE_DENSITY_DIFF", CS%MLE_density_diff, &
+           "Density difference used to detect the mixed-layer "//&
+           "depth used for the mixed-layer eddy parameterization "//&
+           "by Fox-Kemper et al. (2010)", units="kg/m3", default=0.03, scale=US%kg_m3_to_R)
+    call get_param(param_file, mdl, "MLE_MLD_STRETCH", CS%MLE_MLD_stretch, &
+           "A scaling coefficient for stretching/shrinking the MLD "//&
+           "used in the MLE scheme. This simply multiplies MLD wherever used.",&
+           units="nondim", default=1.0)
   endif
 
   CS%diag => diag
