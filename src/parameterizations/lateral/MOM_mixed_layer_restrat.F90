@@ -4,9 +4,11 @@ module MOM_mixed_layer_restrat
 ! This file is part of MOM6. See LICENSE.md for the license.
 
 use MOM_debugging,     only : hchksum
+use MOM_CVMix_KPP,     only : KPP_get_TKE, KPP_CS
 use MOM_diag_mediator, only : post_data, query_averaging_enabled, diag_ctrl
 use MOM_diag_mediator, only : register_diag_field, safe_alloc_ptr, time_type
 use MOM_diag_mediator, only : diag_update_remap_grids
+use MOM_diabatic_driver,   only : diabatic_CS, extract_diabatic_member
 use MOM_domains,       only : pass_var, To_West, To_South, Omit_Corners
 use MOM_error_handler, only : MOM_error, FATAL, WARNING
 use MOM_file_parser,   only : get_param, log_param, log_version, param_file_type
@@ -33,6 +35,7 @@ public mixedlayer_restrat
 public mixedlayer_restrat_init
 public mixedlayer_restrat_register_restarts
 public mixedlayer_restrat_unit_tests
+public init_mixedlayer_restrat_diabatic
 
 ! A note on unit descriptions in comments: MOM6 uses units that can be rescaled for dimensional
 ! consistency testing. These are noted in comments with units like Z, H, L, and T, along with
@@ -69,6 +72,7 @@ type, public :: mixedlayer_restrat_CS ; private
 
   ! The following parameters are used in the Bodner et al., 2023, parameterization
   logical :: use_Bodner = .false.  !< If true, use the Bodner et al., 2023, parameterization.
+  logical :: Bodner_use_KPP = .false. !< If true, use TKE productivity from KPP module in Bodner et al. parameterization.
   real    :: Cr                    !< Efficiency coefficient from Bodner et al., 2023 [nondim]
   real    :: mstar                 !< The m* value used to estimate the turbulent vertical momentum flux [nondim]
   real    :: nstar                 !< The n* value used to estimate the turbulent vertical momentum flux [nondim]
@@ -100,6 +104,7 @@ type, public :: mixedlayer_restrat_CS ; private
                                    !! timing of diagnostic output.
   type(external_field) :: sbc_fl   !< A handle used in time interpolation of
                                    !! front-length scales read from a file.
+  type(KPP_CS),    pointer :: KPP_CSp => NULL() !< KPP control structure needed to ge
   type(time_type), pointer :: Time => NULL() !< A pointer to the ocean model's clock.
   logical :: use_Stanley_ML        !< If true, use the Stanley parameterization of SGS T variance
   logical :: wave_enhanced_ustar   !< If true, enhance ustar for equilibrium surface waves (La-2=11),
@@ -119,7 +124,10 @@ type, public :: mixedlayer_restrat_CS ; private
          wpup_filtered, &          !< Time-filtered vertical momentum flux [H L T-2 ~> m2 s-2 or kg m-1 s-2]
          MLD_Tfilt_space, &        !< Spatially varying time scale for MLD filter [T ~> s]
          Cr_space                  !< Spatially varying Cr coefficient [nondim]
-
+  real, pointer, dimension(:,:) :: &
+         PS_TKE,          &        !< surface layer Stokes-production of TKE [Z3 T-3 ~> m3 s-3]
+         PU_TKE,          &        !< surface layer shear-production of TKE  [Z3 T-3 ~> m3 s-3]
+         PB_TKE                    !< surface layer bouyancy-production of TKE  [Z3 T-3 ~> m3 s-3]
   !>@{
   !! Diagnostic identifier
   integer :: id_urestrat_time = -1
@@ -149,6 +157,8 @@ contains
 !> Driver for the mixed-layer restratification parameterization.
 !! The code branches between two different implementations depending
 !! on whether the bulk-mixed layer or a general coordinate are in use.
+!subroutine mixedlayer_restrat(h, uhtr, vhtr, tv, forces, dt, MLD, h_MLD, bflux, VarMix, G, GV, US, CS)
+
 subroutine mixedlayer_restrat(h, uhtr, vhtr, tv, forces, dt, MLD, h_MLD, bflux, VarMix, G, GV, US, CS)
   type(ocean_grid_type),                      intent(inout) :: G      !< Ocean grid structure
   type(verticalGrid_type),                    intent(in)    :: GV     !< Ocean vertical grid structure
@@ -828,6 +838,9 @@ subroutine mixedlayer_restrat_Bodner(CS, G, GV, US, h, uhtr, vhtr, tv, forces, d
   real :: muzb            ! mu(z) at bottom of the layer [nondim]
   real :: muza            ! mu(z) at top of the layer [nondim]
   real :: dh              ! Portion of the layer thickness that is in the mixed layer [H ~> m or kg m-2]
+  real :: PS_TKE          ! Stokes TKE term
+  real :: PU_TKE          ! Shear TKE term
+  real :: PB_TKE          ! Buoyancy TKE term
   real :: res_scaling_fac ! The resolution-dependent scaling factor [nondim]
   real :: Z3_T3_to_m3_s3  ! Conversion factors to undo scaling and permit terms to be raised to a
                           ! fractional power [T3 m3 Z-3 s-3 ~> 1]
@@ -850,6 +863,24 @@ subroutine mixedlayer_restrat_Bodner(CS, G, GV, US, h, uhtr, vhtr, tv, forces, d
 
   ! This value is roughly (pi / (the age of the universe) )^2.
   absurdly_small_freq2 = 1e-34*US%T_to_s**2
+
+  if (CS%Bodner_use_KPP) then
+    if (associated(CS%KPP_CSp)) then
+      CS%PS_TKE(:,:) = 0.0
+      CS%PU_TKE(:,:) = 0.0
+      CS%PB_TKE(:,:) = 0.0
+      call KPP_get_TKE(CS%KPP_CSp, CS%PS_TKE(:,:), &
+                       CS%PU_TKE(:,:), CS%PB_TKE(:,:), G, US)
+      if (CS%debug) then
+        call hchksum(CS%PS_TKE, 'mixed_layer_restrat: PS_TKE', G%HI)
+        call hchksum(CS%PU_TKE, 'mixed_layer_restrat: PU_TKE', G%HI)
+        call hchksum(CS%PB_TKE, 'mixed_layer_restrat: PB_TKE', G%HI)
+      endif
+    else
+      call MOM_error(FATAL, "mixedlayer_restrat_Bodner: "// &
+           "KPP control structure is not associated. This module requires KPP.")
+    endif
+  endif
 
   if (.not.associated(tv%eqn_of_state)) call MOM_error(FATAL, "mixedlayer_restrat_Bodner: "// &
          "An equation of state must be used with this module.")
@@ -951,11 +982,21 @@ subroutine mixedlayer_restrat_Bodner(CS, G, GV, US, h, uhtr, vhtr, tv, forces, d
           CS%min_wstar2) * US%Z_to_L * GV%Z_to_H ! In [L H T-2 ~> m2 s-2 or kg m-1 s-2]
     enddo ; enddo
   else
-    do j=js-1,je+1 ; do i=is-1,ie+1
-      w_star3 = max(0., -bflux(i,j)) * BLD(i,j)    ! In [Z3 T-3 ~> m3 s-3]
-      wpup(i,j) = max( (cuberoot(CS%mstar * U_star_2d(i,j)**3 + CS%nstar * w_star3))**2, CS%min_wstar2 ) &
-          * US%Z_to_L * GV%Z_to_H ! In [L H T-2 ~> m2 s-2 or kg m-1 s-2]
-    enddo ; enddo
+    if (CS%Bodner_use_KPP) then
+      do j=js-1,je+1 ; do i=is-1,ie+1
+        PS_TKE = CS%PS_TKE(i,j)
+        PU_TKE = CS%PU_TKE(i,j)
+        PB_TKE = CS%PB_TKE(i,j)
+        wpup(i,j) = max( (cuberoot((CS%mstar * PU_TKE + (CS%nstar * PB_TKE) + PS_TKE)))**2, CS%min_wstar2 ) &
+            * US%Z_to_L * GV%Z_to_H ! In [L H T-2 ~> m2 s-2 or kg m-1 s-2]
+      enddo ; enddo
+    else
+      do j=js-1,je+1 ; do i=is-1,ie+1
+        w_star3 = max(0., -bflux(i,j)) * BLD(i,j)    ! In [Z3 T-3 ~> m3 s-3]
+        wpup(i,j) = max( (cuberoot(CS%mstar * U_star_2d(i,j)**3 + CS%nstar * w_star3))**2, CS%min_wstar2 ) &
+            * US%Z_to_L * GV%Z_to_H ! In [L H T-2 ~> m2 s-2 or kg m-1 s-2]
+      enddo ; enddo
+    endif
   endif
 
   ! We filter w'u' with the same time scales used for "little h"
@@ -1629,6 +1670,16 @@ real function growth_time(u_star, hBL, absf, h_neg, vonKar, Kv_rest, restrat_coe
 
 end function growth_time
 
+!> Initializes aspects of the mixedlayer_restrat that depend on diabatic processes.
+!! Needed when using KPP TKE terms.
+subroutine init_mixedlayer_restrat_diabatic(diabatic_CSp, CS)
+  type(diabatic_CS),                intent(in) :: diabatic_CSp !< diabatic structure
+  type(mixedlayer_restrat_CS),      intent(inout) :: CS           !< module control structure
+
+  call extract_diabatic_member(diabatic_CSp, KPP_CSp=CS%KPP_CSp)
+
+end subroutine init_mixedlayer_restrat_diabatic
+
 !> Initialize the mixed layer restratification module
 logical function mixedlayer_restrat_init(Time, G, GV, US, param_file, diag, CS, restart_CS)
   type(time_type), target,     intent(in)    :: Time       !< Current model time
@@ -1779,9 +1830,10 @@ logical function mixedlayer_restrat_init(Time, G, GV, US, param_file, diag, CS, 
               "The variable name for Cr field.", &
               default="Cr")
       filename = trim(inputdir) // "/" // trim(filename)
-      call MOM_read_data(filename, varname, CS%Cr_space, G%domain, scale=1.0)
+      call MOM_read_data(filename, varname, CS%Cr_space, G%domain, scale=CS%Cr)
       call pass_var(CS%Cr_space, G%domain)
     endif
+
     call closeParameterBlock(param_file) ! The remaining parameters do not have MLE% prepended
     call get_param(param_file, mdl, "MLE_USE_PBL_MLD", CS%MLE_use_PBL_MLD, &
              "If true, the MLE parameterization will use the mixed-layer "//&
@@ -1796,6 +1848,12 @@ logical function mixedlayer_restrat_init(Time, G, GV, US, param_file, diag, CS, 
              "To use MLE%USE_BODNER23=True then MLE_USE_PBL_MLD or BODNER_DETECT_MLD must be true.")
     if (CS%MLE_use_PBL_MLD.and.CS%Bodner_detect_MLD) call MOM_error(FATAL, "mixedlayer_restrat_init: "// &
              "MLE_USE_PBL_MLD and BODNER_DETECT_MLD cannot both be true.")
+    call get_param(param_file, mdl, "USE_KPP", CS%Bodner_use_KPP, default=.false., do_not_log=.true.)
+    if (CS%Bodner_use_KPP) then
+      allocate(CS%PS_TKE(G%isd:G%ied,G%jsd:G%jed), source=0.0)
+      allocate(CS%PU_TKE(G%isd:G%ied,G%jsd:G%jed), source=0.0)
+      allocate(CS%PB_TKE(G%isd:G%ied,G%jsd:G%jed), source=0.0)
+    endif
   else
     call closeParameterBlock(param_file) ! The remaining parameters do not have MLE% prepended
   endif

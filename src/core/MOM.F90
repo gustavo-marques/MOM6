@@ -109,7 +109,7 @@ use MOM_MEKE,                  only : MEKE_alloc_register_restart, step_forward_
 use MOM_MEKE,                  only : MEKE_CS, MEKE_init, MEKE_end
 use MOM_MEKE_types,            only : MEKE_type
 use MOM_mixed_layer_restrat,   only : mixedlayer_restrat, mixedlayer_restrat_init, mixedlayer_restrat_CS
-use MOM_mixed_layer_restrat,   only : mixedlayer_restrat_register_restarts
+use MOM_mixed_layer_restrat,   only : mixedlayer_restrat_register_restarts, init_mixedlayer_restrat_diabatic
 use MOM_obsolete_diagnostics,  only : register_obsolete_diagnostics
 use MOM_open_boundary,         only : ocean_OBC_type, OBC_registry_type
 use MOM_open_boundary,         only : register_temp_salt_segments, update_segment_tracer_reservoirs
@@ -3545,6 +3545,7 @@ subroutine initialize_MOM(Time, Time_init, param_file, dirs, CS, &
       call pass_var(CS%visc%MLD, G%domain, halo=1)
     if (.not. CS%diabatic_first .and. associated(CS%visc%h_ML)) &
       call pass_var(CS%visc%h_ML, G%domain, halo=1)
+      call init_mixedlayer_restrat_diabatic(CS%diabatic_CSp, CS%mixedlayer_restrat_CSp)
   endif
 
   call MOM_diagnostics_init(MOM_internal_state, CS%ADp, CS%CDp, Time, G, GV, US, &
