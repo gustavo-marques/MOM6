@@ -257,6 +257,13 @@ subroutine vertFPmix(ui, vi, uold, vold, hbl_h, h, forces, dt, lpost, Cemp_NL, G
   pi = 4. * atan2(1.,1.)
   Irho0 = 1.0 / GV%Rho0
 
+  ! initialize arrays
+  uE_h(:,:,:)   = 0.0
+  vE_h(:,:,:)   = 0.0
+  uE_u(:,:,:)   = 0.0
+  vE_v(:,:,:)   = 0.0
+  vInc_v(:,:,:) = 0.0
+  uInc_u(:,:,:) = 0.0
   call pass_var(hbl_h , G%Domain, halo=1)
 
   ! u-points
@@ -350,20 +357,20 @@ subroutine vertFPmix(ui, vi, uold, vold, hbl_h, h, forces, dt, lpost, Cemp_NL, G
             vInc_h(i,j,k) = (G%mask2dCv(i,j) * vInc_v(i,j,k) + G%mask2dCv(i,j-1) * vInc_v(i,j-1,k)) / tmp_v
           enddo
           ! Wind, Stress and Shear align at surface
-          Omega_tau2w(i,j,1) = 0.0
-          Omega_tau2s(i,j,1) = 0.0
+          Omega_tau2w(i,j,:) = 0.0
+          Omega_tau2s(i,j,:) = 0.0
           do k = 1,nz
             kp1 = min( nz , k+1)
             du = uE_h(i,j,k) - uE_h(i,j,kp1)
             dv = vE_h(i,j,k) - vE_h(i,j,kp1)
-            omega_s2x = atan2( dv , du )
+            omega_s2x = atan2(dv, du)
 
             du = du + uInc_h(i,j,k) - uInc_h(i,j,kp1)
             dv = dv + vInc_h(i,j,k) - vInc_h(i,j,kp1)
-            omega_tau2x = atan2( dv , du )
-
+            omega_tau2x = atan2(dv, du)
             omega_tmp = omega_tau2x - forces%omega_w2x(i,j)
-            if ( (omega_tmp  >   pi   ) )  omega_tmp = omega_tmp - 2.*pi
+
+            if ( (omega_tmp  >   pi   ) ) omega_tmp = omega_tmp - 2.*pi
             if ( (omega_tmp  < (0.-pi)) )  omega_tmp = omega_tmp + 2.*pi
             Omega_tau2w(i,j,kp1) = omega_tmp
 
