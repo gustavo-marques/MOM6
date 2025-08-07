@@ -560,7 +560,7 @@ logical function KPP_init(paramFile, G, GV, US, diag, Time, CS, passive)
                        langmuir_entrainment_str=langmuir_entrainment_opt,&
                        CVMix_kpp_params_user=CS%KPP_params )
 
-  ! Redgister diagnostics
+  ! Register diagnostics
   CS%diag => diag
   CS%id_OBLdepth = register_diag_field('ocean_model', 'KPP_OBLdepth', diag%axesT1, Time, &
       'Thickness of the surface Ocean Boundary Layer calculated by [CVMix] KPP', &
@@ -1111,7 +1111,7 @@ subroutine KPP_compute_BLD(CS, G, GV, US, h, Temp, Salt, u, v, tv, uStar, buoyFl
   real, dimension( GV%ke )   :: StokesXI_1d ! Parameters of TKE production ratio [nondim]
   real, dimension( GV%ke )   :: BEdE_ER_1d  ! Entrainment Rule parameterized  [Z^3 T-3 ~> m s-1]
   real :: ERdepth ! Entrainment Rule Boundary layer depth  CVMix_kpp_compute_ER_depth in MKS units [m]
-  real :: check ! Entrainmnent Rule Boundary layer depth  CVMix_kpp_compute_ER_depth in MKS units [m]
+  real :: check ! Entrainment Rule Boundary layer depth  CVMix_kpp_compute_ER_depth in MKS units [m]
   real :: Llimit  ! Stable boundary Layer Limit =  vonk Lstar [Z ~> m]
   integer :: kbl  ! index of cell containing boundary layer depth [nondim]
 
