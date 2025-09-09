@@ -1128,7 +1128,7 @@ subroutine KPP_compute_BLD(CS, G, GV, US, h, Temp, Salt, u, v, tv, uStar, buoyFl
   call cpu_clock_begin(id_clock_KPP_compute_BLD)
 
   ! some constants
-  GoRho = US%Z_to_m*US%s_to_T**2 * (US%L_to_Z**2 * GV%g_Earth / GV%Rho0)
+  GoRho = US%Z_to_m*US%s_to_T**2 * (GV%g_Earth_Z_T2 / GV%Rho0)
   if (GV%Boussinesq) then
     GoRho_Z_L2 = US%L_to_Z**2 * GV%Z_to_H * GV%g_Earth / GV%Rho0
   else
@@ -1536,7 +1536,7 @@ subroutine KPP_compute_BLD(CS, G, GV, US, h, Temp, Salt, u, v, tv, uStar, buoyFl
                     bfsfc=surfBuoyFlux2, & ! surface buoyancy flux [m2 s-3]
                     uStar=surfFricVel,  & ! surface friction velocity [m s-1]
                     CVmix_kpp_params_user=CS%KPP_params ) ! KPP parameters
-        if (CS%id_Vt2 > 0) CS%Vt2(i,j,:) = US%m_to_Z*US%T_to_s * Vt2_1d(:)
+        if (CS%id_Vt2 > 0) CS%Vt2(i,j,:) = US%m_to_Z**2 * US%T_to_s**2 * Vt2_1d(:)
       endif
       if (CS%id_BulkRi > 0) then
         do k = 1, GV%ke
