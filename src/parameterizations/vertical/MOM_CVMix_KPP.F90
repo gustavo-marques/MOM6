@@ -1846,17 +1846,23 @@ end subroutine KPP_NonLocalTransport_saln
 subroutine Compute_StokesDrift(i ,j, ztop, zbot, zBL, zSLtop, zSL, uS_i, vS_i, uS_k, vS_k, uS_SL, vS_SL, &
                                uSbar, vSbar, uSb_SL, vSb_SL, waves)
   type(wave_parameters_CS), pointer  :: waves           !< Wave CS for Langmuir turbulence
-  real,                intent(in)    :: ztop, zbot, zBL !< boundary layer cellheight top, bottom, center
-                                                        !! these should be negative                 [m]
-  real,                intent(in)    :: zSLtop , zSL    !< surface layer cell top and depth
-                                                        !! these should be negative                 [m]
-  real,                intent(inout) :: uS_i , vS_i     !< Stokes velocity at zbot interfac e   [m s-1]
-  real,                intent(inout) :: uS_k , vS_k     !< Stokes velocity at zbl               [m s-1]
-  real,                intent(inout) :: uS_SL, vS_SL    !< Stokes velocity at zSL               [m s-1]
-  real,                intent(inout) :: uSbar, vSbar    !< mean Stokes velocity (ztop to zbot)  [m s-1]
-  real,                intent(inout) :: uSb_SL, vSb_SL  !< mean Stokes velocity (zSLtop to zSL) [m s-1]
-  integer,             intent(in)    :: i      !< Meridional index of H-point [nondim]
-  integer,             intent(in)    :: j      !< Zonal index of H-point      [nondim]
+  real,                intent(in)    :: ztop !< boundary layer cellheight top (<0)                  [m]
+  real,                intent(in)    :: zbot !< boundary layer cellheight bottom (<0)               [m]
+  real,                intent(in)    :: zBL  !< boundary layer cellheight center (<0)               [m]
+  real,                intent(in)    :: zSLtop !< surface layer cell top                            [m]
+  real,                intent(in)    :: zSL    !< surface layer cell depth                          [m]
+  real,                intent(inout) :: uS_i   !< Zonal Stokes velocity at zbot interface       [m s-1]
+  real,                intent(inout) :: vS_i   !< Meridional Stokes velocity at zbot interface  [m s-1]
+  real,                intent(inout) :: uS_k   !< Zonal Stokes velocity at zbl                  [m s-1]
+  real,                intent(inout) :: vS_k   !< Meridional Stokes velocity at zbl             [m s-1]
+  real,                intent(inout) :: uS_SL  !< Zonal Stokes velocity at zSL                  [m s-1]
+  real,                intent(inout) :: vS_SL  !< Meridional Stokes velocity at zSL             [m s-1]
+  real,                intent(inout) :: uSbar  !< Mean zonal Stokes velocity at ztop            [m s-1]
+  real,                intent(inout) :: vSbar  !< Mean meridional Stokes velocity at zbot       [m s-1]
+  real,                intent(inout) :: uSb_SL !< Mean zonal Stokes velocity at zSLtop          [m s-1]
+  real,                intent(inout) :: vSb_SL !< Mean meridional Stokes velocity at zSL        [m s-1]
+  integer,             intent(in)    :: i      !< Meridional index of H-point                  [nondim]
+  integer,             intent(in)    :: j      !< Zonal index of H-point                       [nondim]
 
   ! local variables
   integer                            ::   b     !< wavenumber band index
