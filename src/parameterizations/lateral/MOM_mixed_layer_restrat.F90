@@ -1762,7 +1762,9 @@ logical function mixedlayer_restrat_init(Time, G, GV, US, param_file, diag, CS, 
              "depth used for a smoother stream function at the base of "//&
              "the mixed-layer.", units="nondim", default=0.0)
     call get_param(param_file, mdl, "USE_CR_GRID", CS%Cr_grid, &
-             "If true, read in a spatially varying Cr field.", default=.false.)
+             "If true, read in a spatially varying Cr field." //&
+             "If CR = 0 (default), this field is scaled by 1.0." //&
+             "If CR>0., this field works as a mask and is scaled by CR.", default=.false.)
     call get_param(param_file, mdl, "USE_MLD_GRID", CS%MLD_grid, &
              "If true, read in a spatially varying MLD_decaying_Tfilt field.", default=.false.)
     if (CS%MLD_grid) then
@@ -1786,7 +1788,13 @@ logical function mixedlayer_restrat_init(Time, G, GV, US, param_file, diag, CS, 
               "The variable name for Cr field.", &
               default="Cr")
       filename = trim(inputdir) // "/" // trim(filename)
-      call MOM_read_data(filename, varname, CS%Cr_space, G%domain, scale=1.0)
+      if (CS%Cr > 0.0) then
+        ! here, the file is working as a mask
+        call MOM_read_data(filename, varname, CS%Cr_space, G%domain, scale=CS%Cr)
+      else
+        ! read actual Cr
+        call MOM_read_data(filename, varname, CS%Cr_space, G%domain, scale=1.0)
+      endif
       call pass_var(CS%Cr_space, G%domain)
     endif
     call closeParameterBlock(param_file) ! The remaining parameters do not have MLE% prepended
