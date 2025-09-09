@@ -1841,13 +1841,10 @@ subroutine KPP_NonLocalTransport_saln(CS, G, GV, h, nonLocalTrans, surfFlux, dt,
 end subroutine KPP_NonLocalTransport_saln
 
 
-!> Compute Stokes Drift components  and integrals needed to compute Stokes TKE production parameters
-!! Components at 1) zbot < ztop <= 0 ; 2) zSL=Surface Layer Height
-!! average components from 1) ztop to zbot ; 2) zSLtop to zSL
-
+!> Compute Stokes Drift components and integrals needed to compute
+!! Stokes TKE production parameters.
 subroutine Compute_StokesDrift(i ,j, ztop, zbot, zBL, zSLtop, zSL, uS_i, vS_i, uS_k, vS_k, uS_SL, vS_SL, &
-               uSbar, vSbar, uSb_SL, vSb_SL, waves)
-
+                               uSbar, vSbar, uSb_SL, vSb_SL, waves)
   type(wave_parameters_CS), pointer  :: waves           !< Wave CS for Langmuir turbulence
   real,                intent(in)    :: ztop, zbot, zBL !< boundary layer cellheight top, bottom, center
                                                         !! these should be negative                 [m]
