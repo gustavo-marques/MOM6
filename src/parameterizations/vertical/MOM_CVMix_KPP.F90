@@ -187,7 +187,6 @@ type, public :: KPP_CS ; private
   real, allocatable, dimension(:,:)   :: RNdepth   !< Percent use Ri Number boundary layer depth [nondim]
   real, allocatable, dimension(:,:)   :: StokesXI  !< Stokes similarity parameter  [nondim]
   real, allocatable, dimension(:,:)   :: BEdE_ER   !< Enrtainment Rule's Parameterized BEdE [ m3 s-3 ]
-  real, allocatable, dimension(:,:)   :: Lam2      !< La^(-2) = Ustk0/u* [nondim]
   ! Other arrays
   real, allocatable, dimension(:,:)   :: kOBL      !< Level (+fraction) of OBL extent [nondim]
   real, allocatable, dimension(:,:)   :: OBLdepthprev !< previous Depth (positive) of OBL [Z ~> m]
