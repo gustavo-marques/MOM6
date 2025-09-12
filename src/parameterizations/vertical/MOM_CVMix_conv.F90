@@ -174,7 +174,7 @@ subroutine calculate_CVMix_conv(h, tv, G, GV, US, CS, hbl, Kd, Kv, Kd_aux)
   integer :: kOBL                      !< level of ocean boundary layer extent
   real :: g_o_rho0  ! Gravitational acceleration, perhaps divided by density, times unit conversion factors
                     ! [H s-2 R-1 ~> m4 s-2 kg-1 or m s-2]
-  real :: pref      ! Interface pressures [R L2 T-2 ~> Pa]
+  real :: pRef      ! Interface pressures [R L2 T-2 ~> Pa]
   real :: rhok, rhokm1 ! In situ densities of the layers above and below at the interface pressure [R ~> kg m-3]
   real :: dh_int    ! The distance between layer centers [H ~> m or kg m-2]
   real :: dh, hcorr ! Limited thicknesses and a cumulative correction [Z ~> m]
