@@ -149,7 +149,7 @@ contains
 !> Driver for the mixed-layer restratification parameterization.
 !! The code branches between two different implementations depending
 !! on whether the bulk-mixed layer or a general coordinate are in use.
-subroutine mixedlayer_restrat(h, uhtr, vhtr, tv, forces, dt, MLD, h_MLD, bflux, VarMix, G, GV, US, CS)
+subroutine mixedlayer_restrat(h, uhtr, vhtr, tv, forces, dt, MLD, h_MLD, bflux, VarMix, G, GV, US, CS, Lam2)
   type(ocean_grid_type),                      intent(inout) :: G      !< Ocean grid structure
   type(verticalGrid_type),                    intent(in)    :: GV     !< Ocean vertical grid structure
   type(unit_scale_type),                      intent(in)    :: US     !< A dimensional unit scaling type
@@ -170,6 +170,7 @@ subroutine mixedlayer_restrat(h, uhtr, vhtr, tv, forces, dt, MLD, h_MLD, bflux, 
                                                                       !! PBL scheme [Z2 T-3 ~> m2 s-3]
   type(VarMix_CS),                            intent(in)    :: VarMix !< Variable mixing control structure
   type(mixedlayer_restrat_CS),                intent(inout) :: CS     !< Module control structure
+  real, dimension(:,:),             optional, pointer       :: Lam2   !< (Langmuir Number)^-2  [nondim]
 
 
   if (.not. CS%initialized) call MOM_error(FATAL, "mixedlayer_restrat: "// &
@@ -180,7 +181,11 @@ subroutine mixedlayer_restrat(h, uhtr, vhtr, tv, forces, dt, MLD, h_MLD, bflux, 
     call mixedlayer_restrat_BML(h, uhtr, vhtr, tv, forces, dt, G, GV, US, CS)
   elseif (CS%use_Bodner) then
     ! Implementation of Bodner et al., 2023
-    call mixedlayer_restrat_Bodner(CS, G, GV, US, h, uhtr, vhtr, tv, forces, dt, MLD, h_MLD, bflux)
+    if (present(Lam2) .and. associated(Lam2)) then
+      call mixedlayer_restrat_Bodner(CS, G, GV, US, h, uhtr, vhtr, tv, forces, dt, MLD, h_MLD, bflux, Lam2)
+    else
+      call mixedlayer_restrat_Bodner(CS, G, GV, US, h, uhtr, vhtr, tv, forces, dt, MLD, h_MLD, bflux)
+    endif
   else
     ! Implementation of Fox-Kemper et al., 2008, to work in general coordinates
     call mixedlayer_restrat_OM4(h, uhtr, vhtr, tv, forces, dt, h_MLD, VarMix, G, GV, US, CS)
@@ -755,7 +760,7 @@ end function mu
 
 !> Calculates a restratifying flow in the mixed layer, following the formulation
 !! used in Bodner et al., 2023 (B22)
-subroutine mixedlayer_restrat_Bodner(CS, G, GV, US, h, uhtr, vhtr, tv, forces, dt, BLD, h_MLD, bflux)
+subroutine mixedlayer_restrat_Bodner(CS, G, GV, US, h, uhtr, vhtr, tv, forces, dt, BLD, h_MLD, bflux, Lam2)
   ! Arguments
   type(mixedlayer_restrat_CS),                intent(inout) :: CS     !< Module control structure
   type(ocean_grid_type),                      intent(inout) :: G      !< Ocean grid structure
@@ -776,6 +781,9 @@ subroutine mixedlayer_restrat_Bodner(CS, G, GV, US, h, uhtr, vhtr, tv, forces, d
                                                                       !! the PBL scheme [H ~> m or kg m-2]
   real, dimension(:,:),                       pointer       :: bflux  !< Surface buoyancy flux provided by the
                                                                       !! PBL scheme [Z2 T-3 ~> m2 s-3]
+  real, dimension(:,:),             optional, pointer       :: Lam2   !< (Langmuir Number)^-2, which is defined as
+                                                                      !! Surface Stokes/ustar [nondim]
+
   ! Local variables
   real :: uhml(SZIB_(G),SZJ_(G),SZK_(GV)) ! zonal mixed layer transport [H L2 T-1 ~> m3 s-1 or kg s-1]
   real :: vhml(SZI_(G),SZJB_(G),SZK_(GV)) ! merid mixed layer transport [H L2 T-1 ~> m3 s-1 or kg s-1]
@@ -809,7 +817,6 @@ subroutine mixedlayer_restrat_Bodner(CS, G, GV, US, h, uhtr, vhtr, tv, forces, d
   real :: w_star3         ! Cube of turbulent convective velocity [Z3 T-3 ~> m3 s-3]
   real :: u_star3         ! Cube of surface friction velocity [Z3 T-3 ~> m3 s-3]
   real :: E_ustar         ! Surface wave ustar enhancement factor   [nondim]
-  real :: Lam2            ! Reciprocal of the squrared turbulent Langmuir number [nondim]
   real :: r_wpup          ! reciprocal of vertical momentum flux [T2 L-1 H-1 ~> s2 m-2 or m s2 kg-1]
   real :: absf            ! absolute value of f, interpolated to velocity points [T-1 ~> s-1]
   real :: f_h             ! Coriolis parameter at h-points [T-1 ~> s-1]
@@ -833,6 +840,7 @@ subroutine mixedlayer_restrat_Bodner(CS, G, GV, US, h, uhtr, vhtr, tv, forces, d
                           ! fractional power [T3 m3 Z-3 s-3 ~> 1]
   real :: m2_s2_to_Z2_T2  ! Conversion factors to restore scaling after a term is raised to a
                           ! fractional power [Z2 s2 T-2 m-2 ~> 1]
+  real, parameter :: Lam2_eq = 11.       ! (Langmuir Number)^-2 assuming wind wave equilibrium [nondim]
   real, parameter :: two_thirds = 2./3.  ! [nondim]
   logical :: line_is_empty, keep_going
   integer, dimension(2) :: EOSdom ! The i-computational domain for the equation of state
@@ -873,15 +881,20 @@ subroutine mixedlayer_restrat_Bodner(CS, G, GV, US, h, uhtr, vhtr, tv, forces, d
   ! Extract the friction velocity from the forcing type.
   call find_ustar(forces, tv, U_star_2d, G, GV, US, halo=1)
 
-  ! wave enhancement of ustar following Eq. 28 in Bodner23
+  ! Wave Enhanced of ustar following Eq. 28 in Bodner23
   if (CS%wave_enhanced_ustar) then
-    ! Assuming wind wave equilibrium (Lam2=11) until Lam2 becomes available
-    Lam2 = 11.
-    E_ustar   =  sqrt( 1.0 + (Lam2 * 0.104) + (Lam2 * Lam2 * 0.00118))
-    ! Wave Enhanced
-    do j=js-1,je+1 ; do i=is-1,ie+1
-      U_star_2d(i,j) = E_ustar * U_star_2d(i,j)
-    enddo ; enddo
+    if (present(Lam2) .and. associated(Lam2)) then
+      do j=js-1,je+1 ; do i=is-1,ie+1
+        E_ustar   =  sqrt( 1.0 + (Lam2(i,j) * 0.104) + (Lam2(i,j) * Lam2(i,j) * 0.00118))
+        U_star_2d(i,j) = E_ustar * U_star_2d(i,j)
+      enddo ; enddo
+    else
+      ! Assuming wind wave equilibrium (Lam2=11)
+      E_ustar   =  sqrt( 1.0 + (Lam2_eq * 0.104) + (Lam2_eq * Lam2_eq * 0.00118))
+      do j=js-1,je+1 ; do i=is-1,ie+1
+        U_star_2d(i,j) = E_ustar * U_star_2d(i,j)
+      enddo ; enddo
+    endif
   endif
 
   if (CS%debug) then
@@ -1786,7 +1799,7 @@ logical function mixedlayer_restrat_init(Time, G, GV, US, param_file, diag, CS, 
               "The variable name for Cr field.", &
               default="Cr")
       filename = trim(inputdir) // "/" // trim(filename)
-      call MOM_read_data(filename, varname, CS%Cr_space, G%domain, scale=1.0)
+      call MOM_read_data(filename, varname, CS%Cr_space, G%domain, scale=CS%Cr)
       call pass_var(CS%Cr_space, G%domain)
     endif
     call closeParameterBlock(param_file) ! The remaining parameters do not have MLE% prepended

@@ -47,6 +47,8 @@ public :: KPP_NonLocalTransport_temp
 public :: KPP_NonLocalTransport_saln
 public :: KPP_NonLocalTransport
 public :: KPP_get_BLD
+public :: KPP_get_Lam2
+
 
 ! Enumerated constants
 integer, private, parameter :: NLT_SHAPE_CVMix     = 0 !< Use the CVMix profile
@@ -161,6 +163,7 @@ type, public :: KPP_CS ; private
 
   ! Diagnostics arrays
   real, pointer,     dimension(:,:)   :: OBLdepth  !< Depth (positive) of ocean boundary layer (OBL) [Z ~> m]
+  real, pointer,     dimension(:,:)   :: Lam2      !< La^(-2) = Ustk0/u* [nondim]
   real, allocatable, dimension(:,:,:) :: BulkRi    !< Bulk Richardson number for each layer [nondim]
   real, allocatable, dimension(:,:,:) :: N         !< Brunt-Vaisala frequency [T-1 ~> s-1]
   real, allocatable, dimension(:,:,:) :: N2        !< Squared Brunt-Vaisala frequency [T-2 ~> s-2]
@@ -184,7 +187,6 @@ type, public :: KPP_CS ; private
   real, allocatable, dimension(:,:)   :: RNdepth   !< Percent use Ri Number boundary layer depth [nondim]
   real, allocatable, dimension(:,:)   :: StokesXI  !< Stokes similarity parameter  [nondim]
   real, allocatable, dimension(:,:)   :: BEdE_ER   !< Enrtainment Rule's Parameterized BEdE [ m3 s-3 ]
-  real, allocatable, dimension(:,:)   :: Lam2      !< La^(-2) = Ustk0/u*
   real, allocatable, dimension(:,:)   :: ustar     !< Surface friction velocity [ m s-1 ]
   ! Other arrays
   real, allocatable, dimension(:,:)   :: kOBL      !< Level (+fraction) of OBL extent [nondim]
@@ -1340,7 +1342,7 @@ subroutine KPP_compute_BLD(CS, G, GV, US, h, Temp, Salt, u, v, tv, uStar, buoyFl
 
       enddo ! k-loop finishes
 
-      if ( (CS%LT_K_ENHANCEMENT .or. CS%LT_VT2_ENHANCEMENT) .and. .not. present(lamult)) then
+      if ( (CS%LT_K_ENHANCEMENT .or. CS%LT_VT2_ENHANCEMENT)) then
         MLD_guess = max( CS%MLD_guess_min, abs(CS%OBLdepthprev(i,j) ) )
         call get_Langmuir_Number(LA, G, GV, US, MLD_guess, uStar(i,j), i, j, &
                                  dz=dz(i,j,:), U_H=U_H, V_H=V_H, WAVES=WAVES)
@@ -1732,6 +1734,24 @@ subroutine KPP_get_BLD(CS, BLD, G, US, m_to_BLD_units)
   enddo ; enddo
 
 end subroutine KPP_get_BLD
+
+!> Copies CS%Lam2 into Lam2.
+subroutine KPP_get_Lam2(CS, Lam2, G, US)
+  type(KPP_CS),                     pointer     :: CS  !< Control structure for
+                                                       !! this module
+  type(ocean_grid_type),            intent(in)  :: G   !< Grid structure
+  type(unit_scale_type),            intent(in)  :: US  !< A dimensional unit scaling type
+  real, dimension(SZI_(G),SZJ_(G)), intent(inout) :: Lam2 !< (Langmuir Number)^-2 [nondim]
+
+  ! Local variables
+  integer :: i,j ! Horizontal indices
+
+  !$OMP parallel do default(none) shared(BLD, CS, G, scale)
+  do j = G%jsc, G%jec ; do i = G%isc, G%iec
+    Lam2(i,j) = CS%Lam2(i,j)
+  enddo ; enddo
+
+end subroutine KPP_get_Lam2
 
 !> Apply KPP non-local transport of surface fluxes for a given tracer
 subroutine KPP_NonLocalTransport(CS, G, GV, h, nonLocalTrans, surfFlux, &
