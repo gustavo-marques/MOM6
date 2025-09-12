@@ -211,7 +211,7 @@ subroutine calculate_CVMix_conv(h, tv, G, GV, US, CS, hbl, Kd, Kv, Kd_aux)
       do K=2,GV%ke
 
         ! pRef is pressure at interface between k and km1 [R L2 T-2 ~> Pa].
-        pRef = pRef + (GV%H_to_RZ*GV%g_Earth) * h(i,j,k)
+        pRef = pRef + (GV%H_to_RZ*GV%g_Earth) * h(i,j,k-1)
         call calculate_density(tv%t(i,j,k), tv%s(i,j,k), pRef, rhok, tv%eqn_of_state)
         call calculate_density(tv%t(i,j,k-1), tv%s(i,j,k-1), pRef, rhokm1, tv%eqn_of_state)
 
