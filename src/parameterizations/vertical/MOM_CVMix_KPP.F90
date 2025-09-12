@@ -1753,7 +1753,7 @@ subroutine KPP_get_Lam2(CS, Lam2, G, US)
   ! Local variables
   integer :: i,j ! Horizontal indices
 
-  !$OMP parallel do default(none) shared(BLD, CS, G, scale)
+  !$OMP parallel do default(none) shared(Lam2, CS, G)
   do j = G%jsc, G%jec ; do i = G%isc, G%iec
     Lam2(i,j) = CS%Lam2(i,j)
   enddo ; enddo
