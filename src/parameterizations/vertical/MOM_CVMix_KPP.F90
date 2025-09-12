@@ -185,7 +185,6 @@ type, public :: KPP_CS ; private
   real, allocatable, dimension(:,:)   :: StokesXI  !< Stokes similarity parameter  [nondim]
   real, allocatable, dimension(:,:)   :: BEdE_ER   !< Enrtainment Rule's Parameterized BEdE [ m3 s-3 ]
   real, allocatable, dimension(:,:)   :: Lam2      !< La^(-2) = Ustk0/u*
-  real, allocatable, dimension(:,:)   :: ustar     !< Surface friction velocity [ m s-1 ]
   ! Other arrays
   real, allocatable, dimension(:,:)   :: kOBL      !< Level (+fraction) of OBL extent [nondim]
   real, allocatable, dimension(:,:)   :: OBLdepthprev !< previous Depth (positive) of OBL [Z ~> m]
@@ -635,32 +634,35 @@ logical function KPP_init(paramFile, G, GV, US, diag, Time, CS, passive)
   CS%id_La_SL = register_diag_field('ocean_model', 'KPP_La_SL', diag%axesT1, Time, &
       'Surface-layer Langmuir number computed in [CVMix] KPP','nondim')
 
-  CS%id_ERdepth  = register_diag_field('ocean_model', 'ERdepth', diag%axesT1, Time, &
-      'Entrainment Rule Boundary Layer depth percent', 'nondim')
-  CS%id_RNdepth  = register_diag_field('ocean_model', 'RNdepth', diag%axesT1, Time, &
-      'Richardson Number Boundary Layer depth percent', 'nondim')
-  CS%id_StokesXI = register_diag_field('ocean_model', 'StokesXI', diag%axesT1, Time, &
-      'Stokes Similarity Parameter', 'nondim')
-  CS%id_Lam2     = register_diag_field('ocean_model', 'Lam2',  diag%axesT1, Time, &
-      'Ustk0/ustar', 'nondim')
-  CS%id_BEdE_ER  = register_diag_field('ocean_model', 'BEdE_ER', diag%axesT1, Time, &
-      'Entrainment Rule BEdE_ER',  'm3 s-3', conversion=US%L_T_to_m_s**3)
-  CS%id_PU_TKE    = register_diag_field('ocean_model', 'PU_TKE' , diag%axesT1, Time, &
-      'Shear production of surface layer TKE', 'm3 s-3')
-  CS%id_PS_TKE    = register_diag_field('ocean_model', 'PS_TKE' , diag%axesT1, Time, &
-      'Stokes production of surface layer TKE', 'm3 s-3')
-  CS%id_PB_TKE    = register_diag_field('ocean_model', 'PB_TKE' , diag%axesT1, Time, &
-      'Buoyancy production of surface layer TKE', 'm3 s-3')
+  ! only available when StokesMOST is enabled
+  if (CS%StokesMOST) then
+    CS%id_ERdepth  = register_diag_field('ocean_model', 'ERdepth', diag%axesT1, Time, &
+        'Entrainment Rule Boundary Layer depth percent', 'nondim')
+    CS%id_RNdepth  = register_diag_field('ocean_model', 'RNdepth', diag%axesT1, Time, &
+        'Richardson Number Boundary Layer depth percent', 'nondim')
+    CS%id_StokesXI = register_diag_field('ocean_model', 'StokesXI', diag%axesT1, Time, &
+        'Stokes Similarity Parameter', 'nondim')
+    CS%id_Lam2     = register_diag_field('ocean_model', 'Lam2',  diag%axesT1, Time, &
+        'Ustk0/ustar', 'nondim')
+    CS%id_BEdE_ER  = register_diag_field('ocean_model', 'BEdE_ER', diag%axesT1, Time, &
+        'Entrainment Rule BEdE_ER',  'm3 s-3', conversion=US%L_T_to_m_s**3)
+    CS%id_PU_TKE    = register_diag_field('ocean_model', 'PU_TKE' , diag%axesT1, Time, &
+        'Shear production of surface layer TKE', 'm3 s-3')
+    CS%id_PS_TKE    = register_diag_field('ocean_model', 'PS_TKE' , diag%axesT1, Time, &
+        'Stokes production of surface layer TKE', 'm3 s-3')
+    CS%id_PB_TKE    = register_diag_field('ocean_model', 'PB_TKE' , diag%axesT1, Time, &
+        'Buoyancy production of surface layer TKE', 'm3 s-3')
+    ! arrays only needed when StokesMOST is enabled
+    allocate( CS%Lam2    ( SZI_(G), SZJ_(G) ), source=0. )
+    allocate( CS%PU_TKE( SZI_(G), SZJ_(G) ), source=0. )
+    allocate( CS%PS_TKE( SZI_(G), SZJ_(G) ), source=0. )
+    allocate( CS%PB_TKE( SZI_(G), SZJ_(G) ), source=0. )
+  endif
 
   allocate( CS%N( SZI_(G), SZJ_(G), SZK_(GV)+1 ), source=0. )
   allocate( CS%StokesXI( SZI_(G), SZJ_(G) ), source=0. )
-  allocate( CS%Lam2    ( SZI_(G), SZJ_(G) ), source=0. )
-  allocate( CS%ustar   ( SZI_(G), SZJ_(G) ), source=0. )
   allocate( CS%La_SL( SZI_(G), SZJ_(G) ), source=0. )
   allocate( CS%Vt2( SZI_(G), SZJ_(G), SZK_(GV) ), source=0. )
-  allocate( CS%PU_TKE( SZI_(G), SZJ_(G) ), source=0. )
-  allocate( CS%PS_TKE( SZI_(G), SZJ_(G) ), source=0. )
-  allocate( CS%PB_TKE( SZI_(G), SZJ_(G) ), source=0. )
   allocate( CS%kOBL( SZI_(G), SZJ_(G) ), source=0. )
   allocate( CS%OBLdepthprev( SZI_(G), SZJ_(G) ), source=0.0 )
   allocate( CS%ERdepth( SZI_(G), SZJ_(G) ), source=0. )
@@ -1181,8 +1183,8 @@ subroutine KPP_compute_BLD(CS, G, GV, US, h, Temp, Salt, u, v, tv, uStar, buoyFl
       ! Ideally, this should be provided to this subroutine. However, right now only the
       ! total surface flux (solar + non-solar) is provided.
       surfBuoy_NS = 0.0                 ! temporary surface solar
-      if ( (buoyFlux(i,j,3) >= 0.0) .and. (buoyFlux(i,j,3) < buoyFlux(i,j,2)) ) then
-        etaDk = alog(buoyFlux(i,j,2)/buoyFlux(i,j,3)) / dz(i,j,2)  ! (z_inter(2)-z_inter(3))
+      if ( (buoyFlux(i,j,3) > 0.0) .and. (buoyFlux(i,j,3) < buoyFlux(i,j,2)) ) then
+        etaDk = alog(buoyFlux(i,j,2)/buoyFlux(i,j,3)) / (dz(i,j,2) + GV%H_subroundoff)  ! (z_inter(2)-z_inter(3))
         surfBuoy_NS = buoyFlux(i,j,2) * exp( -etaDk * dz(i,j,1) )  ! Approximate surface solar buoyancy flux
       endif
       surfBuoy_NS = buoyFlux(i,j,1) - surfBuoy_NS        ! Total - solar = non-solar surface buoyancy flux
@@ -1480,35 +1482,37 @@ subroutine KPP_compute_BLD(CS, G, GV, US, h, Temp, Salt, u, v, tv, uStar, buoyFl
       CS%OBLdepth(i,j) = min( CS%OBLdepth(i,j), -zBottomMinusOffset ) ! no deeper than deepOBLoffset off bottom
       CS%kOBL(i,j)     = CVMix_kpp_compute_kOBL_depth( iFaceHeight, cellHeight, CS%OBLdepth(i,j) )
 
-      ! Now we have OBLdepth and need to compute diagnostics
-      kbl = int(CS%kOBL(i,j))
-      SLdepth_0d = CS%surf_layer_ext*CS%OBLdepth(i,j)
-      surfBuoyFlux = surfBuoyFlux2(kbl)
-      ! find ksfc for cell where "surface layer" sits
-      ksfc = kbl
-      do ktmp = 1, kbl
-        if (-1.0*iFaceHeight(ktmp+1) >= SLdepth_0d) then
-          ksfc = ktmp
-          exit
-        endif
-      enddo
+      if (CS%StokesMOST) then
+        ! Now we have OBLdepth and need to compute diagnostics
+        kbl = int(CS%kOBL(i,j))
+        SLdepth_0d = CS%surf_layer_ext*CS%OBLdepth(i,j)
+        surfBuoyFlux = surfBuoyFlux2(kbl)
+        ! find ksfc for cell where "surface layer" sits
+        ksfc = kbl
+        do ktmp = 1, kbl
+          if (-1.0*iFaceHeight(ktmp+1) >= SLdepth_0d) then
+            ksfc = ktmp
+            exit
+          endif
+        enddo
 
-      call Compute_StokesDrift(i,j, iFaceHeight(kbl), iFaceHeight(kbl+1), &
-              -CS%OBLdepth(i,j),iFaceHeight(ksfc),-SLdepth_0d, &
-              uS_Hi(kbl+1), vS_Hi(kbl+1), uS_H(kbl), vS_H(kbl), uS_SL, vS_SL, &
-              uSbar_H(kbl), vSbar_H(kbl), uSb_SL, vSb_SL, waves)
+        call Compute_StokesDrift(i,j, iFaceHeight(kbl), iFaceHeight(kbl+1), &
+                -CS%OBLdepth(i,j),iFaceHeight(ksfc),-SLdepth_0d, &
+                uS_Hi(kbl+1), vS_Hi(kbl+1), uS_H(kbl), vS_H(kbl), uS_SL, vS_SL, &
+                uSbar_H(kbl), vSbar_H(kbl), uSb_SL, vSb_SL, waves)
 
-      call cvmix_kpp_compute_StokesXi(iFaceHeight, CellHeight, ksfc ,SLdepth_0d, surfBuoyFlux, &
-              surfBuoy_NS,surfFricVel,waves%omega_w2x(i,j), uE_H, vE_H, uS_Hi, vS_Hi, &
-              uSbar_H, vSbar_H, uS_SL, vS_SL, uSb_SL, vSb_SL, &
-              StokesXI,BEdE_ER,PU_TKE,PS_TKE,PB_TKE,CVMix_kpp_params_user=CS%KPP_params )
+        call cvmix_kpp_compute_StokesXi(iFaceHeight, CellHeight, ksfc ,SLdepth_0d, surfBuoyFlux, &
+                surfBuoy_NS,surfFricVel,waves%omega_w2x(i,j), uE_H, vE_H, uS_Hi, vS_Hi, &
+                uSbar_H, vSbar_H, uS_SL, vS_SL, uSb_SL, vSb_SL, &
+                StokesXI,BEdE_ER,PU_TKE,PS_TKE,PB_TKE,CVMix_kpp_params_user=CS%KPP_params )
 
-      CS%ustar(i,j)  = surfFricVel
-      CS%Lam2(i,j)   = sqrt(US_Hi(1)**2+VS_Hi(1)**2) / surfFricVel
-      CS%PU_TKE(i,j) = PU_TKE
-      CS%PS_TKE(i,j) = PS_TKE
-      CS%PB_TKE(i,j) = PB_TKE
-      CS%StokesXI(i,j) = StokesXI    !  StokesXI_1d(kbl)
+        CS%Lam2(i,j)   = sqrt(US_Hi(1)**2+VS_Hi(1)**2) / surfFricVel
+        CS%PU_TKE(i,j) = PU_TKE
+        CS%PS_TKE(i,j) = PS_TKE
+        CS%PB_TKE(i,j) = PB_TKE
+        CS%StokesXI(i,j) = StokesXI    !  StokesXI_1d(kbl)
+
+      endif
 
       ! recompute unresolved squared velocity, wscale  and  BulkRi  for known boundary layer depth
       ! compute unresolved squared velocity for diagnostics
@@ -1545,7 +1549,7 @@ subroutine KPP_compute_BLD(CS, G, GV, US, h, Temp, Salt, u, v, tv, uStar, buoyFl
         enddo
       endif
 
-      !  More diagnostics
+      !  Diagnostics
       if (CS%id_N2     > 0)   CS%N2(i,j,:)     = N2_1d(:)
       if (CS%id_BulkDrho > 0) CS%dRho(i,j,:)   = deltaRho(:)
       if (CS%id_BulkUz2 > 0)  CS%Uz2(i,j,:)    = US%m_s_to_L_T**2 * deltaU2(:)
@@ -1560,13 +1564,14 @@ subroutine KPP_compute_BLD(CS, G, GV, US, h, Temp, Salt, u, v, tv, uStar, buoyFl
 
   call cpu_clock_end(id_clock_KPP_compute_BLD)
 
-  if (CS%debug) then
+  if (CS%debug .and. CS%StokesMOST) then
     call hchksum(CS%PS_TKE, 'MOM_CVMix_KPP: PS_TKE', G%HI)
     call hchksum(CS%PU_TKE, 'MOM_CVMix_KPP: PU_TKE', G%HI)
     call hchksum(CS%PB_TKE, 'MOM_CVMix_KPP: PB_TKE', G%HI)
   endif
 
   ! send diagnostics to post_data
+  if (CS%id_BulkRi   > 0) call post_data(CS%id_BulkRi,  CS%BulkRi,           CS%diag)
   if (CS%id_N        > 0) call post_data(CS%id_N,        CS%N,               CS%diag)
   if (CS%id_N2       > 0) call post_data(CS%id_N2,       CS%N2,              CS%diag)
   if (CS%id_Tsurf    > 0) call post_data(CS%id_Tsurf,    CS%Tsurf,           CS%diag)
@@ -1579,15 +1584,17 @@ subroutine KPP_compute_BLD(CS, G, GV, US, h, Temp, Salt, u, v, tv, uStar, buoyFl
   if (CS%id_EnhVt2   > 0) call post_data(CS%id_EnhVt2,   CS%EnhVt2,          CS%diag)
   if (CS%id_La_SL    > 0) call post_data(CS%id_La_SL,    CS%La_SL,           CS%diag)
   if (CS%id_Vt2      > 0) call post_data(CS%id_Vt2,      CS%Vt2,             CS%diag)
-  if (CS%id_StokesXI > 0) call post_data(CS%id_StokesXI, CS%StokesXI,        CS%diag)
-  if (CS%id_Lam2     > 0) call post_data(CS%id_Lam2    , CS%Lam2,            CS%diag)
-  if (CS%id_BEdE_ER  > 0) call post_data(CS%id_BEdE_ER, CS%BEdE_ER,          CS%diag)
-  if (CS%id_ERdepth  > 0) call post_data(CS%id_ERdepth, CS%ERdepth,          CS%diag)
-  if (CS%id_RNdepth  > 0) call post_data(CS%id_RNdepth, CS%RNdepth,          CS%diag)
-  if (CS%id_PU_TKE   > 0) call post_data(CS%id_PU_TKE,  CS%PU_TKE,           CS%diag)
-  if (CS%id_PS_TKE   > 0) call post_data(CS%id_PS_TKE,  CS%PS_TKE,           CS%diag)
-  if (CS%id_PB_TKE   > 0) call post_data(CS%id_PB_TKE,  CS%PB_TKE,           CS%diag)
-  if (CS%id_BulkRi   > 0) call post_data(CS%id_BulkRi,  CS%BulkRi,           CS%diag)
+
+  if (CS%StokesMOST) then
+    if (CS%id_StokesXI > 0) call post_data(CS%id_StokesXI, CS%StokesXI,        CS%diag)
+    if (CS%id_Lam2     > 0) call post_data(CS%id_Lam2    , CS%Lam2,            CS%diag)
+    if (CS%id_BEdE_ER  > 0) call post_data(CS%id_BEdE_ER, CS%BEdE_ER,          CS%diag)
+    if (CS%id_ERdepth  > 0) call post_data(CS%id_ERdepth, CS%ERdepth,          CS%diag)
+    if (CS%id_RNdepth  > 0) call post_data(CS%id_RNdepth, CS%RNdepth,          CS%diag)
+    if (CS%id_PU_TKE   > 0) call post_data(CS%id_PU_TKE,  CS%PU_TKE,           CS%diag)
+    if (CS%id_PS_TKE   > 0) call post_data(CS%id_PS_TKE,  CS%PS_TKE,           CS%diag)
+    if (CS%id_PB_TKE   > 0) call post_data(CS%id_PB_TKE,  CS%PB_TKE,           CS%diag)
+  endif
 
   ! BLD smoothing:
   if (CS%n_smooth > 0) call KPP_smooth_BLD(CS, G, GV, US, dz)
