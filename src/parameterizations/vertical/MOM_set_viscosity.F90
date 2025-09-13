@@ -2795,8 +2795,10 @@ subroutine set_visc_register_restarts(HI, G, GV, US, param_file, visc, restart_C
                  default=.false., do_not_log=.true.)
   call get_param(param_file, mdl, "FPMIX", use_fpmix, &
                  default=.false., do_not_log=.true.)
+  call openParameterBlock(param_file, 'KPP', do_not_log=.true.)
   call get_param(param_file, mdl, 'STOKES_MOST', use_StokesMOST, &
                  default=.false., do_not_log=.true.)
+  call closeParameterBlock(param_file)
   call get_param(param_file, mdl, "USE_IDEAL_AGE_TRACER", use_ideal_age, &
                  default=.false., do_not_log=.true.)
   call openParameterBlock(param_file, 'MLE', do_not_log=.true.)
