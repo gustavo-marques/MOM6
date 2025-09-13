@@ -2795,8 +2795,10 @@ subroutine set_visc_register_restarts(HI, G, GV, US, param_file, visc, restart_C
                  default=.false., do_not_log=.true.)
   call get_param(param_file, mdl, "FPMIX", use_fpmix, &
                  default=.false., do_not_log=.true.)
+  call openParameterBlock(param_file, 'KPP', do_not_log=.true.)
   call get_param(param_file, mdl, 'STOKES_MOST', use_StokesMOST, &
                  default=.false., do_not_log=.true.)
+  call closeParameterBlock(param_file)
   call get_param(param_file, mdl, "USE_IDEAL_AGE_TRACER", use_ideal_age, &
                  default=.false., do_not_log=.true.)
   call openParameterBlock(param_file, 'MLE', do_not_log=.true.)
@@ -2821,7 +2823,7 @@ subroutine set_visc_register_restarts(HI, G, GV, US, param_file, visc, restart_C
   endif
   if (use_StokesMOST .and. MLE_use_Bodner) then
     call register_restart_field(visc%Lam2, "Lam2", .false., restart_CS, &
-                  "(Langmuir Number)^-2",  units="" )
+                  "(Langmuir Number)^-2",  units="nondim" )
   endif
   if (MLE_use_PBL_MLD .or. do_brine_plume .or. use_fpmix .or. &
       use_neutral_diffusion .or. use_hor_bnd_diff .or. MLE_use_Bodner) then
