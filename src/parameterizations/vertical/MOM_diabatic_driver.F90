@@ -785,7 +785,9 @@ subroutine diabatic_ALE_legacy(u, v, h, tv, BLD, fluxes, visc, ADp, CDp, dt, Tim
     endif
 
     call KPP_get_BLD(CS%KPP_CSp, BLD(:,:), G, US)
-    call KPP_get_Lam2(CS%KPP_CSp, Lam2(:,:), G, US)
+    if (associated(visc%Lam2)) then
+      call KPP_get_Lam2(CS%KPP_CSp, Lam2(:,:), G, US)
+    endif
     ! If visc%MLD or visc%h_ML exist, copy KPP's BLD into them with appropriate conversions.
     if (associated(visc%h_ML)) call convert_MLD_to_ML_thickness(BLD, h, visc%h_ML, tv, G, GV)
     if (associated(visc%MLD)) visc%MLD(:,:) = BLD(:,:)
@@ -1523,7 +1525,9 @@ subroutine diabatic_ALE(u, v, h, tv, BLD, fluxes, visc, ADp, CDp, dt, Time_end, 
 
 
     call KPP_get_BLD(CS%KPP_CSp, BLD(:,:), G, US)
-    call KPP_get_Lam2(CS%KPP_CSp, Lam2(:,:), G, US)
+    if (associated(visc%Lam2)) then
+      call KPP_get_Lam2(CS%KPP_CSp, Lam2(:,:), G, US)
+    endif
     ! If visc%MLD or visc%h_ML exist, copy KPP's BLD into them with appropriate conversions.
     if (associated(visc%h_ML)) call convert_MLD_to_ML_thickness(BLD, h, visc%h_ML, tv, G, GV)
     if (associated(visc%MLD)) visc%MLD(:,:) = BLD(:,:)

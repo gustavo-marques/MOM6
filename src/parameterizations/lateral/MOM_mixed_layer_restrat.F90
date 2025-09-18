@@ -173,15 +173,22 @@ subroutine mixedlayer_restrat(h, uhtr, vhtr, tv, forces, dt, MLD, h_MLD, bflux, 
   real, dimension(:,:),             optional, pointer       :: Lam2   !< (Langmuir Number)^-2  [nondim]
 
 
+  ! local variables
+  logical :: haveLam2 !< True if optional Lam2 argument is both present and associated
+
   if (.not. CS%initialized) call MOM_error(FATAL, "mixedlayer_restrat: "// &
          "Module must be initialized before it is used.")
+
+  ! Determine if Lam2 should be used
+  haveLam2 = .false.
+  if (present(Lam2)) haveLam2 = associated(Lam2)
 
   if (GV%nkml>0) then
     ! Original form, written for the isopycnal model with a bulk mixed layer
     call mixedlayer_restrat_BML(h, uhtr, vhtr, tv, forces, dt, G, GV, US, CS)
   elseif (CS%use_Bodner) then
     ! Implementation of Bodner et al., 2023
-    if (present(Lam2) .and. associated(Lam2)) then
+    if (haveLam2) then
       call mixedlayer_restrat_Bodner(CS, G, GV, US, h, uhtr, vhtr, tv, forces, dt, MLD, h_MLD, bflux, Lam2)
     else
       call mixedlayer_restrat_Bodner(CS, G, GV, US, h, uhtr, vhtr, tv, forces, dt, MLD, h_MLD, bflux)
