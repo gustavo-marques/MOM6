@@ -102,8 +102,9 @@ type, public :: mixedlayer_restrat_CS ; private
                                    !! front-length scales read from a file.
   type(time_type), pointer :: Time => NULL() !< A pointer to the ocean model's clock.
   logical :: use_Stanley_ML        !< If true, use the Stanley parameterization of SGS T variance
-  logical :: wave_enhanced_ustar   !< If true, enhance ustar for equilibrium surface waves (La-2=11),
-                                   !! following Eq. 28 in Bodner23.
+  logical :: wave_enhanced_ustar   !< If true, enhance ustar using surface waves, following Eq. 28 in Bodner23.
+                                   !! Use a Langmuir number if provided. Otherwise, assumes equilibrium
+                                   !! surface waves (La-2=11.).
   real    :: ustar_min             !< A minimum value of ustar in thickness units to avoid numerical
                                    !! problems [H T-1 ~> m s-1 or kg m-2 s-1]
 
@@ -1775,8 +1776,9 @@ logical function mixedlayer_restrat_init(Time, G, GV, US, param_file, diag, CS, 
              "parameter a micron away from the equator.", &
              units="m2 s-2", default=1.0e-24, scale=US%m_to_Z**2*US%T_to_s**2)
     call get_param(param_file, mdl, "WAVE_ENHANCED_USTAR", CS%wave_enhanced_ustar, &
-             "If true, enhance ustar for equilibrium surface waves (La-2=11.), "// &
-             "following Eq. 28 in Bodner23.", default=.false.)
+             "If true, enhance ustar using surface waves, following Eq. 28 in Bodner23. " //&
+             "Use a Langmuir number if provided. Otherwise, assumes equilibrium "// &
+             "surface waves (La-2=11.).", default=.false.)
     call get_param(param_file, mdl, "TAIL_DH", CS%MLE_tail_dh, &
              "Fraction by which to extend the mixed-layer restratification "//&
              "depth used for a smoother stream function at the base of "//&
