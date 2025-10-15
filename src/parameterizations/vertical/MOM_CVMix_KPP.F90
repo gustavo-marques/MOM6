@@ -85,6 +85,9 @@ type, public :: KPP_CS ; private
   real    :: cs                        !< Parameter for computing velocity scale function (dimensionless) [nondim]
   real    :: cs2                       !< Parameter for multiplying by non-local term [nondim]
                                        !   This is active for NLT_SHAPE_CUBIC_LMD only
+  real    :: ER_Cb                     !< Entrainment Rule TKE buoyancy production weight [nondim]
+  real    :: ER_Cs                     !< Entrainment Rule TKE Stokes production weight [nondim]
+  real    :: ER_Cu                     !< Entrainment Rule TKE shear production weight [nondim]
   logical :: enhance_diffusion         !< If True, add enhanced diffusivity at base of boundary layer.
   character(len=32) :: interpType      !< Type of interpolation to compute bulk Richardson number
   character(len=32) :: interpType2     !< Type of interpolation to compute diff and visc at OBL_depth
@@ -333,6 +336,16 @@ logical function KPP_init(paramFile, G, GV, US, diag, Time, CS, passive)
   call get_param(paramFile, mdl, 'CS2', CS%cs2,                        &
                  'Parameter for computing non-local term.', &
                  units='nondim', default=6.32739901508)
+  ! Following defaults are from Eq. 17 in Large et al. (2021)
+  call get_param(paramFile, mdl, 'ER_Cb', CS%ER_Cb,                        &
+                 'Entrainment Rule TKE buoyancy production weight.', &
+                 units='nondim', default=0.96)
+  call get_param(paramFile, mdl, 'ER_Cs', CS%ER_Cs,                        &
+                 'Entrainment Rule TKE Stokes production weight.', &
+                 units='nondim', default=0.038)
+  call get_param(paramFile, mdl, 'ER_Cu', CS%ER_Cu,                        &
+                 'Entrainment Rule TKE shear production weight.', &
+                 units='nondim', default=0.023)
   call get_param(paramFile, mdl, 'DEEP_OBL_OFFSET', CS%deepOBLoffset,                             &
                  'If non-zero, the distance above the bottom to which the OBL is clipped '//     &
                  'if it would otherwise reach the bottom. The smaller of this and 0.1D is used.', &
@@ -559,6 +572,9 @@ logical function KPP_init(paramFile, G, GV, US, diag, Time, CS, passive)
                        lnoDGat1=lnoDGat1                  ,&
                        langmuir_mixing_str=langmuir_mixing_opt,&
                        langmuir_entrainment_str=langmuir_entrainment_opt,&
+                       ER_Cb=CS%ER_Cb,&
+                       ER_Cs=CS%ER_Cs,&
+                       ER_Cu=CS%ER_Cu,&
                        CVMix_kpp_params_user=CS%KPP_params )
 
   ! Register diagnostics
