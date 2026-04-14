@@ -898,6 +898,7 @@ subroutine mixedlayer_restrat_Bodner(CS, G, GV, US, h, uhtr, vhtr, tv, forces, d
   ! Wave Enhanced of ustar following Eq. 28 in Bodner23
   if (CS%wave_enhanced_ustar) then
     if (Lam2_available) then
+      call pass_var(Lam2, G%domain, halo=1)
       do j=js-1,je+1 ; do i=is-1,ie+1
         E_ustar   =  sqrt( 1.0 + (Lam2(i,j) * 0.104) + (Lam2(i,j) * Lam2(i,j) * 0.00118))
         U_star_2d(i,j) = E_ustar * U_star_2d(i,j)
