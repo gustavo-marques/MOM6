@@ -1136,6 +1136,7 @@ subroutine KPP_compute_BLD(CS, G, GV, US, h, Temp, Salt, u, v, tv, uStar, buoyFl
   real :: check ! Entrainment Rule Boundary layer depth  CVMix_kpp_compute_ER_depth in MKS units [m]
   real :: Llimit  ! Stable boundary Layer Limit =  vonk Lstar [Z ~> m]
   integer :: kbl  ! index of cell containing boundary layer depth [nondim]
+  real, parameter :: Lam2_max = 20.0 ! Upper bound for Lam2 [nondim]
 
   if (CS%Stokes_Mixing .and. .not.associated(Waves)) call MOM_error(FATAL, &
       "KPP_compute_BLD: The Waves control structure must be associated if STOKES_MIXING is True.")
@@ -1527,6 +1528,7 @@ subroutine KPP_compute_BLD(CS, G, GV, US, h, Temp, Salt, u, v, tv, uStar, buoyFl
                 StokesXI,BEdE_ER,PU_TKE,PS_TKE,PB_TKE,CVMix_kpp_params_user=CS%KPP_params )
 
         CS%Lam2(i,j)   = sqrt(US_Hi(1)**2+VS_Hi(1)**2) / surfFricVel
+        CS%Lam2(i,j)   = MIN(CS%Lam2(i,j), Lam2_max)
         CS%PU_TKE(i,j) = PU_TKE
         CS%PS_TKE(i,j) = PS_TKE
         CS%PB_TKE(i,j) = PB_TKE
