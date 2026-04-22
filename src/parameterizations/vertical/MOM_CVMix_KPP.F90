@@ -1185,7 +1185,7 @@ subroutine KPP_compute_BLD(CS, G, GV, US, h, Temp, Salt, u, v, tv, uStar, buoyFl
   !$OMP                           BEdE_ER_1d, ERdepth, BEdE_ER, PU_TKE, PS_TKE, PB_TKE, kbl), &
   !$OMP                           shared(G, GV, CS, US, uStar, h, dz, buoy_scale, buoyFlux, &
   !$OMP                           Temp, Salt, waves, tv, GoRho, GoRho_Z_L2, u, v, lamult,   &
-  !$OMP                           Vt_layer)
+  !$OMP                           Vt_layer, Lam2_max)
 
   do j = G%jsc, G%jec
     do i = G%isc, G%iec ; if (G%mask2dT(i,j) > 0.0) then
