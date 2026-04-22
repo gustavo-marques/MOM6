@@ -86,7 +86,8 @@ type, public :: KPP_CS ; private
   real    :: vonKarman                 !< von Karman constant (dimensionless) [nondim]
   real    :: cs                        !< Parameter for computing velocity scale function (dimensionless) [nondim]
   real    :: cs2                       !< Parameter for multiplying by non-local term [nondim]
-                                       !   This is active for NLT_SHAPE_CUBIC_LMD only
+                                       !! This is active for NLT_SHAPE_CUBIC_LMD only
+  real    :: La_min                    !< An arbitrary lower-bound on the Langmuir number [nondim].
   logical :: enhance_diffusion         !< If True, add enhanced diffusivity at base of boundary layer.
   character(len=32) :: interpType      !< Type of interpolation to compute bulk Richardson number
   character(len=32) :: interpType2     !< Type of interpolation to compute diff and visc at OBL_depth
@@ -556,6 +557,12 @@ logical function KPP_init(paramFile, G, GV, US, diag, Time, CS, passive)
   call closeParameterBlock(paramFile)
 
   call get_param(paramFile, mdl, 'DEBUG', CS%debug, default=.False., do_not_log=.True.)
+
+  call get_param(paramFile, mdl, "MIN_LANGMUIR", CS%La_min,    &
+         "A minimum value for all Langmuir numbers that is not physical, "//&
+         "but is likely only encountered when the wind is very small and "//&
+         "therefore its effects should be mostly benign.", &
+         units="nondim", default=0.05, do_not_log=.true.)
 
   call CVMix_init_kpp( Ri_crit=CS%Ri_crit,                 &
                        minOBLdepth=US%Z_to_m*CS%minOBLdepth, &
@@ -1136,7 +1143,7 @@ subroutine KPP_compute_BLD(CS, G, GV, US, h, Temp, Salt, u, v, tv, uStar, buoyFl
   real :: check ! Entrainment Rule Boundary layer depth  CVMix_kpp_compute_ER_depth in MKS units [m]
   real :: Llimit  ! Stable boundary Layer Limit =  vonk Lstar [Z ~> m]
   integer :: kbl  ! index of cell containing boundary layer depth [nondim]
-  real, parameter :: Lam2_max = 20.0 ! Upper bound for Lam2 [nondim]
+  real    :: Lam2_max ! Upper bound for Lam2 [nondim]
 
   if (CS%Stokes_Mixing .and. .not.associated(Waves)) call MOM_error(FATAL, &
       "KPP_compute_BLD: The Waves control structure must be associated if STOKES_MIXING is True.")
@@ -1158,6 +1165,8 @@ subroutine KPP_compute_BLD(CS, G, GV, US, h, Temp, Salt, u, v, tv, uStar, buoyFl
     GoRho_Z_L2 = US%L_to_Z**2 * GV%g_Earth * GV%RZ_to_H
   endif
   buoy_scale = US%L_to_m**2*US%s_to_T**3
+
+  Lam2_max = CS%La_min**-2
 
   ! Find the vertical distances across layers.
   call thickness_to_dz(h, tv, dz, G, GV, US)
