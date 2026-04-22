@@ -1166,7 +1166,7 @@ subroutine KPP_compute_BLD(CS, G, GV, US, h, Temp, Salt, u, v, tv, uStar, buoyFl
   endif
   buoy_scale = US%L_to_m**2*US%s_to_T**3
 
-  Lam2_max = CS%La_min**-2
+  Lam2_max = CS%La_min**(-2)
 
   ! Find the vertical distances across layers.
   call thickness_to_dz(h, tv, dz, G, GV, US)
